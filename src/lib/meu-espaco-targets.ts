@@ -1,4 +1,4 @@
-export type SpaceKpiId = "quality" | "materialDaily" | "abs" | "aht" | "latency" | "commentsLatency" | "cpd" | "normalFrt" | "urgentFrt";
+export type SpaceKpiId = "quality" | "materialDaily" | "abs" | "aht" | "latency" | "commentsLatency" | "cpd" | "normalFrt" | "urgentFrt" | "ur";
 export type MetricWeight = { numerator: number; denominator: number };
 export type SpaceWeights = Partial<Record<SpaceKpiId, MetricWeight>>;
 export type SpaceTarget = { id: SpaceKpiId; label: string; target: number; direction: "min" | "max"; unit: string; scale: number; weightLabel: string; bounded?: boolean };
@@ -8,11 +8,12 @@ export function spaceTargets(lob: string): SpaceTarget[] {
   if (!["ADS", "TNS", "CEC"].includes(lob)) return [];
   const quality: SpaceTarget = { id: "quality", label: "Qualidade", target: lob === "TNS" ? 98 : 95, direction: "min", unit: "%", scale: 100, weightLabel: "avaliações", bounded: true };
   const abs: SpaceTarget = { id: "abs", label: "ABS do time", target: 7.5, direction: "max", unit: "%", scale: 100, weightLabel: "dias-parceiro escalados", bounded: true };
-  if (lob === "CEC") return [quality,
+  const ur: SpaceTarget = { id: "ur", label: "UR · Utilização", target: 60, direction: "min", unit: "%", scale: 100, weightLabel: "horas de escala (8h por dia-parceiro)" };
+  if (lob === "CEC") return [quality, ur,
     { id: "cpd", label: "CPD médio da operação", target: 100, direction: "min", unit: "tickets/dia-parceiro", scale: 1, weightLabel: "dias-parceiro com produção positiva" }, abs,
     { id: "normalFrt", label: "SLA/FRT · Normal", target: 97, direction: "min", unit: "%", scale: 100, weightLabel: "primeiras respostas Normal >0", bounded: true },
     { id: "urgentFrt", label: "SLA/FRT · P0 + HM", target: 97, direction: "min", unit: "%", scale: 100, weightLabel: "primeiras respostas P0 + HM >0", bounded: true }];
-  return [quality,
+  return [quality, ur,
     { id: "aht", label: lob === "TNS" ? "AHT · vídeo 15 min" : "AHT ADS", target: lob === "TNS" ? 50 : 60, direction: "max", unit: "s", scale: 1, weightLabel: "submits das filas elegíveis" }, abs,
     { id: "latency", label: lob === "TNS" ? "Latência · vídeo 15 min" : "Latência média ADS", target: lob === "TNS" ? 15 : 2, direction: "max", unit: lob === "TNS" ? "min" : "h", scale: lob === "TNS" ? 1 : 1 / 60, weightLabel: "submits com latência válida" },
     ...(lob === "TNS" ? [{ id: "commentsLatency" as const, label: "Latência · Comments", target: 24, direction: "max" as const, unit: "h", scale: 1 / 60, weightLabel: "submits Comments com latência válida" }] :

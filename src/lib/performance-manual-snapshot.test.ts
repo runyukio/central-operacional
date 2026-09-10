@@ -25,7 +25,9 @@ function files(keys: PerformanceManualBase[]): ManualSnapshotFiles {
     fileName: "frt.xlsx", rows: [{ ticketCreatedDay: new Date("2026-09-08"), wbLogin: "wb_test", employeeId: null,
       priority: "NORMAL", total: 100, over240: 20, over1440: 10 }],
     summary: { cecFrtRows: 1, unmatchedRows: 1, unmatchedLogins: 1, startDate: "2026-09-08", endDate: "2026-09-08" }
-  } : { fileName: `${key}.xlsx`, rows: [row(key)] }]));
+  } : key === "ur" ? { fileName: "ur.xlsx", rows: [{ shiftDate: new Date("2026-09-08"), wbLogin: "wb_test", employeeId: null,
+    shiftKey: "fixed-8h", actualModerateHours: 5.66, shiftHours: 8 }], summary: { urRows: 1, urWarnings: [], urStartDate: "2026-09-08", urEndDate: "2026-09-08" } }
+    : { fileName: `${key}.xlsx`, rows: [row(key)] }]));
 }
 
 test("manual manifest permits any subset but rejects missing, duplicate, unknown or unexpected bases", () => {
@@ -53,10 +55,10 @@ const relationKeys = ["productionRecords", "queueVolumeRecords", "cecCpdRecords"
 function database(t: TestContext, failBase?: PerformanceManualBase) {
   let state = {
     records: Object.fromEntries(performanceManualBases.map(({ key }) => [key, [
-      { importBatchId: key === "cecFrt" ? "old-frt" : "legacy-mixed", key: "same-key", previous: 1 },
+      { importBatchId: key === "cecFrt" ? "old-frt" : key === "ur" ? "old-ur" : "legacy-mixed", key: "same-key", previous: 1 },
       { importBatchId: null, key: "old-date", previous: 2 }
     ]])) as unknown as Record<PerformanceManualBase, RecordRow[]>,
-    batches: [{ id: "legacy-mixed", type: "PRODUCTION", status: "SUCCESS" }, { id: "old-frt", type: "CEC_FRT", status: "SUCCESS" }, { id: "in-progress", type: "PRODUCTION", status: "PROCESSING" }],
+    batches: [{ id: "legacy-mixed", type: "PRODUCTION", status: "SUCCESS" }, { id: "old-frt", type: "CEC_FRT", status: "SUCCESS" }, { id: "old-ur", type: "UR", status: "SUCCESS" }, { id: "in-progress", type: "PRODUCTION", status: "PROCESSING" }],
     audits: [] as unknown[]
   };
   const initial = structuredClone(state), calls: string[] = [];
@@ -82,14 +84,16 @@ function database(t: TestContext, failBase?: PerformanceManualBase) {
             state.batches = state.batches.filter((batch) => !where.id.in.includes(batch.id) || Object.values(state.records).some((records) => records.some((item) => item.importBatchId === batch.id)));
           } else {
             assert.equal(where.status.not, "PROCESSING");
-            const deleted = state.batches.filter((batch) => batch.type === "CEC_FRT" && batch.id !== where.id.not && batch.status !== "PROCESSING");
+            const deleted = state.batches.filter((batch) => batch.type === where.type && batch.id !== where.id.not && batch.status !== "PROCESSING");
             state.batches = state.batches.filter((batch) => !deleted.includes(batch));
             state.records.cecFrt = state.records.cecFrt.filter((record) => !deleted.some((batch) => batch.id === record.importBatchId));
+            state.records.ur = state.records.ur.filter((record) => !deleted.some((batch) => batch.id === record.importBatchId));
           }
           return { count: 1 };
         }
       },
       performanceCecFrtRecord: { createMany: async ({ data }: any) => { calls.push("cecFrt"); if (failBase === "cecFrt") throw new Error("simulated write failure"); state.records.cecFrt.push(...data); return { count: data.length }; } },
+      performanceUrRecord: { createMany: async ({ data }: any) => { calls.push("ur"); if (failBase === "ur") throw new Error("simulated write failure"); state.records.ur.push(...data); return { count: data.length }; } },
       auditLog: { create: async ({ data }: any) => { state.audits.push(data); return data; } }
     };
     for (const key of ["production", "volume", "cecCpd"] as const) {
@@ -104,7 +108,7 @@ function database(t: TestContext, failBase?: PerformanceManualBase) {
   return { state: () => state, initial, calls };
 }
 
-for (let mask = 1; mask < 16; mask++) {
+for (let mask = 1; mask < 32; mask++) {
   const selected = performanceManualBases.filter((_, index) => mask & (1 << index)).map((base) => base.key);
   test(`manual replacement preserves every unselected base and legacy batch: ${selected.join(" + ")}`, async (t) => {
     const db = database(t);
@@ -116,7 +120,7 @@ for (let mask = 1; mask < 16; mask++) {
         assert.equal(result[definition.resultKey], undefined);
       } else {
         assert.equal(result[definition.resultKey], 1);
-        if (definition.key !== "cecFrt") assert.equal(db.state().records[definition.key].length, 1);
+        if (!["cecFrt", "ur"].includes(definition.key)) assert.equal(db.state().records[definition.key].length, 1);
       }
     }
     if (["production", "volume", "cecCpd"].some((key) => !selected.includes(key as PerformanceManualBase))) assert.ok(db.state().batches.some((batch) => batch.id === "legacy-mixed"));

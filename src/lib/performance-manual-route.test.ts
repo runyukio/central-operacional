@@ -34,6 +34,7 @@ function harness(selected: string[], options: { incomplete?: boolean; invalidFrt
     "@/lib/performance-service": services,
     "@/lib/xlsx-row-chunks": { XlsxChunkError: class extends Error {} },
     "@/lib/cec-frt-service": { prepareCecFrtSnapshot: async () => { previews.push("cecFrt"); if (options.invalidFrt) throw new PerformanceError("FRT inválido", 400); return { rows: [{}], summary: {} }; } },
+    "@/lib/performance-ur-service": { prepareUrSnapshot: async () => { previews.push("ur"); return { rows: [{}], summary: { urRows: 1 } }; } },
     "@/lib/performance-manual-bases": { performanceManualBases, validateManualFileManifest },
     "@/lib/performance-manual-snapshot": { replaceSelectedManualSnapshots: async (_actor: unknown, files: object) => {
       if (!Object.keys(files).length) throw new PerformanceError("Selecione pelo menos uma base", 400);
@@ -44,7 +45,7 @@ function harness(selected: string[], options: { incomplete?: boolean; invalidFrt
   new Function("require", "exports", "module", compiled)((name: string) => imports[name] ?? localRequire(name), compiledModule.exports, compiledModule);
   return { ...compiledModule.exports, writes, cleanups, previews };
 }
-for (const selected of [["production"], ["volume"], ["cecCpd"], ["cecFrt"], ["production", "cecFrt"], ["production", "volume", "cecCpd", "cecFrt"]]) {
+for (const selected of [["production"], ["volume"], ["cecCpd"], ["cecFrt"], ["ur"], ["production", "cecFrt"], ["production", "volume", "cecCpd", "cecFrt", "ur"]]) {
   test(`manual HTTP chunk finalization accepts selected bases only: ${selected.join("+")}`, async () => {
     const route = harness(selected);
     const response = await route.POST(new Request(`https://example.test/api/performance/import/manual?action=finalize&uploadId=${uploadId}&fileTypes=${selected.join(",")}`, { method: "POST" }));
@@ -65,7 +66,7 @@ test("manual HTTP rejects an incomplete file, absent selected file, or invalid F
   }
 });
 test("manual multipart accepts a single base, but no selection and empty selected files fail", async () => {
-  for (const key of ["production", "volume", "cecCpd", "cecFrt"]) {
+  for (const key of ["production", "volume", "cecCpd", "cecFrt", "ur"]) {
     const route = harness([]), body = new FormData(); body.set(`${key}File`, new File([new Uint8Array(workbook())], "test.xlsx"));
     const response = await route.POST(new Request("https://example.test/api/performance/import/manual", { method: "POST", body }));
     assert.equal(response.status, 200); assert.deepEqual((await response.json()).selectedBases, [key]);

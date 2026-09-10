@@ -188,6 +188,32 @@ test("CEC SLA/FRT respects team scope and never changes CPD production days", as
   assert.equal(result.partners.find(r=>r.id==="no-data")?.metric.cecFrt?.normalSla,null);
 });
 
+test("UR reconciles partner, supervisor and daily totals without changing production or counting missing days", async (t) => {
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    assert.ok(sql.values.includes("agent"));
+    assert.ok(!sql.values.includes("outside"));
+    if (!sql.text.includes('FROM "PerformanceUrRecord"')) return [];
+    const row = (employeeId: string, day: string, actualModerateHours: number) => ({ employeeId, day: new Date(day), updatedAt: new Date(day), actualModerateHours, shiftHours: 8 });
+    return [row("agent", "2026-09-01", 8), row("agent", "2026-09-02", 0), row("second", "2026-09-01", 8)];
+  });
+  t.mock.method(prisma.schedule, "groupBy", async () => []);
+  const result = await getSpaceResults(scope({ employees: [employee(), employee("second"), employee("no-data")] }),
+    new URLSearchParams("startDate=2026-09-01&endDate=2026-09-06"), "ur");
+  const group = result.groups[0];
+  assert.equal(group.metric.ur, 16 / 24 * 100);
+  assert.equal(group.metric.weights?.ur?.numerator, 16);
+  assert.equal(group.metric.weights?.ur?.denominator, 24);
+  assert.equal(group.metric.production, null);
+  assert.equal(group.metric.agentDays, 0);
+  assert.equal(group.coverage.urPartners, 2);
+  assert.equal(group.coverage.urLatest, "2026-09-02");
+  assert.deepEqual(group.daily.map((row) => row.metric.ur), [100, 0]);
+  assert.equal(result.supervisors[0].groups[0].metric.ur, group.metric.ur);
+  assert.equal(result.partners.find((row) => row.id === "agent")?.metric.ur, 50);
+  assert.equal(result.partners.find((row) => row.id === "no-data")?.metric.ur, null);
+  assert.equal(result.sourceMetricDays?.length, 3);
+});
+
 test("active directory checks operational and account statuses, deletion and supervisor role", () => {
   const active = { roleTitle: "Supervisão", operationalStatus: "Ativo", deletedAt: null, user: { status: "ACTIVE", deletedAt: null, role: { name: "SUPERVISOR" } } };
   assert.equal(isActiveSpaceSupervisor(active), true);

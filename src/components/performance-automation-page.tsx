@@ -46,6 +46,7 @@ import { PageHeader, StatCard } from "@/components/ui/primitives";
 import { cn, formatNumber } from "@/lib/utils";
 import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
 import { performanceManualBases, type PerformanceManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
+import { PerformanceUrBadge } from "@/components/performance-ur-badge";
 
 const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
@@ -147,10 +148,11 @@ type QualityImportResult = {
   qualityRowsIgnored: number;
 };
 
-type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality";
+type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality" | "ur";
 type AgentSortDirection = "asc" | "desc";
 
 type PerformanceAgentRow = {
+  ur?: number | null;
   employeeId: string | null;
   employeeName: string;
   wbLogin: string;
@@ -188,6 +190,7 @@ type PerformanceAgentsResponse = {
   };
   summary: {
     agents: number;
+    ur?: number | null;
     submit: number;
     outputAveragePerDay: number;
     daysWithData: number;
@@ -1103,7 +1106,8 @@ function AgentsView({
         ) : loading && !payload?.agents.length ? <EmptyBox label="Carregando produtividade dos agentes..." /> : (
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
+              <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com base no período" icon={Users} tone="purple" />
+              <div className="card p-4"><h4 className="mb-3 text-xs font-black uppercase text-muted">UR · Utilização</h4><PerformanceUrBadge value={payload?.summary.ur} /><p className="mt-2 text-xs text-muted">Moderação real ÷ (8h × dias-agente na base UR). Por Shift Date, sem filtro de fila.</p></div>
               <StatCard
                 title="Qualidade média"
                 value={(payload?.summary.qualityTotal ?? 0) > 0 ? formatQualityPercent(payload?.summary.quality) : "-"}
@@ -1162,6 +1166,7 @@ function AgentsView({
                       <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Qualidade" sortKey="quality" current={sort} onSort={handleSort} align="right" />
+                      <AgentSortHeader label="UR · meta 60%" sortKey="ur" current={sort} onSort={handleSort} align="right" />
                       {selectedLob === "CEC" ? <AgentSortHeader label="Output" sortKey="outputTotal" current={sort} onSort={handleSort} align="right" /> : null}
                       {selectedLob !== "CEC" ? <AgentSortHeader label="Output médio/dia" sortKey="submit" current={sort} onSort={handleSort} align="right" /> : null}
                       <AgentSortHeader label={selectedLob === "CEC" ? "CPD" : "AHT"} sortKey="aht" current={sort} onSort={handleSort} align="right" />
@@ -1185,6 +1190,7 @@ function AgentsView({
                             </>
                           ) : <span className="text-xs font-black text-slate-400">Sem base</span>}
                         </td>
+                        <td className="px-3 py-3 text-right"><PerformanceUrBadge value={agent.ur} /></td>
                         {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
                         {selectedLob !== "CEC" ? (
                           <td className="px-3 py-3 text-right font-black text-navy-950">
@@ -1198,7 +1204,7 @@ function AgentsView({
                         </td>
                       </tr>
                     ))}
-                    {!payload?.agents.length ? <tr><td colSpan={8} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                    {!payload?.agents.length ? <tr><td colSpan={9} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -1638,6 +1644,7 @@ export function ManualImportModal({ onClose, onImported }: { onClose: () => void
       setError("Cada arquivo deve ser um XLSX não vazio de até 30 MB.");
       return;
     }
+    if (files.ur && files.ur.size > 10 * 1024 * 1024) { setError("A base UR deve ter até 10 MB."); return; }
     setUploading(true);
     setUploadProgress(0);
     setError("");
@@ -1710,7 +1717,7 @@ export function ManualImportModal({ onClose, onImported }: { onClose: () => void
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
             Somente as bases selecionadas serão substituídas por inteiro; as demais serão mantidas. Envie o arquivo completo do período que deseja manter em cada base.
           </div>
-          <p className="text-xs font-semibold text-muted">Até 30 MB por arquivo. Todos os arquivos selecionados são validados antes da gravação. As regras atuais de tratamento de linhas permanecem.</p>
+          <p className="text-xs font-semibold text-muted">Até 30 MB por arquivo (UR: 10 MB). Todos os arquivos selecionados são validados antes da gravação. UR utiliza 8h por parceiro/Shift Date, sem usar shift_hours ou o percentual pronto da exportação.</p>
 
           {error ? <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           {result ? (
@@ -1721,6 +1728,8 @@ export function ManualImportModal({ onClose, onImported }: { onClose: () => void
                 <ImportResultMetric label="Linhas ignoradas" value={result.rowsError} />
               </div>
               {result.cecFrtRows !== undefined ? <p className="text-xs text-emerald-950">SLA/FRT CEC: {result.startDate?.split("-").reverse().join("/")} a {result.endDate?.split("-").reverse().join("/")}. {result.unmatchedLogins} logins sem cadastro ({result.unmatchedRows} linhas), mantidos nos totais das filas.</p> : null}
+              {result.urRows !== undefined ? <p className="text-xs text-emerald-950">UR: {result.urStartDate} a {result.urEndDate} · {result.urRows} dias-agente.</p> : null}
+              {result.urWarnings?.map((warning) => <p key={warning} className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">{warning}</p>)}
             </div>
           ) : null}
         </div>

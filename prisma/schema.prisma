@@ -486,6 +486,7 @@ model EmployeeProfile {
   productionRecords                 ProductionRecord[]
   cecCpdRecords                     PerformanceCecCpdRecord[]
   cecFrtRecords                     PerformanceCecFrtRecord[]
+  urRecords                         PerformanceUrRecord[]
   workSessionDevices                WorkSessionDevice[]
   workSessionEvents                 WorkSessionEvent[]
   workSessionDailySummaries         WorkSessionDailySummary[]
@@ -1423,6 +1424,7 @@ model PerformanceImportBatch {
   queueVolumeRecords PerformanceQueueVolumeRecord[]
   cecCpdRecords      PerformanceCecCpdRecord[]
   cecFrtRecords      PerformanceCecFrtRecord[]
+  urRecords          PerformanceUrRecord[]
   importedAt         DateTime                       @default(now())
   createdAt          DateTime                       @default(now())
 
@@ -1604,6 +1606,24 @@ model PerformanceCecFrtRecord {
   @@unique([importBatchId, ticketCreatedDay, wbLogin, priority])
   @@index([ticketCreatedDay])
   @@index([employeeId, ticketCreatedDay])
+}
+
+model PerformanceUrRecord {
+  id                  String                 @id @default(cuid())
+  shiftDate           DateTime               @db.Date
+  wbLogin             String
+  shiftKey            String
+  employeeId          String?
+  employee            EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  actualModerateHours  Float
+  shiftHours          Float
+  importBatchId       String
+  importBatch         PerformanceImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  createdAt           DateTime               @default(now())
+
+  @@unique([importBatchId, shiftDate, wbLogin], map: "PerformanceUrRecord_agent_day_key")
+  @@index([employeeId, shiftDate])
+  @@index([shiftDate])
 }
 
 model PerformanceManualUploadChunk {

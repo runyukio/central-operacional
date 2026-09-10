@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { loadUrDays } from "@/lib/performance-ur-service";
+import { sumUr, urPercent, type UrHours } from "@/lib/performance-ur";
 
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
@@ -167,7 +169,7 @@ export type PerformanceAgentsQuery = {
   supervisorId?: string;
   shiftId?: string;
   search?: string;
-  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality";
+  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality" | "ur";
   sortDirection?: "asc" | "desc";
   page?: number;
   pageSize?: number;
@@ -483,8 +485,12 @@ export async function getOwnPerformanceDashboard(
 
   const period = resolvePeriod(query);
   const ownEmployee = requireOwnEmployee(user);
-  const ownRows = await buildAgentRows([ownEmployee as PerformanceEmployee], period);
-  const mine = ownRows[0] ?? emptyAgentRow(ownEmployee as PerformanceEmployee, period);
+  const [ownRows, urDays] = await Promise.all([buildAgentRows([ownEmployee as PerformanceEmployee], period), loadUrDays(period.start, period.end, [ownEmployee.id])]);
+  const base = ownRows[0] ?? emptyAgentRow(ownEmployee as PerformanceEmployee, period);
+  const urHours = sumUr(urDays);
+  const mine = { ...base, ur: urPercent(urHours), urHours, weekly: base.weekly.map((week) => ({ ...week,
+    ur: urPercent(sumUr(urDays.filter((row) => { const date = formatDateKey(row.day); return date >= week.weekStart && date <= week.weekEnd; })))
+  })) };
 
   return {
     mode: "mine" as const,
@@ -963,7 +969,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.trim().toUpperCase() : "";
   const validLobs = performanceLobOptions();
-  const [productionRange, cecCpdRange, employeeOptions] = await Promise.all([
+  const [productionRange, cecCpdRange, employeeOptions, urRange] = await Promise.all([
     prisma.productionRecord.aggregate({ _min: { bzDay: true }, _max: { bzDay: true } }),
     prisma.performanceCecCpdRecord.aggregate({ _min: { performanceDay: true }, _max: { performanceDay: true } }),
     prisma.employeeProfile.findMany({
@@ -973,14 +979,15 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
         shift: { select: { id: true, name: true } },
         supervisor: { select: { id: true, fullName: true } }
       }
-    })
+    }),
+    prisma.performanceUrRecord.aggregate({ where: { ...(ownEmployeeId ? { employeeId: ownEmployeeId } : {}), importBatch: { type: "UR", status: "SUCCESS" } }, _min: { shiftDate: true }, _max: { shiftDate: true } })
   ]);
   const view = normalizeDashboardView(query.view);
   const fallback = getDefaultDatePeriod();
   const selectedRange = requestedLob === "CEC"
     ? { min: cecCpdRange._min.performanceDay, max: cecCpdRange._max.performanceDay }
     : { min: productionRange._min.bzDay, max: productionRange._max.bzDay };
-  const allRangeDates = [productionRange._min.bzDay, productionRange._max.bzDay, cecCpdRange._min.performanceDay, cecCpdRange._max.performanceDay]
+  const allRangeDates = [productionRange._min.bzDay, productionRange._max.bzDay, cecCpdRange._min.performanceDay, cecCpdRange._max.performanceDay, urRange._min.shiftDate, urRange._max.shiftDate]
     .filter((value): value is Date => Boolean(value));
   const referenceDate = selectedRange.max ?? (allRangeDates.length ? new Date(Math.max(...allRangeDates.map((date) => date.getTime()))) : fallback.end);
   const defaultPeriod = dashboardViewPeriod(referenceDate, view);
@@ -1003,8 +1010,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     slaTargets: performanceSlaTargetOptions(requestedLob)
   };
   const dataRange = selectedRange.min && selectedRange.max
-    ? { startDate: formatDateKey(selectedRange.min), endDate: formatDateKey(selectedRange.max) }
-    : !requestedLob && allRangeDates.length
+    ? { startDate: formatDateKey(new Date(Math.min(+selectedRange.min, +(urRange._min.shiftDate ?? selectedRange.min)))), endDate: formatDateKey(new Date(Math.max(+selectedRange.max, +(urRange._max.shiftDate ?? selectedRange.max)))) }
+    : allRangeDates.length
       ? {
           startDate: formatDateKey(new Date(Math.min(...allRangeDates.map((date) => date.getTime())))),
           endDate: formatDateKey(new Date(Math.max(...allRangeDates.map((date) => date.getTime()))))
@@ -1031,7 +1038,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     moderationSeconds: number;
     activeDates: Date[];
   };
-  const [rawRows, qualityByIdentity] = await Promise.all([
+  const [rawRows, qualityByIdentity, urDays] = await Promise.all([
     requestedLob === "CEC"
     ? prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
       SELECT
@@ -1098,7 +1105,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       sh."name",
       p."queueId"
     `),
-    getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId)
+    getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId),
+    loadUrDays(start, end, employeeOptions.map((employee) => employee.id))
   ]);
 
   const aggregateMap = new Map<string, {
@@ -1140,10 +1148,26 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     aggregateMap.set(key, current);
   }
 
+  const urByEmployee = new Map<string, UrHours>();
+  const employeesWithRows = new Set([...aggregateMap.values()].map((row) => row.employeeId));
+  for (const row of urDays) {
+    if (!row.employeeId) continue;
+    urByEmployee.set(row.employeeId, sumUr([...(urByEmployee.has(row.employeeId) ? [urByEmployee.get(row.employeeId)!] : []), row]));
+    const lob = row.lob === "PROJECT" ? "ADS" : row.lob;
+    if (!(lob === requestedLob || (requestedLob === "TNS" && ["VIDEO", "COMMENTS", "TNS"].includes(lob)))) continue;
+    const key = `${row.employeeId}:${lob}`;
+    if (!employeesWithRows.has(row.employeeId)) {
+      aggregateMap.set(key, { employeeId: row.employeeId, employeeName: row.employeeName, wbLogin: row.wbLogin, lob,
+        supervisorId: row.supervisorId, supervisor: row.supervisor, shiftId: row.shiftId, shift: row.shift,
+        submit: 0, moderationSeconds: 0, activeDates: new Set(), outputAveragePerDay: 0 });
+      employeesWithRows.add(row.employeeId);
+    }
+  }
   const rowsWithQuality = Array.from(aggregateMap.values()).map((row) => {
     const quality = qualityByIdentity.get(row.employeeId ? `employee:${row.employeeId}` : `wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
     return {
       ...row,
+      ur: urPercent(row.employeeId ? urByEmployee.get(row.employeeId) : null),
       qualityCorrect: quality?.correct ?? 0,
       qualityTotal: quality?.total ?? 0,
       qualityErrors: quality?.errors ?? 0,
@@ -1180,6 +1204,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
   const qualityCorrect = filteredRows.reduce((total, row) => total + row.qualityCorrect, 0);
   const qualityTotal = filteredRows.reduce((total, row) => total + row.qualityTotal, 0);
+  const urHours = sumUr([...new Set(filteredRows.map((row) => row.employeeId).filter((id): id is string => Boolean(id)))].flatMap((id) => urByEmployee.has(id) ? [urByEmployee.get(id)!] : []));
 
   return {
     mode: "agents" as const,
@@ -1190,6 +1215,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     filters,
     summary: {
       agents,
+      ur: urPercent(urHours),
       submit,
       outputAveragePerDay: round2(outputAveragePerDay),
       daysWithData: activeDates.size,
@@ -1211,6 +1237,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       employeeName: row.employeeName,
       wbLogin: row.wbLogin,
       lob: row.lob,
+      ur: row.ur,
       supervisorId: row.supervisorId,
       supervisor: row.supervisor,
       shiftId: row.shiftId,
@@ -1926,6 +1953,7 @@ function emptyPerformanceAgentsPayload(
     filters,
     summary: {
       agents: 0,
+      ur: null,
       submit: 0,
       outputAveragePerDay: 0,
       daysWithData: 0,
@@ -1951,11 +1979,12 @@ function uniqueBy<T>(items: T[], key: (item: T) => string) {
 }
 
 function comparePerformanceAgentRows(
-  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
-  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
+  a: { ur?: number | null; employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
+  b: { ur?: number | null; employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
   sortBy: NonNullable<PerformanceAgentsQuery["sortBy"]>,
   direction: "asc" | "desc"
 ) {
+  if (sortBy === "ur" && (a.ur == null || b.ur == null)) return a.ur == null && b.ur == null ? 0 : a.ur == null ? 1 : -1;
   if (sortBy === "quality" && (a.qualityTotal <= 0 || b.qualityTotal <= 0)) {
     if (a.qualityTotal <= 0 && b.qualityTotal <= 0) return 0;
     return a.qualityTotal <= 0 ? 1 : -1;

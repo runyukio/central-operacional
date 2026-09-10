@@ -11,7 +11,7 @@ const target = (id: string, lob = "ADS") => spaceTargets(lob).find((row) => row.
 const base = { month: "2026-09", today: "2026-09-09", scheduled: new Map([["2026-09-07", 1], ["2026-09-08", 1], ["2026-09-09", 1], ["2026-09-10", 1]]) };
 
 test("all operational targets, units and bounds are explicit", () => {
-  assert.deepEqual(spaceTargets("ADS").map((row) => [row.id, row.target]), [["quality", 95], ["aht", 60], ["abs", 7.5], ["latency", 2], ["materialDaily", 300]]);
+  assert.deepEqual(spaceTargets("ADS").map((row) => [row.id, row.target]), [["quality", 95], ["ur", 60], ["aht", 60], ["abs", 7.5], ["latency", 2], ["materialDaily", 300]]);
   assert.equal(target("quality", "TNS").target, 98);
   assert.equal(target("aht", "TNS").target, 50);
   assert.equal(target("latency", "TNS").target, 15);

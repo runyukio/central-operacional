@@ -55,6 +55,7 @@ function readSortBy(value: string | null): PerformanceAgentsQuery["sortBy"] {
     || value === "submit"
     || value === "aht"
     || value === "quality"
+    || value === "ur"
     ? value
     : undefined;
 }

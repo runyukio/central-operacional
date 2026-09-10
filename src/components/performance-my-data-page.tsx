@@ -16,8 +16,10 @@ import {
 import { TopActions } from "@/components/layout/app-shell";
 import { PageHeader, Panel, StatCard } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { PerformanceUrBadge } from "@/components/performance-ur-badge";
 
 type PerformanceMetric = {
+  ur?: number | null;
   qualityRule: "ADS_QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "UNKNOWN" | "MIXED";
   quality: number;
   qualityCorrect: number;
@@ -171,6 +173,7 @@ export function PerformanceMyDataPage({ initialPeriod }: { initialPeriod: DateRa
           </section>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <div className="card p-4"><h3 className="mb-3 text-xs font-bold uppercase text-muted">UR · Utilização</h3><PerformanceUrBadge value={mine.ur} /><p className="mt-2 text-xs text-muted">Moderação real ÷ 8h por Shift Date com base.</p></div>
             <StatCard
               title="Qualidade"
               value={mine.qualityTotal ? formatPercent(mine.quality) : "Sem dados"}
@@ -227,6 +230,7 @@ export function PerformanceMyDataPage({ initialPeriod }: { initialPeriod: DateRa
                       <th className="whitespace-nowrap px-4 py-3">Total</th>
                       <th className="whitespace-nowrap px-4 py-3">AHT</th>
                       <th className="whitespace-nowrap px-4 py-3">ABS</th>
+                      <th className="whitespace-nowrap px-4 py-3">UR · meta 60%</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -238,6 +242,7 @@ export function PerformanceMyDataPage({ initialPeriod }: { initialPeriod: DateRa
                         <td className="whitespace-nowrap px-4 py-3 font-bold text-navy-950">{formatNumber(week.submitTotal)}</td>
                         <td className="whitespace-nowrap px-4 py-3 font-bold text-navy-950">{week.submitTotal ? formatDuration(week.ahtSeconds) : "-"}</td>
                         <td className="whitespace-nowrap px-4 py-3 font-bold text-navy-950">{week.scheduledDays ? formatPercent(week.abs) : "-"}</td>
+                        <td className="whitespace-nowrap px-4 py-3"><PerformanceUrBadge value={week.ur} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -271,7 +276,7 @@ function DateInput({ label, value, onChange }: { label: string; value: string; o
 }
 
 function hasPerformanceData(row: WeeklyPerformanceMetric) {
-  return row.qualityTotal > 0 || row.submitTotal > 0 || row.scheduledDays > 0;
+  return row.ur != null || row.qualityTotal > 0 || row.submitTotal > 0 || row.scheduledDays > 0;
 }
 
 function formatPercent(value: number) {

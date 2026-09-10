@@ -8,6 +8,8 @@ import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import type { SpaceResults } from "@/lib/meu-espaco-contract";
 import { loadCecFrtDays } from "@/lib/cec-frt-service";
 import { addCecFrt } from "@/lib/cec-frt";
+import { loadUrDays } from "@/lib/performance-ur-service";
+import { urPercent } from "@/lib/performance-ur";
 import { isSpaceMaterialSkill, type SpaceKpiId } from "@/lib/meu-espaco-targets";
 
 type ProductionDay = { employeeId: string; day: Date; output: number; ahtSubmit: number; duration: number; active: boolean; updatedAt: Date;
@@ -46,7 +48,7 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
       FROM "ProductionRecord" p WHERE p."employeeId" IN (${Prisma.join(familyIds)}) AND p."bzDay">=${start} AND p."bzDay"<${end}
         AND p."queueId" IN (${Prisma.join(queues)}) GROUP BY p."employeeId", DATE_TRUNC('day', p."bzDay")`);
   });
-  const [productionParts, cec, kap, legacy, cecQuality, schedules, cecFrt] = await Promise.all([
+  const [productionParts, cec, kap, legacy, cecQuality, schedules, cecFrt, ur] = await Promise.all([
     Promise.all(productionQueries),
     cecIds.length ? prisma.$queryRaw<ProductionDay[]>(Prisma.sql`SELECT c."employeeId", DATE_TRUNC('day', c."performanceDay") AS day,
       SUM(c."ticketCount")::double precision AS output, 0::double precision AS "ahtSubmit", 0::double precision AS duration,
@@ -68,24 +70,25 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
       FROM "CecQualityRecord" q WHERE q."employeeId" IN (${Prisma.join(cecIds)}) AND q."qualityDate">=${start} AND q."qualityDate"<${end}
       GROUP BY q."employeeId", DATE_TRUNC('day', q."qualityDate")`) : Promise.resolve([] as QualityDay[]),
     prisma.schedule.groupBy({ by: ["employeeId", "date", "status"], where: { employeeId: { in: ids }, date: { gte: start, lt: end }, deletedAt: null }, _count: { _all: true }, _max: { updatedAt: true } }),
-    loadCecFrtDays(start, spaceDate(period.endDate), cecIds)
+    loadCecFrtDays(start, spaceDate(period.endDate), cecIds),
+    loadUrDays(start, spaceDate(period.endDate), ids)
   ]);
   const production = [...productionParts.flat(), ...cec];
   const quality = [...selectSupervisorQualityDailyRows(kap, legacy), ...cecQuality];
   const byEmployee = new Map(employees.map((employee) => [employee.id, { employee, metric: emptySpaceMetric() }]));
   const supervisors = new Map<string, { name: string; groups: Map<string, MetricAccumulator> }>();
   const groups = new Map<string, { metric: MetricAccumulator; daily: Map<string, MetricAccumulator>; employees: number;
-    productionPartners: Set<string>; qualityPartners: Set<string>; schedulePartners: Set<string>; frtPartners: Set<string>;
-    productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; frtLatest: string | null; updatedAt: string | null }>();
+    productionPartners: Set<string>; qualityPartners: Set<string>; schedulePartners: Set<string>; frtPartners: Set<string>; urPartners: Set<string>;
+    productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; frtLatest: string | null; urLatest: string | null; updatedAt: string | null }>();
   for (const employee of employees) {
     const lob = spaceLobFamily(employee.lob.name);
     if (!supervisors.has(employee.supervisorId!)) supervisors.set(employee.supervisorId!, { name: employee.supervisor?.fullName || "Supervisor", groups: new Map() });
     if (!supervisors.get(employee.supervisorId!)!.groups.has(lob)) supervisors.get(employee.supervisorId!)!.groups.set(lob, emptySpaceMetric());
-    if (!groups.has(lob)) groups.set(lob, { metric: emptySpaceMetric(), daily: new Map(), employees: 0, productionPartners: new Set(), qualityPartners: new Set(), schedulePartners: new Set(), frtPartners: new Set(), productionLatest: null, qualityLatest: null, scheduleLatest: null, frtLatest: null, updatedAt: null });
+    if (!groups.has(lob)) groups.set(lob, { metric: emptySpaceMetric(), daily: new Map(), employees: 0, productionPartners: new Set(), qualityPartners: new Set(), schedulePartners: new Set(), frtPartners: new Set(), urPartners: new Set(), productionLatest: null, qualityLatest: null, scheduleLatest: null, frtLatest: null, urLatest: null, updatedAt: null });
     groups.get(lob)!.employees++;
   }
   const sourceMetrics = new Map<string, { employeeId: string; date: string; metric: MetricAccumulator }>();
-  function targets(employeeId: string, date: string, updatedAt: Date | null, source: "production" | "quality" | "schedule" | "frt") {
+  function targets(employeeId: string, date: string, updatedAt: Date | null, source: "production" | "quality" | "schedule" | "frt" | "ur") {
     const employee = byEmployee.get(employeeId)!;
     const group = groups.get(spaceLobFamily(employee.employee.lob.name))!;
     if (!group.daily.has(date)) group.daily.set(date, emptySpaceMetric());
@@ -125,6 +128,11 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
   for (const row of cecFrt) if (row.employeeId && byEmployee.has(row.employeeId)) {
     for (const target of targets(row.employeeId, iso(row.day), row.updatedAt, "frt")) addCecFrt(target.cecFrt, row);
   }
+  for (const row of ur) if (row.employeeId && byEmployee.has(row.employeeId) && urPercent(row) !== null) {
+    for (const target of targets(row.employeeId, iso(row.day), row.updatedAt, "ur")) {
+      target.urActualHours += row.actualModerateHours; target.urShiftHours += row.shiftHours;
+    }
+  }
   return { period, ...(coverageMetric ? { sourceMetricDays: [...sourceMetrics.values()].flatMap((row) => {
     const weight = finishSpaceMetric(row.metric, spaceLobFamily(byEmployee.get(row.employeeId)!.employee.lob.name)).weights?.[coverageMetric];
     return weight && weight.denominator > 0 ? [{ employeeId: row.employeeId, date: row.date, weight }] : [];
@@ -132,7 +140,7 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
     groups: [...supervisor.groups].map(([lob, metric]) => ({ lob, metric: finishSpaceMetric(metric, lob) })) })),
     groups: [...groups.entries()].map(([lob, group]) => ({ lob, teamSize: group.employees, metric: finishSpaceMetric(group.metric, lob),
     daily: [...group.daily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, metric: finishSpaceMetric(value, lob) })),
-    coverage: { frtPartners: group.frtPartners.size, frtLatest: group.frtLatest, productionPartners: group.productionPartners.size, qualityPartners: group.qualityPartners.size, schedulePartners: group.schedulePartners.size,
+    coverage: { urPartners: group.urPartners.size, urLatest: group.urLatest, frtPartners: group.frtPartners.size, frtLatest: group.frtLatest, productionPartners: group.productionPartners.size, qualityPartners: group.qualityPartners.size, schedulePartners: group.schedulePartners.size,
       productionLatest: group.productionLatest, qualityLatest: group.qualityLatest, scheduleLatest: group.scheduleLatest, updatedAt: group.updatedAt } })),
     partners: [...byEmployee.values()].map(({ employee, metric }) => {
       const finished = finishSpaceMetric(metric, spaceLobFamily(employee.lob.name));

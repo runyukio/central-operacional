@@ -14,6 +14,7 @@ export type SpaceSummary = {
   management: ManagementCounts; lobs: string[]; period: SpacePeriod;
 };
 export type SpaceMetric = {
+  ur?: number | null;
   weights?: import("@/lib/meu-espaco-targets").SpaceWeights;
   targets?: import("@/lib/meu-espaco-targets").SpaceKpi[];
   cecFrt?: import("@/lib/cec-frt").CecFrtMetric;
@@ -28,7 +29,7 @@ export type SpaceResults = {
   period: SpacePeriod;
   supervisors: Array<{ id: string; name: string; groups: Array<{ lob: string; metric: SpaceMetric }> }>;
   groups: Array<{ lob: string; teamSize: number; metric: SpaceMetric; daily: Array<{ date: string; metric: SpaceMetric }>;
-    coverage: { frtPartners?: number; frtLatest?: string | null; productionPartners: number; qualityPartners: number; schedulePartners: number; productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; updatedAt: string | null } }>;
+    coverage: { urPartners?: number; urLatest?: string | null; frtPartners?: number; frtLatest?: string | null; productionPartners: number; qualityPartners: number; schedulePartners: number; productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; updatedAt: string | null } }>;
   partners: Array<{ id: string; name: string; wbLogin: string; skill: string; lob: string; metric: SpaceMetric }>;
 };
 export type SpaceHours = {

@@ -2,11 +2,13 @@ import { AuditAction } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
 import type { prepareCecFrtSnapshot } from "@/lib/cec-frt-service";
+import type { prepareUrSnapshot } from "@/lib/performance-ur-service";
 import { performanceManualBases, type OperationalManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
 import { authorizePerformanceImport, PerformanceError, prepareManualOperationalRows, writeManualOperationalRows, type PerformancePreviewRow } from "@/lib/performance-service";
 
 export type ManualSnapshotFiles = Partial<Record<OperationalManualBase, { fileName: string; rows: PerformancePreviewRow[] }>> & {
   cecFrt?: Awaited<ReturnType<typeof prepareCecFrtSnapshot>> & { fileName: string };
+  ur?: Awaited<ReturnType<typeof prepareUrSnapshot>> & { fileName: string };
 };
 
 /** Replace only selected datasets. Parsing and lookups finish before the write transaction starts. */
@@ -14,10 +16,11 @@ export async function replaceSelectedManualSnapshots(actor: Actor, files: Manual
   const user = await authorizePerformanceImport(actor);
   const selectedBases = performanceManualBases.map((base) => base.key).filter((key) => files[key]);
   if (!selectedBases.length) throw new PerformanceError("Selecione pelo menos uma base para atualizar.", 400);
-  const operational = selectedBases.filter((key): key is OperationalManualBase => key !== "cecFrt").map((key) => ({
+  const operational = selectedBases.filter((key): key is OperationalManualBase => key !== "cecFrt" && key !== "ur").map((key) => ({
     key, fileName: files[key]!.fileName, ...prepareManualOperationalRows(key, files[key]!.rows)
   }));
   if (files.cecFrt && !files.cecFrt.rows.length) throw new PerformanceError("A base SLA/FRT CEC está vazia. Nenhuma base foi alterada.", 400);
+  if (files.ur && !files.ur.rows.length) throw new PerformanceError("A base UR está vazia. Nenhuma base foi alterada.", 400);
   const result: ManualImportResult = { selectedBases, rowsError: operational.reduce((sum, base) => sum + base.errorCount, 0) };
 
   await prisma.$transaction(async (tx) => {
@@ -55,6 +58,18 @@ export async function replaceSelectedManualSnapshots(actor: Actor, files: Manual
       }
       await tx.performanceImportBatch.deleteMany({ where: { type: "CEC_FRT", status: { not: "PROCESSING" }, id: { not: batch.id } } });
       Object.assign(result, frt.summary);
+    }
+    if (files.ur) {
+      const ur = files.ur;
+      const batch = await tx.performanceImportBatch.create({ data: {
+        type: "UR", fileName: ur.fileName, importedById: user.id, status: "SUCCESS",
+        rowsTotal: ur.rows.length, rowsValid: ur.rows.length, rowsInserted: ur.rows.length,
+        errorSummary: ur.summary.urWarnings.join("\n") || null
+      } });
+      batchIds.push(batch.id);
+      for (let i = 0; i < ur.rows.length; i += 1500) await tx.performanceUrRecord.createMany({ data: ur.rows.slice(i, i + 1500).map((row) => ({ ...row, importBatchId: batch.id })) });
+      await tx.performanceImportBatch.deleteMany({ where: { type: "UR", status: { not: "PROCESSING" }, id: { not: batch.id } } });
+      Object.assign(result, ur.summary);
     }
     if (previousBatches.length) {
       // Legacy batches may contain all three bases. Never delete metadata still referenced by an unselected base.
