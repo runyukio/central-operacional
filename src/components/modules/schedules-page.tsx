@@ -768,6 +768,7 @@ export function SchedulesPage() {
   }
 
   function openAttendanceJustification(row?: ScheduleGridRow, dayIndex = 0, value = "Falta") {
+    setAttendanceMessage("");
     const targetRow = row ?? scheduleRows[0];
     const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
     if (!targetEmployee) {
@@ -1017,6 +1018,7 @@ export function SchedulesPage() {
 
   async function saveAttendance() {
     if (savingJustification) return;
+    setAttendanceMessage("");
     if (statusNeedsReason(attendanceForm.status)) {
       if (!attendanceForm.absenceReason.trim()) {
         setAttendanceMessage("Motivo da ocorrência é obrigatório.");
@@ -1038,7 +1040,7 @@ export function SchedulesPage() {
       const employeeName = payload.data.employeeName ?? scheduleRows.find((row) => row.employee.id === attendanceForm.employeeId)?.employee.name ?? attendanceForm.employeeId;
       setAttendanceMessage(payload.message ?? `${employeeName}: ${payload.data.status ?? attendanceForm.status} registrado. ABS/cobertura/auditoria atualizados.`);
       closeAttendanceModal();
-      if (isScheduleSupervisor) {
+      if (!canManageSchedules) {
         void refreshAttendanceForSchedulePeriod(scheduleDateRange, scheduleFilters);
         void refreshScheduleSummary(scheduleDateRange, scheduleFilters);
       } else {
@@ -2179,12 +2181,12 @@ export function SchedulesPage() {
 
       {showAttendance ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card w-full max-w-2xl p-5">
+          <div role="dialog" aria-modal="true" aria-labelledby="attendance-modal-title" className="card max-h-[90vh] w-full max-w-2xl overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ocorrência"}</h2>
+                <h2 id="attendance-modal-title" className="text-lg font-extrabold text-navy-950">{!canManageSchedules ? "Justificar ocorrência" : "Marcar presença/ocorrência"}</h2>
                 <p className="text-sm text-muted">
-                  {isScheduleSupervisor ? "Registra a justificativa da ocorrência sem alterar o fluxo operacional." : "Atualiza o status do cronograma e registra auditoria."}
+                  {!canManageSchedules ? "Registra a justificativa da ocorrência sem editar a escala ou os horários." : "Atualiza o status do cronograma e registra auditoria."}
                 </p>
               </div>
               <button onClick={closeAttendanceModal} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -2228,13 +2230,18 @@ export function SchedulesPage() {
               <FormSelect label={attendanceRequiresReason ? "Motivo obrigatório" : "Motivo (opcional)"} value={attendanceForm.absenceReason} options={["", ...absenceReasonOptions]} emptyLabel="Selecione um motivo" onChange={(value) => setAttendanceForm({ ...attendanceForm, absenceReason: value })} />
               <FormSelect label="Categoria" value={attendanceForm.reasonCategory} options={["Pessoas", "Sistema", "Ferramenta", "Equipamento", "Cronograma", "Treinamento", "Outros"]} onChange={(value) => setAttendanceForm({ ...attendanceForm, reasonCategory: value })} />
               <label className="md:col-span-2">
-                <span className="mb-1.5 block text-sm font-bold text-muted">{attendanceRequiresReason ? "Justificativa do supervisor obrigatória se não houver motivo" : "Justificativa do supervisor (opcional)"}</span>
+                <span className="mb-1.5 block text-sm font-bold text-muted">{attendanceRequiresReason ? "Descrição da ocorrência obrigatória" : "Descrição da ocorrência (opcional)"}</span>
                 <textarea value={attendanceForm.supervisorJustification} onChange={(event) => setAttendanceForm({ ...attendanceForm, supervisorJustification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" />
               </label>
             </div>
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              {isScheduleSupervisor ? "Supervisor não pode marcar Presente nem alterar o cronograma planejado. A validação/correção final fica com WFM/Admin." : attendanceRequiresReason ? "Este status exige motivo ou observação antes de salvar." : "Este status não exige motivo obrigatório."}
+              {!canManageSchedules ? "A justificativa não permite editar a escala ou os horários. Gestores com liberação individual podem justificar somente faltas do próprio time." : attendanceRequiresReason ? "Este status exige motivo e descrição antes de salvar." : "Este status não exige motivo obrigatório."}
             </div>
+            {attendanceMessage ? (
+              <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {attendanceMessage}
+              </div>
+            ) : null}
             <button disabled={savingJustification} onClick={saveAttendance} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
               {savingJustification ? "Salvando justificativa..." : "Salvar registro"}
             </button>
