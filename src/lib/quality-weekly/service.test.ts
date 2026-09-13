@@ -6,7 +6,7 @@ import { PrismaClient } from "@prisma/client";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { hasQualityWeeklyAccess, QualityWeeklyError } from "./access";
-import { canAccessPathForRole, getNavItems } from "../navigation";
+import { canAccessPathForRole, getNavItems, getNavSections, navItems } from "../navigation";
 import { FIELDS, type Cell } from "./domain";
 import { createQualityWeeklyService } from "./service";
 import { readTables } from "./workbook";
@@ -36,13 +36,20 @@ test("only active ADM/WFM can access the page, APIs and shared reports", () => {
   for (const role of ["ADMIN", "WFM", "SUPERVISOR", "GESTOR", "QUALIDADE", "COLABORADOR", "POC", "CLIENT", "FINANCEIRO"]) {
     const expected = role === "ADMIN" || role === "WFM";
     assert.equal(hasQualityWeeklyAccess({ ...author, email: "qa@example.invalid", role, status: "ACTIVE" }), expected);
+    assert.equal(canAccessPathForRole("/weekly-quality-report", { role, status: "ACTIVE" }), expected);
     assert.equal(canAccessPathForRole("/api/quality-weekly/reports/any/document", { role, status: "ACTIVE" }), expected);
-    const reportLink = getNavItems({ role, status: "ACTIVE" }).find(item => item.href === "/weekly-quality-report");
-    assert.equal(Boolean(reportLink), expected);
-    if (expected) assert.equal(reportLink?.label, "Quality Report");
   }
   assert.equal(hasQualityWeeklyAccess({ ...author, email: "qa@example.invalid", role: "ADMIN", status: "INACTIVE" }), false);
   assert.equal(hasQualityWeeklyAccess({ ...author, email: "qa@example.invalid", role: "WFM", status: "ACTIVE", deletedAt: new Date() }), false);
+});
+
+test("Quality Report is hidden from navigation for every role without deleting report access", () => {
+  assert.equal(navItems.some(item => item.href === "/weekly-quality-report"), false);
+  for (const role of ["ADMIN", "WFM", "SUPERVISOR", "GESTOR", "QUALIDADE", "COLABORADOR", "POC", "CLIENT", "FINANCEIRO"]) {
+    const user = { role, status: "ACTIVE" };
+    assert.equal(getNavItems(user).some(item => item.href === "/weekly-quality-report"), false, role);
+    assert.equal(getNavSections(user).some(section => section.items.some(item => item.href === "/weekly-quality-report")), false, role);
+  }
 });
 
 test("actual worksheet cells are read after patching the declared dimension to A1", async () => {
