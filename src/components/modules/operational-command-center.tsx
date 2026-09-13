@@ -6,6 +6,7 @@ import { createClientRequestGate } from "@/lib/client-request-gate";
 import { type LucideIcon, AlertTriangle, CalendarDays, CheckCircle2, Clock, HeartPulse, Laptop, RefreshCw, Trophy, UserCheck, Users, Wifi, XCircle } from "lucide-react";
 import { EmptyState, MetricPill, PageHeader, Panel, SimpleTable, StatusBadge } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { formatAbsencePercentage } from "@/lib/attendance-display";
 import { cleanShiftOptions, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
 import { AttendanceItem, AttendanceSummary, EmployeeListResponse, RecurringAbsenceItem, SystemSettings, apiJson, currentOperationalMonthRange, downloadFile, employeeStatusKey, moodOptionForScore } from './shared';
 const AbsenceReasonsDonut = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.AbsenceReasonsDonut), { ssr: false });
@@ -1252,8 +1253,8 @@ export function OperationalCommandCenter() {
                     className="grid w-full grid-cols-[46px_minmax(72px,1fr)_72px_50px_52px] items-center gap-1.5 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
                   >
                     <span className="min-w-0 truncate text-[11.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
-                    <div className="grid min-w-0 grid-cols-[38px_1fr] items-center gap-1.5">
-                      <span className={cn("text-[11px] font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
+                    <div className="grid min-w-0 grid-cols-[52px_1fr] items-center gap-1.5">
+                      <span className={cn("whitespace-nowrap text-[11px] font-black tabular-nums", absTextColor(item.absRate))}>{formatAbsencePercentage(item.planned, item.absent)}</span>
                       <div className="h-2 rounded-full bg-slate-100">
                         <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: rankingBarWidth(item.absRate, maxLobAbsRate) }} />
                       </div>
