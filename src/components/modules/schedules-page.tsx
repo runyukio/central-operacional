@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CalendarCheck, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
+import { ScheduleSlotStatusFilter } from "@/components/schedule-slot-status-filter";
 import { DonutLegend, EmptyState, MetricPill, MiniAlertList, PageHeader, Panel, StatusBadge } from "@/components/ui/primitives";
 import { scheduleGridRows } from "@/lib/demo-data";
 import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
@@ -1407,7 +1408,7 @@ export function SchedulesPage() {
           <select value={scheduleFilters.lob} onChange={(event) => setScheduleFilters({ ...scheduleFilters, lob: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueLobs.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={scheduleFilters.supervisor} onChange={(event) => setScheduleFilters({ ...scheduleFilters, supervisor: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueSupervisors.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={scheduleFilters.shift} onChange={(event) => setScheduleFilters({ ...scheduleFilters, shift: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueShifts.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={scheduleFilters.status} onChange={(event) => setScheduleFilters({ ...scheduleFilters, status: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{["Todos", ...scheduleStatusOptions].map((item) => <option key={item}>{item}</option>)}</select>
+          <ScheduleSlotStatusFilter value={scheduleFilters.status} options={scheduleStatusOptions} onChange={(status) => setScheduleFilters((current) => ({ ...current, status }))} />
           <select value={scheduleFilters.skill} onChange={(event) => setScheduleFilters({ ...scheduleFilters, skill: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">
             {uniqueSkills.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
           </select>
