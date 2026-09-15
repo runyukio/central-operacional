@@ -37,6 +37,29 @@ test("libera divergência de valor da NF somente para os WBs autorizados", () =>
   assert.equal(isBillingFiscalAmountMismatchExempt("wb_outro"), false);
 });
 
+test("libera divergência para Tiago e Anderson somente na referência setembro/2026", () => {
+  for (const wbLogin of ["wb_tiagop", " WB_ANDERSONS "]) {
+    assert.equal(isBillingFiscalAmountMismatchExempt(wbLogin, "2026-09"), true);
+    for (const month of ["2026-08", "2026-10", "2027-09", "09", "2026-9", "", null, undefined]) {
+      assert.equal(isBillingFiscalAmountMismatchExempt(wbLogin, month), false);
+    }
+    assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+      referenceMonth: "2026-09", wbLogin, employeeStatus: "Ativo", finalAmount: 1000
+    }), null, "a exceção de valor não dispensa o envio da NF");
+  }
+  for (const wbLogin of ["wb_outro", "wb_tiagop2", "wb_andersons2", "tiagop", "andersons", null, undefined, ""]) {
+    assert.equal(isBillingFiscalAmountMismatchExempt(wbLogin, "2026-09"), false);
+  }
+});
+
+test("mantém as exceções permanentes existentes independentemente do ciclo", () => {
+  for (const wbLogin of ["wb_lucasy", "wb_kevin11", "leonardo20"]) {
+    for (const month of ["2026-08", "2026-09", "2026-10", undefined]) {
+      assert.equal(isBillingFiscalAmountMismatchExempt(wbLogin, month), true);
+    }
+  }
+});
+
 test("permite fechamento manual sem nota para valor não positivo, treinamento e WB autorizado", () => {
   assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
     referenceMonth: "2026-07",

@@ -112,7 +112,7 @@ export function MyInvoicePage() {
   const [adjustment, setAdjustment] = useState({ type: "Horas não consideradas", questionedItem: "Horas aprovadas", description: "" });
   const [fiscalUpload, setFiscalUpload] = useState<BillingFiscalInvoiceUploadValue>(EMPTY_BILLING_FISCAL_UPLOAD);
   const data = payload?.data;
-  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(data?.invoice.wbLogin);
+  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(data?.invoice.wbLogin, data?.referenceMonth);
   const expectedFiscalAmount = data
     ? calculateBillingFiscalExpectedAmount({
       referenceMonth: data.referenceMonth,

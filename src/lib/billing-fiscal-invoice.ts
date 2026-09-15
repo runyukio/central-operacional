@@ -6,6 +6,12 @@ const BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS = new Set([
   "leonardo20"
 ]);
 
+// Liberação pontual de divergência da NF, vinculada ao ciclo, não ao mês do upload.
+// As demais validações fiscais e os valores calculados do Billing permanecem iguais.
+const BILLING_FISCAL_AMOUNT_MISMATCH_MONTH_EXCEPTIONS = new Map<string, ReadonlySet<string>>([
+  ["2026-09", new Set(["wb_tiagop", "wb_andersons"])]
+]);
+
 const BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS = new Set([
   "guilhereme.ramos"
 ]);
@@ -35,8 +41,13 @@ export function normalizeBillingFiscalInvoiceNumber(value: string) {
   return value.replace(/\D/g, "").slice(0, BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH);
 }
 
-export function isBillingFiscalAmountMismatchExempt(wbLogin: string | null | undefined) {
-  return BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS.has(String(wbLogin ?? "").trim().toLowerCase());
+export function isBillingFiscalAmountMismatchExempt(
+  wbLogin: string | null | undefined,
+  referenceMonth?: string | null
+) {
+  const normalizedWbLogin = String(wbLogin ?? "").trim().toLowerCase();
+  return BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS.has(normalizedWbLogin)
+    || Boolean(referenceMonth && BILLING_FISCAL_AMOUNT_MISMATCH_MONTH_EXCEPTIONS.get(referenceMonth)?.has(normalizedWbLogin));
 }
 
 export function resolveBillingManualClosureWithoutFiscalInvoiceReason(input: {

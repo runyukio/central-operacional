@@ -554,7 +554,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
 
     const matchesBilling = currencyEquals(extraction.serviceAmount, expectedFiscalAmount);
-    const amountMismatchAccepted = !matchesBilling && isBillingFiscalAmountMismatchExempt(employee.wbLogin);
+    const amountMismatchAccepted = !matchesBilling && isBillingFiscalAmountMismatchExempt(employee.wbLogin, referenceMonth);
     stage = "CREATE_VALIDATION";
     const validationToken = matchesBilling || amountMismatchAccepted
       ? createBillingFiscalValidationToken({
@@ -668,7 +668,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
     return { error: "Os dados financeiros do parceiro não estão completos para o envio ao Omie.", status: 400 };
   }
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
-  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(user.employeeProfile.wbLogin);
+  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(user.employeeProfile.wbLogin, referenceMonth);
   const file = input.file ?? null;
   let extraction: BillingFiscalDocumentExtraction;
   try {
@@ -1501,7 +1501,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     }
 
     const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
-    const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(employee.wbLogin);
+    const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(employee.wbLogin, referenceMonth);
     const file = input.file ?? null;
     let extraction: BillingFiscalDocumentExtraction;
     try {

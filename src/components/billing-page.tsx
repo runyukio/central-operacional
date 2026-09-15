@@ -1126,7 +1126,7 @@ function EmployeeBillingDetail({
     employeeStatus: invoice.employeeStatus,
     finalAmount: invoice.finalAmount
   }));
-  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(invoice.wbLogin);
+  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(invoice.wbLogin, referenceMonth);
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR"].includes(invoice.status);
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount({
     referenceMonth,
