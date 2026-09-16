@@ -12,6 +12,7 @@ import type { Actor } from "@/lib/mock-db";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { canAccessCampaignAgent, canManageCampaignStaff, canViewCampaignStaff, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export class CampaignRaffleError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -43,6 +44,38 @@ export async function getCampaignRaffleDashboard(actor: Actor, view: "agent" | "
     throw new CampaignRaffleError("A visão Agente está disponível somente para agentes das operações ADS e PROJECT.", 403);
   }
   return loadAgentDashboard(context);
+}
+
+export async function exportCampaignRaffleTickets(actor: Actor, campaignId?: string | null): Promise<XlsxExportPayload> {
+  const context = await loadCampaignRaffleContext(actor);
+  if (!context.canViewAll) throw new CampaignRaffleError("Seu perfil não tem acesso à exportação de todos os tickets.", 403);
+  const id = campaignId?.trim();
+  if (!id) throw new CampaignRaffleError("Selecione uma campanha para exportar os tickets.");
+
+  // Export assignments, not the eligible-agent list or the filtered UI rows.
+  // A holder's later change of status must not hide an existing ticket.
+  const campaign = await prisma.raffleCampaign.findUnique({
+    where: { id },
+    select: {
+      name: true,
+      tickets: {
+        orderBy: { number: "asc" },
+        select: { number: true, employee: { select: { fullName: true, wbLogin: true } } }
+      }
+    }
+  });
+  if (!campaign) throw new CampaignRaffleError("Campanha não encontrada.", 404);
+
+  const name = campaign.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "campanha";
+  return {
+    fileName: `rifa_${name}.xlsx`,
+    sheetName: "Tickets",
+    headers: ["Número", "Nome do agente", "WB/Login"],
+    rows: campaign.tickets.map((ticket) => [ticket.number, ticket.employee.fullName, ticket.employee.wbLogin]),
+    columnFormats: { 0: "00000" },
+    autoFilter: true
+  };
 }
 
 export async function createRaffleCampaign(actor: Actor, input: { name: string }) {

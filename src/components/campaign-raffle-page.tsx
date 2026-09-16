@@ -3,6 +3,7 @@
 import {
   Check,
   CheckCircle2,
+  Download,
   Gift,
   History,
   Plus,
@@ -18,6 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { downloadFile } from "@/components/modules/shared";
 import { formatRaffleNumber } from "@/lib/campaign-raffle-core";
 import { cn } from "@/lib/utils";
 
@@ -317,6 +319,8 @@ function StaffCampaignView({
   const [staffTab, setStaffTab] = useState<"distribute" | "tickets">(payload.access.canManage ? "distribute" : "tickets");
   const activeStaffTab = payload.access.canManage ? staffTab : "tickets";
   const [ticketSearch, setTicketSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
   const campaignId = selectedCampaignId || payload.selectedCampaignId || "";
   const selectedCampaign = payload.campaigns.find((campaign) => campaign.id === campaignId) ?? null;
   const selectedSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
@@ -335,15 +339,37 @@ function StaffCampaignView({
       <div className="card flex flex-col gap-3 p-3 md:flex-row md:items-end md:justify-between">
         <label className="block min-w-0 flex-1">
           <span className="mb-1.5 block text-xs font-extrabold uppercase tracking-wide text-muted">Campanha ativa</span>
-          <select value={campaignId} onChange={(event) => setSelectedCampaignId(event.target.value)} className="premium-control h-11 w-full appearance-none px-3 text-sm font-extrabold text-navy-950 outline-none">
+          <select value={campaignId} onChange={(event) => { setExportError(""); setSelectedCampaignId(event.target.value); }} className="premium-control h-11 w-full appearance-none px-3 text-sm font-extrabold text-navy-950 outline-none">
             {!payload.campaigns.length ? <option value="">Nenhuma campanha criada</option> : null}
             {payload.campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name} · {campaign.status === "ACTIVE" ? "Ativa" : "Encerrada"}</option>)}
           </select>
         </label>
+        <button
+          type="button"
+          disabled={!selectedCampaign || exporting}
+          onClick={async () => {
+            if (!campaignId || exporting) return;
+            setExporting(true);
+            setExportError("");
+            try {
+              await downloadFile(`/api/campaigns/raffle/export?campaignId=${encodeURIComponent(campaignId)}`, "rifa_tickets.xlsx");
+            } catch (caught) {
+              setExportError(caught instanceof Error ? caught.message : "Não foi possível exportar os tickets.");
+            } finally {
+              setExporting(false);
+            }
+          }}
+          title="Baixar todos os tickets da campanha selecionada, independentemente da busca. Uma linha por número e agente."
+          className="premium-control inline-flex h-11 items-center justify-center gap-2 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Download className="h-4 w-4" /> {exporting ? "Exportando..." : "Exportar todos (XLSX)"}
+        </button>
         {payload.access.canManage ? <button type="button" onClick={onCreate} className="premium-button inline-flex h-11 items-center justify-center gap-2 px-4 text-sm font-extrabold">
           <Plus className="h-4 w-4" /> Nova campanha
         </button> : null}
       </div>
+
+      {exportError ? <div role="alert"><Alert tone="error">{exportError}</Alert></div> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Tickets distribuídos" value={payload.summary.usedTickets.toLocaleString("pt-BR")} helper="números únicos" icon={Ticket} tone="blue" />

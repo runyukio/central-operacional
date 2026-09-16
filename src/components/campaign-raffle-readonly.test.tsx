@@ -14,7 +14,10 @@ const compiled = ts.transpileModule(`${source}\nexport { StaffCampaignView, Tick
 const compiledModule = { exports: {} as { StaffCampaignView: ComponentType<any>; TicketAssignmentsPanel: ComponentType<any> } };
 const Panel = ({ title, children }: { title: string; children: React.ReactNode }) => createElement("section", null, createElement("h2", null, title), children);
 const StatCard = ({ title, value }: { title: string; value: string }) => createElement("div", null, `${title}: ${value}`);
-const dependencies: Record<string, unknown> = { "@/components/ui/primitives": { Panel, StatCard } };
+const dependencies: Record<string, unknown> = {
+  "@/components/ui/primitives": { Panel, StatCard },
+  "@/components/modules/shared": { downloadFile: async () => {} }
+};
 new Function("require", "exports", "module", compiled)((name: string) => dependencies[name] ?? localRequire(name), compiledModule.exports, compiledModule);
 const holders = [{ employeeId: "agent", name: "Parceiro Teste", wbLogin: "wb_test", status: "Ativo", tickets: [{ id: "ticket", number: 42, assignedAt: "2026-09-09T12:00:00Z" }] }];
 
@@ -30,7 +33,7 @@ test("read-only raffle opens all tickets without create/distribute/delete contro
     setSelectedCampaignId: () => {}, setSelectedEmployeeIds: () => {}, setTicketsPerEmployee: () => {}, setAgentSearch: () => {},
     onCreate: () => {}, onPrepare: () => {}, onDeleteTicket: () => {}
   }));
-  for (const text of ["Todos os tickets", "Buscar agente ou ticket", "Parceiro Teste", "00042"]) assert.ok(html.includes(text), text);
+  for (const text of ["Todos os tickets", "Buscar agente ou ticket", "Parceiro Teste", "00042", "Exportar todos (XLSX)"]) assert.ok(html.includes(text), text);
   for (const text of ["Nova campanha", "Distribuir tickets", "Excluir ticket"]) assert.ok(!html.includes(text), text);
 });
 
