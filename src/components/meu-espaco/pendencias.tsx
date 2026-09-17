@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { useEffect, useState } from "react";
 import { SpaceCoveragePanel } from "./requerido";
 import { spaceAge, spaceAgePriority } from "@/lib/meu-espaco-order";
@@ -31,8 +32,8 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
   return <div className="mt-4 border-t border-border pt-4">
     {row.kind === "hours" ? <p className="mb-3 text-sm text-muted">Classificação: {row.reason} · Previsto: {row.plannedStart || "—"}–{row.plannedEnd || "—"} · Captura na ocorrência: {row.capturedMinutes == null ? "Sem dados" : formatMinutesToHHMM(row.capturedMinutes).padStart(5, "0")}</p> : null}
     {canRespond && row.pending ? <form onSubmit={submit} className="space-y-3">
-      {row.kind === "absence" ? <label className="block text-sm font-bold">Motivo<select required value={reason} onChange={(e) => setReason(e.target.value)} className="premium-control mt-2 w-full p-2"><option value="">Selecione o motivo</option>{officialAbsenceReasons.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
-      {row.kind === "absence" ? <label className="block text-sm font-bold">Categoria<select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value)} className="premium-control mt-2 w-full p-2">{["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"].map((value) => <option key={value}>{value}</option>)}</select></label> : null}
+      {row.kind === "absence" ? <label className="block text-sm font-bold">Motivo<select required value={reason} onChange={(e) => setReason(e.target.value)} className="premium-control mt-2 w-full p-2"><option value="">Selecione o motivo</option>{officialAbsenceReasons.map((value) => <option key={value} value={value}>{scheduleDisplayLabel(value)}</option>)}</select></label> : null}
+      {row.kind === "absence" ? <label className="block text-sm font-bold">Categoria<select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value)} className="premium-control mt-2 w-full p-2">{["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"].map((value) => <option key={value} value={value}>{scheduleDisplayLabel(value)}</option>)}</select></label> : null}
       <label className="block text-sm font-bold">{row.kind === "absence" ? "Descrição da ocorrência" : "Justificativa de aderência"}<textarea required minLength={row.kind === "hours" ? 5 : 1} maxLength={10000} value={justification} onChange={(e) => setJustification(e.target.value)} className="premium-control mt-2 min-h-24 w-full p-3 font-normal" /></label>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
       <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Check className="h-4 w-4" />{saving ? "Salvando…" : "Enviar justificativa"}</button>

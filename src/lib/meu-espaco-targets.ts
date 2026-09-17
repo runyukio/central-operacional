@@ -7,7 +7,7 @@ export type SpaceKpi = SpaceTarget & { value: number | null; met: boolean | null
 export function spaceTargets(lob: string): SpaceTarget[] {
   if (!["ADS", "TNS", "CEC"].includes(lob)) return [];
   const quality: SpaceTarget = { id: "quality", label: "Qualidade", target: lob === "TNS" ? 98 : 95, direction: "min", unit: "%", scale: 100, weightLabel: "avaliações", bounded: true };
-  const abs: SpaceTarget = { id: "abs", label: "ABS do time", target: 7.5, direction: "max", unit: "%", scale: 100, weightLabel: "dias-parceiro escalados", bounded: true };
+  const abs: SpaceTarget = { id: "abs", label: "ABS do time", target: 7.5, direction: "max", unit: "%", scale: 100, weightLabel: "dias-parceiro no cronograma", bounded: true };
   if (lob === "CEC") return [quality,
     { id: "cpd", label: "CPD médio da operação", target: 100, direction: "min", unit: "tickets/dia-parceiro", scale: 1, weightLabel: "dias-parceiro com produção positiva" }, abs,
     { id: "normalFrt", label: "SLA/FRT · Normal", target: 97, direction: "min", unit: "%", scale: 100, weightLabel: "primeiras respostas Normal >0", bounded: true },

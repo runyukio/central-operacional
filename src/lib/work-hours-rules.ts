@@ -21,7 +21,7 @@ const blockedStatusLabels: Record<string, string> = {
   AFASTADO: "Afastado",
   TREINAMENTO: "Treinamento",
   NESTING: "Nesting",
-  SEM_ESCALA: "Sem escala",
+  SEM_ESCALA: "Sem cronograma",
   SEM_CRONOGRAMA: "Sem cronograma",
   ERRO_ESCALA: "Erro de cronograma",
   ERRO_DE_ESCALA: "Erro de cronograma",

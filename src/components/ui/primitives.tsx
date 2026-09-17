@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
@@ -123,7 +124,7 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-md border border-current/10 px-2 py-1 text-[11px] font-extrabold leading-tight", styles)}>
       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-75" />
-      <span className="min-w-0 break-words">{status}</span>
+      <span className="min-w-0 break-words">{scheduleDisplayLabel(status)}</span>
     </span>
   );
 }

@@ -754,14 +754,14 @@ function TimelinePanel({
         </label>
 
         <label className="block">
-          <span className="sr-only">Escala</span>
+          <span className="sr-only">Cronograma</span>
           <select
             value={scheduleFilter}
             onChange={(event) => onScheduleFilterChange(event.target.value as RealtimeHoursScheduleFilter)}
             className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
           >
             <option value="ALL">Total</option>
-            <option value="SCHEDULED">Escalado</option>
+            <option value="SCHEDULED">No cronograma</option>
           </select>
         </label>
       </div>
@@ -823,7 +823,7 @@ function TimelinePanel({
                   <th className="w-[270px] px-3 py-3">Parceiro</th>
                   <th className="w-32 px-3 py-3">Data</th>
                   <th className="w-28 px-3 py-3">Duração</th>
-                  <th className="w-44 px-3 py-3">Escala prevista</th>
+                  <th className="w-44 px-3 py-3">Cronograma previsto</th>
                   <th className="px-3 py-3">Timeline 48h</th>
                 </tr>
               </thead>

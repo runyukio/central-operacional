@@ -227,7 +227,7 @@ export function StaffCoveragePage() {
     <div className="space-y-4">
       <PageHeader
         title="Necessidade"
-        description="Necessidade operacional e cobertura de staff por escala."
+        description="Necessidade operacional e cobertura de staff por cronograma."
         icon={UsersRound}
         actions={<TopActions />}
       />
@@ -774,7 +774,7 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
                     ) : null}
                   </tr>
                 ))}
-                {!rows.length ? <tr><td colSpan={showRta ? 7 : 6} className="px-3 py-8"><EmptyState title="Sem escala STAFF" description="Não foram encontrados Supervisores, POCs ou RTAs por skill no período filtrado." /></td></tr> : null}
+                {!rows.length ? <tr><td colSpan={showRta ? 7 : 6} className="px-3 py-8"><EmptyState title="Sem cronograma STAFF" description="Não foram encontrados Supervisores, POCs ou RTAs por skill no período filtrado." /></td></tr> : null}
               </tbody>
             </table>
           </div>

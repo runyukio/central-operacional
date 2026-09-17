@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { useEffect, useRef, useState } from "react";
 import { CalendarCheck, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
@@ -291,7 +292,7 @@ function scheduleSlotDisplayLabel(value: string) {
   if (normalized === "saída antecipada" || normalized === "saida antecipada") return "Saída ant.";
   if (normalized === "sem cronograma") return "Sem cron.";
   if (normalized === "erro de cronograma") return "Erro cron.";
-  return value;
+  return scheduleDisplayLabel(value);
 }
 
 
@@ -1541,7 +1542,7 @@ export function SchedulesPage() {
                   <th className="px-3 py-2">Parceiro</th>
                   <th className="px-3 py-2">Cargo</th>
                   <th className="px-3 py-2">LOB</th>
-                  <th className="px-2 py-2 text-center">Escala</th>
+                  <th className="px-2 py-2 text-center">Cronograma</th>
                   <th className="px-2 py-2 text-center">Folga</th>
                   <th className="px-2 py-2 text-center">Faltas</th>
                   {visibleScheduleDates.map((dateIso) => (
@@ -1586,7 +1587,7 @@ export function SchedulesPage() {
                         <td key={`${row.employee.id}-${index}`} className="px-1 py-1.5 text-center">
                           <button
                             type="button"
-                            title={value}
+                            title={scheduleDisplayLabel(value)}
                             onClick={() => openScheduleEditor(row, index, value)}
                             className={cn(
                               "inline-flex h-[68px] w-[92px] flex-col items-center justify-center gap-1 overflow-hidden rounded-md px-1.5 py-1.5 text-center font-bold transition hover:ring-2 hover:ring-blue-200",
@@ -1627,7 +1628,7 @@ export function SchedulesPage() {
           </div>
           <div className="flex flex-wrap gap-2 border-t border-border px-5 py-3">
             {scheduleStatusOptions.map((status) => (
-              <span key={status} className={cn("rounded-md px-2 py-1 text-xs font-bold", shiftTagClass(status))}>{status}</span>
+              <span key={status} className={cn("rounded-md px-2 py-1 text-xs font-bold", shiftTagClass(status))}>{scheduleDisplayLabel(status)}</span>
             ))}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border px-5 py-4 text-sm text-muted">
@@ -1673,7 +1674,7 @@ export function SchedulesPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-extrabold text-navy-950">{record.employeeName}</p>
-                        <p className="text-xs font-semibold text-orange-800">{record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}</p>
+                        <p className="text-xs font-semibold text-orange-800">{record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {scheduleDisplayLabel(record.status)}</p>
                         <p className="mt-1 text-xs font-semibold text-muted">Supervisor: {record.supervisor || "Sem supervisor"}</p>
                         <p className="mt-1 text-xs text-muted">Registrado por {record.registeredBy}</p>
                       </div>
@@ -1762,10 +1763,10 @@ export function SchedulesPage() {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-extrabold text-navy-950" title={record.employeeName}>{record.employeeName}</p>
                         <p className="mt-1 text-xs font-semibold text-orange-800">
-                          {record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}
+                          {record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {scheduleDisplayLabel(record.status)}
                         </p>
                         <p className="mt-1 text-xs text-muted">Supervisor: {record.supervisor || "Sem supervisor"} • WB/Login: {record.wbLogin || "Não informado"}</p>
-                        <p className="mt-1 text-xs text-muted">Motivo: {record.absenceReason || "Sem justificativa"} • Registrado por {record.registeredBy}</p>
+                        <p className="mt-1 text-xs text-muted">Motivo: {scheduleDisplayLabel(record.absenceReason || "Sem justificativa")} • Registrado por {record.registeredBy}</p>
                         <p className="mt-1 text-xs text-muted">Ação recomendada: justificar ocorrência ou corrigir o status do cronograma.</p>
                       </div>
                       <button
@@ -2004,7 +2005,7 @@ export function SchedulesPage() {
                       <div className="grid gap-3 text-sm md:grid-cols-2">
                         <div className="rounded-lg border border-border bg-white p-3">
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Status do cronograma</span>
-                          <span className="mt-1 block font-extrabold text-navy-950">{scheduleEditForm.status}</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{scheduleDisplayLabel(scheduleEditForm.status)}</span>
                         </div>
                         <div className="rounded-lg border border-border bg-white p-3">
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Status da justificativa</span>
@@ -2012,7 +2013,7 @@ export function SchedulesPage() {
                         </div>
                         <div className="rounded-lg border border-border bg-white p-3">
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Motivo</span>
-                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.absenceReason ?? "Sem justificativa"}</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{scheduleDisplayLabel(selectedScheduleJustification?.absenceReason ?? "Sem justificativa")}</span>
                         </div>
                         <div className="rounded-lg border border-border bg-white p-3">
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Classificação</span>
@@ -2045,7 +2046,7 @@ export function SchedulesPage() {
                           <div className="mt-2 space-y-2">
                             {selectedScheduleJustification.history.slice(0, 5).map((item, index) => (
                               <div key={`${item.createdAt}-${index}`} className="rounded-md bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
-                                <span className="font-extrabold text-navy-950">{item.createdAt ?? "-"}</span> • {item.changedBy ?? "Sistema"} • {item.previousReason ?? "Sem motivo"} → {item.newReason ?? "Sem motivo"}
+                                <span className="font-extrabold text-navy-950">{item.createdAt ?? "-"}</span> • {item.changedBy ?? "Sistema"} • {scheduleDisplayLabel(item.previousReason ?? "Sem motivo")} → {scheduleDisplayLabel(item.newReason ?? "Sem motivo")}
                                 {item.comment ? <span className="block text-muted">{item.comment}</span> : null}
                               </div>
                             ))}
@@ -2187,7 +2188,7 @@ export function SchedulesPage() {
               <div>
                 <h2 id="attendance-modal-title" className="text-lg font-extrabold text-navy-950">{!canManageSchedules ? "Justificar ocorrência" : "Marcar presença/ocorrência"}</h2>
                 <p className="text-sm text-muted">
-                  {!canManageSchedules ? "Registra a justificativa da ocorrência sem editar a escala ou os horários." : "Atualiza o status do cronograma e registra auditoria."}
+                  {!canManageSchedules ? "Registra a justificativa da ocorrência sem editar o cronograma ou os horários." : "Atualiza o status do cronograma e registra auditoria."}
                 </p>
               </div>
               <button onClick={closeAttendanceModal} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -2236,7 +2237,7 @@ export function SchedulesPage() {
               </label>
             </div>
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              {!canManageSchedules ? "A justificativa não permite editar a escala ou os horários. Gestores com liberação individual podem justificar somente faltas do próprio time." : attendanceRequiresReason ? "Este status exige motivo e descrição antes de salvar." : "Este status não exige motivo obrigatório."}
+              {!canManageSchedules ? "A justificativa não permite editar o cronograma ou os horários. Gestores com liberação individual podem justificar somente faltas do próprio time." : attendanceRequiresReason ? "Este status exige motivo e descrição antes de salvar." : "Este status não exige motivo obrigatório."}
             </div>
             {attendanceMessage ? (
               <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
@@ -2278,7 +2279,7 @@ export function SchedulesPage() {
                         <tr key={index}>
                           <td className="px-3 py-2 font-bold">{rowValidation?.rowNumber ?? index + 1}</td>
                           {scheduleImportColumns.map((column) => (
-                            <td key={column} className="px-3 py-2">{String(row[column] ?? "")}</td>
+                            <td key={column} className="px-3 py-2">{column === "status" ? scheduleDisplayLabel(String(row[column] ?? "")) : String(row[column] ?? "")}</td>
                           ))}
                           <td className={cn("px-3 py-2 font-semibold", rowValidation?.errors.length ? "text-red-600" : rowValidation?.warnings.length ? "text-amber-600" : "text-muted")}>
                             {rowValidation

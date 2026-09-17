@@ -30,6 +30,6 @@ export function summarizePartnerMonth(partner: {id:string; fullName:string; wbLo
     else if(day<today&&!days.has(day))row.missingPastSlots++;
   }
   row.projectedHours=row.realizedRecords||futureSlots||row.inProgressHours>0?row.effectiveHours+row.futureHours+row.inProgressHours:null;
-  row.status=pending?`${pending} ajustes pendentes`:row.missingPastSlots?`${row.missingPastSlots} dias sem horas`:noSchedule?`${noSchedule} registros sem escala válida`:divergent?`${divergent} dias com divergência`:row.realizedRecords?"Sem divergência nas horas registradas":row.inProgressHours>0?"Turno em andamento":futureSlots?"Somente projeção":"Sem dados";
+  row.status=pending?`${pending} ajustes pendentes`:row.missingPastSlots?`${row.missingPastSlots} dias sem horas`:noSchedule?`${noSchedule} registros sem cronograma válido`:divergent?`${divergent} dias com divergência`:row.realizedRecords?"Sem divergência nas horas registradas":row.inProgressHours>0?"Turno em andamento":futureSlots?"Somente projeção":"Sem dados";
   return row;
 }

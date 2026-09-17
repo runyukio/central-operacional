@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown } from "lucide-react";
 import { parseScheduleSlotFilter, toggleScheduleSlotFilter } from "@/lib/schedule-slot-filter";
@@ -11,7 +12,7 @@ export function ScheduleSlotStatusFilter({ value, options, onChange }: {
   onChange: (value: string) => void;
 }) {
   const selected = parseScheduleSlotFilter(value);
-  const label = selected.length ? selected.join(", ") : "Todos os slots";
+  const label = selected.length ? selected.map(scheduleDisplayLabel).join(", ") : "Todos os slots";
   const itemClass = "relative flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-2 text-sm font-semibold outline-none hover:bg-slate-100 focus:bg-slate-100";
 
   return (
@@ -34,7 +35,7 @@ export function ScheduleSlotStatusFilter({ value, options, onChange }: {
             {options.map((option) => (
               <DropdownMenu.CheckboxItem key={option} checked={selected.includes(option)} onCheckedChange={() => onChange(toggleScheduleSlotFilter(value, option))} onSelect={(event) => event.preventDefault()} className={cn(itemClass, selected.includes(option) && "bg-blue-50 text-blue-700")}>
                 <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded border", selected.includes(option) ? "border-blue-600 bg-blue-600 text-white" : "border-border")}><DropdownMenu.ItemIndicator><Check aria-hidden="true" className="h-3 w-3" /></DropdownMenu.ItemIndicator></span>
-                {option}
+                {scheduleDisplayLabel(option)}
               </DropdownMenu.CheckboxItem>
             ))}
           </div>

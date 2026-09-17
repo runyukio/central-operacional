@@ -390,7 +390,7 @@ function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean 
             <StatCard title="Meu AHT" value={formatPerformanceAht(minePayload.summary.mine.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
             <StatCard title="AHT médio LOB" value={formatPerformanceAht(minePayload.summary.lobAverage.ahtSeconds)} helper="consolidado da LOB" icon={Target} tone="gold" />
             <StatCard title="Meu ABS" value={formatPerformancePercent(minePayload.summary.mine.abs)} helper={`${minePayload.summary.mine.absences}/${minePayload.summary.mine.scheduledDays} dias`} icon={AlertTriangle} tone={minePayload.summary.mine.abs > 0 ? "red" : "green"} />
-            <StatCard title="ABS médio LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.abs)} helper="faltas / escalas válidas" icon={CalendarCheck} tone="blue" />
+            <StatCard title="ABS médio LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.abs)} helper="faltas / cronogramas válidos" icon={CalendarCheck} tone="blue" />
           </div>
 
           {hasPerformanceData(minePayload.summary.mine) ? (

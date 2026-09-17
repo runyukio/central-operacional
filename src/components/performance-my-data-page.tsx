@@ -209,7 +209,7 @@ export function PerformanceMyDataPage({ initialPeriod }: { initialPeriod: DateRa
             <StatCard
               title="Dias com produção"
               value={formatNumber(mine.submitDays)}
-              helper={`${formatNumber(mine.scheduledDays)} dia(s) escalado(s)`}
+              helper={`${formatNumber(mine.scheduledDays)} dia(s) no cronograma`}
               icon={CalendarDays}
               tone="cyan"
             />

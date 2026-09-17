@@ -1,3 +1,4 @@
+import { scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import type { Session } from "next-auth";
 
 import {
@@ -813,9 +814,9 @@ export function previewScheduleRows(rows: Array<Record<string, unknown>>) {
 
   const validation = rows.map((row, index) => {
     const errors = required.filter((field) => !String(row[field] ?? "").trim()).map((field) => `${field} obrigatório`);
-    const status = String(row.status ?? "");
+    const status = scheduleImportStatusValue(String(row.status ?? ""));
     if (status && !validStatus.includes(status)) errors.push("status inválido");
-    if (status === "Escalado" && !String(row.turno ?? "").trim()) errors.push("turno obrigatório quando status for Escalado");
+    if (status === "Escalado" && !String(row.turno ?? "").trim()) errors.push("turno obrigatório quando o status for No cronograma");
 
     const key = `${row.wb_login ?? ""}-${row.data ?? ""}`;
     if (seen.has(key)) errors.push("conflito para mesma pessoa no mesmo dia");
@@ -864,7 +865,7 @@ export function commitScheduleImport(actor: Actor, input: { fileName: string; al
     const target = days.find((item) => item.date === day && !item.outside);
     if (!target) continue;
 
-    const status = String(row.status ?? "");
+    const status = scheduleImportStatusValue(String(row.status ?? ""));
     const shift = status === "Escalado" ? String(row.turno ?? target.shift) : status;
     target.shift = shift || target.shift;
     target.label = shift || target.label;

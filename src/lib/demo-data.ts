@@ -30,7 +30,7 @@ export const lobs = ["CEC", "TNS", "ADS"];
 export const shifts = ["Manhã", "Tarde", "Noite", "Folga"];
 
 export const commandStats = [
-  { title: "Pessoas Escaladas", value: "1.256", change: "100%", helper: "vs dia anterior", icon: Users, tone: "blue" as const },
+  { title: "Pessoas no cronograma", value: "1.256", change: "100%", helper: "vs dia anterior", icon: Users, tone: "blue" as const },
   { title: "Presentes", value: "1.112", change: "88,5%", helper: "vs dia anterior", icon: UserCheck, tone: "green" as const },
   { title: "Ausências", value: "144", change: "11,5%", helper: "vs dia anterior", icon: XCircle, tone: "orange" as const },
   { title: "Gaps por Turno", value: "42", change: "3,3%", helper: "vs dia anterior", icon: Clock, tone: "purple" as const },

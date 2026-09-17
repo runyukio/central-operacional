@@ -53,7 +53,7 @@ export function buildRealtimeHoursExportRows<T extends RealtimeHoursTimelineFilt
       lob: row.lob || "Sem LOB",
       supervisor: row.supervisor || "Sem supervisor",
       shift: row.shift || "Sem turno",
-      scheduleStatus: plannedShift ? realtimeHoursScheduleStatusLabel(plannedShift.status) : "Sem escala",
+      scheduleStatus: plannedShift ? realtimeHoursScheduleStatusLabel(plannedShift.status) : "Sem cronograma",
       plannedShiftLabel: realtimeHoursPlannedShiftLabel(row, row.data),
       plannedStart: plannedShift?.start ?? null,
       plannedEnd: plannedShift?.end ?? null,

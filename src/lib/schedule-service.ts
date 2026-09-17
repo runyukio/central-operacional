@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { scheduleDisplayLabel, scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import { resolveScheduleStatusFilter, validScheduleSlotCountFilter } from "@/lib/schedule-slot-filter";
 import { hasOwnTeamAbsenceDelegation, isDelegatedAbsenceStatus } from "@/lib/attendance-delegation";
 import { AttendanceStatus, Prisma, ScheduleStatus, type WorkHourRecordStatus } from "@prisma/client";
@@ -1717,7 +1718,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
         schedule.employee.fullName,
         schedule.employee.user?.email ?? "",
         dateKey(schedule.date),
-        scheduleToUiStatus[schedule.status] ?? schedule.status,
+        scheduleDisplayLabel(scheduleToUiStatus[schedule.status] ?? schedule.status),
         cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "",
         schedule.employee.skill ?? "",
         schedule.startsAt ?? "",
@@ -1726,7 +1727,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
         schedule.employee.supervisor?.fullName ?? "Sem supervisor",
         workHour ? formatWorkHours(workHour.effectiveHours ?? workHour.actualHours) : "Não lançado",
         schedule.status === "FALTA_JUSTIFICADA" ? "Justificada" : schedule.status === "FALTA_INJUSTIFICADA" ? "Injustificada" : isPendingJustificationForSchedule(schedule.status, attendance) ? "Sem justificativa" : "",
-        attendanceReasonForSchedule(schedule.status, attendance),
+        scheduleDisplayLabel(attendanceReasonForSchedule(schedule.status, attendance)),
         classificationLabel,
         attendance?.supervisorJustification ?? "",
         attendance?.justifiedBy?.name ?? "",
@@ -2058,9 +2059,9 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
       record.supervisor ?? "Sem supervisor",
       record.shift,
       record.roleTitle ?? "Sem cargo",
-      record.status,
+      scheduleDisplayLabel(record.status),
       "Justificado",
-      record.absenceReason ?? "",
+      scheduleDisplayLabel(record.absenceReason ?? ""),
       absenceReasonClassificationLabel(record.reasonClassification),
       record.reasonCategory ?? "",
       record.supervisorJustification ?? "",
@@ -2142,9 +2143,9 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
       record.supervisor ?? "Sem supervisor",
       record.shift,
       record.roleTitle ?? "Sem cargo",
-      record.status,
+      scheduleDisplayLabel(record.status),
       "Sem justificativa",
-      record.absenceReason ?? "Sem justificativa",
+      scheduleDisplayLabel(record.absenceReason ?? "Sem justificativa"),
       "",
       record.reasonCategory ?? "",
       record.supervisorJustification ?? "",
@@ -2226,9 +2227,9 @@ export async function exportClassifiedUnjustifiedAbsencesXlsxData(actor: Actor, 
       record.supervisor ?? "Sem supervisor",
       record.shift,
       record.roleTitle ?? "Sem cargo",
-      record.status,
+      scheduleDisplayLabel(record.status),
       "Injustificado",
-      record.absenceReason ?? "",
+      scheduleDisplayLabel(record.absenceReason ?? ""),
       absenceReasonClassificationLabel(record.reasonClassification),
       record.reasonCategory ?? "",
       record.supervisorJustification ?? "",
@@ -2292,9 +2293,9 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
       item.shift,
       item.roleTitle ?? "",
       "",
-      item.status,
+      scheduleDisplayLabel(item.status),
       item.status === "Falta Justificada" || item.reasonClassification === "JUSTIFIED" ? "Justificada" : item.status === "Falta Injustificada" || item.reasonClassification === "UNJUSTIFIED" ? "Injustificada" : item.absenceReason === "Sem justificativa" ? "Sem justificativa" : "-",
-      item.absenceReason ?? "",
+      scheduleDisplayLabel(item.absenceReason ?? ""),
       absenceReasonClassificationLabel(item.reasonClassification),
       item.supervisorJustification ?? "",
       item.updatedAt ?? item.registeredAt
@@ -2818,7 +2819,7 @@ function needsTimeDb(status: ScheduleStatus) {
 }
 
 function scheduleStatusFromImport(value: unknown) {
-  const raw = text(value);
+  const raw = scheduleImportStatusValue(text(value));
   if (!raw) return null;
   const key = normalizeImportKey(raw);
   if (key === "AUSENTE") return "FALTA";

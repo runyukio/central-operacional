@@ -1422,7 +1422,7 @@ function slotLabel(startsAt?: string | null, endsAt?: string | null) {
 
 function scheduleStatusLabel(value: string) {
   const labels: Record<string, string> = {
-    ESCALADO: "Escalado",
+    ESCALADO: "No cronograma",
     PRESENTE: "Presente",
     TROCA_APROVADA: "Troca aprovada",
     VENDA_FOLGA_APROVADA: "Venda de folga",
@@ -1431,7 +1431,7 @@ function scheduleStatusLabel(value: string) {
     FALTA: "Falta",
     FALTA_JUSTIFICADA: "Falta justificada",
     FALTA_INJUSTIFICADA: "Falta injustificada",
-    SEM_ESCALA: "Não escalado"
+    SEM_ESCALA: "Sem cronograma"
   };
   return labels[value] ?? value.replaceAll("_", " ").toLowerCase().replace(/^./, (letter) => letter.toUpperCase());
 }

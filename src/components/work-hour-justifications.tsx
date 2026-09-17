@@ -185,7 +185,7 @@ export function WorkHourJustifications({ active, refreshKey, actorName, onMessag
       {state.rows.length ? <div className="overflow-x-auto">
         <table className="w-full min-w-[1320px] text-left text-sm">
           <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted"><tr>
-            {["Parceiro / WB", "Data", "LOB / classificação", "Supervisor", "Escala prevista", "Duração de referência", "Status", "Justificativa", "Resposta"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+            {["Parceiro / WB", "Data", "LOB / classificação", "Supervisor", "Cronograma previsto", "Duração de referência", "Status", "Justificativa", "Resposta"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
           </tr></thead>
           <tbody className="divide-y divide-border bg-white">{days.map((day) => <Fragment key={day.date}>
             <tr className="bg-slate-50"><th scope="rowgroup" colSpan={9} className="px-4 py-3 font-extrabold text-navy-950">{day.date.split("-").reverse().join("/")} <span className="ml-2 text-xs font-semibold text-muted">{day.rows.length} registro(s) carregado(s)</span></th></tr>

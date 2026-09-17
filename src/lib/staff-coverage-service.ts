@@ -19,7 +19,7 @@ const coverageExportLimit = 10000;
 
 const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
 const statusLabels: Record<string, string> = {
-  ESCALADO: "Escalado",
+  ESCALADO: "No cronograma",
   PRESENTE: "Presente",
   AUSENTE: "Falta",
   FALTA: "Falta",
@@ -35,7 +35,7 @@ const statusLabels: Record<string, string> = {
   TROCA_APROVADA: "Troca aprovada",
   VENDA_FOLGA_APROVADA: "Venda de folga aprovada",
   FOLGA_APROVADA: "Folga aprovada",
-  SEM_ESCALA: "Sem escala",
+  SEM_ESCALA: "Sem cronograma",
   ERRO_ESCALA: "Erro de cronograma",
   FERIADO: "Feriado",
   CONFLITO: "Conflito",

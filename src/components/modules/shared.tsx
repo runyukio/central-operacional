@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { type InputHTMLAttributes, useState } from "react";
 import { AlertTriangle, CalendarCheck, ClipboardList, Frown, Headphones, HeartPulse, Laptop, Meh, ShieldCheck, Smile } from "lucide-react";
 import { EmptyState, MetricPill } from "@/components/ui/primitives";
@@ -976,7 +977,7 @@ export function FormSelect({ label, value, options, onChange, error, disabled = 
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", error ? "border-red-300 bg-red-50/40" : "border-border")}>
         {options.map((option) => (
-          <option key={option} value={option}>{option ? optionLabel?.(option) ?? option : emptyLabel}</option>
+          <option key={option} value={option}>{option ? optionLabel?.(option) ?? scheduleDisplayLabel(option) : emptyLabel}</option>
         ))}
       </select>
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}

@@ -110,15 +110,15 @@ const hours: SpaceHours = {
 
 test("hours hides only the three top cards and preserves monthly rows, filters, paging and warnings", () => {
   const html = hoursHtml(hours);
-  for (const title of ["Horas realizadas no mês", "Escala futura do mês", "Total projetado do mês"]) assert.doesNotMatch(html, new RegExp(title));
+  for (const title of ["Horas realizadas no mês", "Cronograma futuro do mês", "Total projetado do mês"]) assert.doesNotMatch(html, new RegExp(title));
   for (const text of ["Mês das horas", "Consolidado mensal por parceiro · 09/2026", "Parceiro de teste", "wb_teste", "Capturadas",
-    "Realizadas (efetivas)", "Escala futura", "Total projetado", "15:30", "16:00", "31:30", "Página 1 de 1", "total pode estar incompleto"]) assert.ok(html.includes(text), text);
+    "Realizadas (efetivas)", "Cronograma futuro", "Total projetado", "15:30", "16:00", "31:30", "Página 1 de 1", "total pode estar incompleto"]) assert.ok(html.includes(text), text);
 });
 
 test("hours keeps the no-record and future-only notices without the KPI cards", () => {
   const html = hoursHtml({ ...hours, data: [], summary: { ...hours.summary, realizedRecords: 0, realizedHours: null } });
   assert.match(html, /Sem registros de horas no período/);
-  assert.match(html, /Sem realizado disponível: o total projetado considera somente a escala futura/);
+  assert.match(html, /Sem realizado disponível: o total projetado considera somente o cronograma futuro/);
 });
 
 test("hours identifies the in-progress complement without presenting it as realized hours", () => {

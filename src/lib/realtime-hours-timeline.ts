@@ -176,7 +176,7 @@ export function realtimeHoursPlannedShiftLabel(
   date: string
 ) {
   const shift = primaryRealtimeHoursPlannedShift(row, date);
-  return shift ? `${shift.startsAt} - ${shift.endsAt}` : "Sem escala";
+  return shift ? `${shift.startsAt} - ${shift.endsAt}` : "Sem cronograma";
 }
 
 export function realtimeHoursShiftDateActivity(
@@ -221,7 +221,7 @@ export function realtimeHoursScheduleStatusLabel(status: string) {
   const key = normalizeScheduleStatus(status);
   const labels: Record<string, string> = {
     ATRASO: "Atraso",
-    ESCALADO: "Escalado",
+    ESCALADO: "No cronograma",
     FALTA: "Falta",
     FALTA_INJUSTIFICADA: "Falta injustificada",
     FALTA_JUSTIFICADA: "Falta justificada",
@@ -248,7 +248,7 @@ export function compareRealtimeHoursPlannedShift(
   const observedUntil = new Date(calculationEnd).getTime();
   if (!plannedShift) {
     return {
-      label: "Sem escala",
+      label: "Sem cronograma",
       tone: "slate",
       plannedShift: null,
       firstActiveAt: null,

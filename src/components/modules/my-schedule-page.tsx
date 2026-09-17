@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { useEffect, useState } from "react";
 import { CalendarDays } from "lucide-react";
 import { EmptyState, MetricPill, PageHeader, Panel, StatusBadge } from "@/components/ui/primitives";
@@ -619,9 +620,9 @@ export function MySchedulePage() {
                     <div className="space-y-1.5">
                       <span className={cn("inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold", shiftTagClass(dayLabel))}>
                         <span className={cn("status-dot", dayShift === "Manhã" ? "bg-emerald-500" : dayShift === "Tarde" ? "bg-orange-500" : dayShift === "Noite" ? "bg-violet-600" : "bg-violet-300")} />
-                        {dayLabel}
+                        {scheduleDisplayLabel(dayLabel)}
                       </span>
-                      <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-bold text-navy-900">Turno: {dayShift || "Sem turno"}</p>
+                      <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-bold text-navy-900">Turno: {scheduleDisplayLabel(dayShift || "Sem turno")}</p>
                       {workHour ? (
                         <div className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-[11px] font-bold text-navy-950">
                           <p>Planejado: {formatWorkHourValue(workHour.plannedHours || DEFAULT_PRODUCTIVE_HOURS)}</p>

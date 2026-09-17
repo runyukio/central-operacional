@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClientRequestGate } from "@/lib/client-request-gate";
@@ -781,7 +782,7 @@ export function OperationalCommandCenter() {
   };
   const commandMoodOption = commandMood.responses ? moodOptionForScore(commandMood.average) : null;
   const stats = [
-    { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const, action: () => void openCommandDetailPeople("scheduled", "Pessoas Escaladas") },
+    { title: "Pessoas no cronograma", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const, action: () => void openCommandDetailPeople("scheduled", "Pessoas no cronograma") },
     { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const, action: () => void openCommandDetailPeople("present", "Presentes") },
     { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const, action: () => void openCommandDetailPeople("absences", "Faltas") },
     { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const, action: () => void openAbsenceReasonPeople("Sem justificativa", "pending") },
@@ -921,7 +922,7 @@ export function OperationalCommandCenter() {
     <div key={`${record.employeeId}-sequence`} className="flex max-w-[360px] flex-col gap-1 text-[11px] font-semibold text-navy-950">
       {record.sequence.map((day) => (
         <span key={`${record.employeeId}-${day.date}`} className="rounded-md bg-slate-50 px-2 py-1">
-          {day.date} - {day.status}{day.reason ? ` - ${day.reason}` : ""}{day.classification && day.classification !== "-" ? ` (${day.classification})` : ""}
+          {day.date} - {scheduleDisplayLabel(day.status)}{day.reason ? ` - ${scheduleDisplayLabel(day.reason)}` : ""}{day.classification && day.classification !== "-" ? ` (${day.classification})` : ""}
         </span>
       ))}
     </div>,
@@ -936,7 +937,7 @@ export function OperationalCommandCenter() {
     record.shift,
     record.roleTitle ?? "-",
     <StatusBadge key={`${record.id}-status`} status={record.status} />,
-    record.impactsAbs ? record.absenceReason ?? (record.isJustified ? "Justificada" : "Sem justificativa") : "-",
+    record.impactsAbs ? scheduleDisplayLabel(record.absenceReason ?? (record.isJustified ? "Justificada" : "Sem justificativa")) : "-",
     <a key={`${record.id}-open`} href={`/escalas?startDate=${record.dateIso ?? dateRange.startDate}&collaborator=${encodeURIComponent(record.employeeName)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
   ]);
   const activePeopleRows = (records: ActivePeopleItem[]) => records.map((record) => [
@@ -1113,7 +1114,7 @@ export function OperationalCommandCenter() {
                 <div className="grid grid-cols-[minmax(140px,1.2fr)_minmax(120px,1fr)_72px_64px_72px_82px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted max-lg:hidden">
                   <span>Supervisor</span>
                   <span>ABS</span>
-                  <span className="text-center">Escaladas</span>
+                  <span className="text-center">No cronograma</span>
                   <span className="text-center">Faltas</span>
                   <span className="text-center">Sem just.</span>
                   <span className="text-center">Justificadas</span>
@@ -1133,7 +1134,7 @@ export function OperationalCommandCenter() {
                           <span className={cn("block h-2 rounded-full", absBarColor(item.absRate))} style={{ width: rankingBarWidth(item.absRate, maxSupervisorAbsRate) }} />
                         </span>
                       </span>
-                      <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Escaladas: </span>{item.planned}</span>
+                      <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">No cronograma: </span>{item.planned}</span>
                       <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Faltas: </span>{item.absent}</span>
                       <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Sem just.: </span>{item.unjustified}</span>
                       <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Justificadas: </span>{item.justified}</span>
@@ -1225,7 +1226,7 @@ export function OperationalCommandCenter() {
                 <button key={reason.name} type="button" onClick={() => void openAbsenceReasonPeople(reason.name)} className={cn("grid grid-cols-[minmax(0,1fr)_36px_76px] items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-[12px] transition hover:border-blue-100 hover:bg-blue-50", reason.name === "Sem justificativa" && "bg-amber-50/70")}>
                   <span className="flex min-w-0 items-center gap-2 font-semibold text-navy-950">
                     <span className="status-dot" style={{ backgroundColor: reason.fill }} />
-                    <span className="truncate" title={reason.name}>{reason.name}</span>
+                    <span className="truncate" title={scheduleDisplayLabel(reason.name)}>{scheduleDisplayLabel(reason.name)}</span>
                   </span>
                   <span className="text-right font-black text-navy-950">{reason.value}</span>
                   <span className="text-right text-[10.5px] font-extrabold text-blue-600">Ver pessoas</span>
@@ -1241,7 +1242,7 @@ export function OperationalCommandCenter() {
                 <div className="grid grid-cols-[46px_minmax(72px,1fr)_72px_50px_52px] gap-1.5 border-b border-border px-1.5 pb-1.5 text-[9px] font-black uppercase tracking-wide text-muted">
                   <span>LOB</span>
                   <span>ABS</span>
-                  <span className="text-center">Faltas/Esc.</span>
+                  <span className="text-center" title="Faltas / dias no cronograma">Faltas/Cron.</span>
                   <span className="text-center">Sem Just.</span>
                   <span className="text-center">Justif.</span>
                 </div>
@@ -1724,7 +1725,7 @@ export function OperationalCommandCenter() {
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Ausências por motivo</h2>
                 <p className="text-sm font-semibold text-muted">
-                  {selectedAbsenceReason} • {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
+                  {scheduleDisplayLabel(selectedAbsenceReason)} • {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1779,7 +1780,7 @@ export function OperationalCommandCenter() {
                   record.lob ?? "-",
                   record.supervisor ?? "Sem supervisor",
                   <StatusBadge key={`${record.id}-status`} status={record.status} />,
-                  record.absenceReason ?? "Sem justificativa",
+                  scheduleDisplayLabel(record.absenceReason ?? "Sem justificativa"),
                   record.reasonClassification === "JUSTIFIED" ? "Justificado" : record.reasonClassification === "UNJUSTIFIED" ? "Injustificado" : "-",
                   record.reasonCategory ?? "-",
                   <span key={`${record.id}-note`} className="block max-w-[260px] truncate" title={record.supervisorJustification ?? ""}>{record.supervisorJustification ?? "-"}</span>,
@@ -1821,7 +1822,7 @@ export function OperationalCommandCenter() {
                   record.lob ?? "-",
                   record.supervisor ?? "Sem supervisor",
                   <StatusBadge key={`${record.id}-status`} status={record.status} />,
-                  record.absenceReason ?? "Sem justificativa",
+                  scheduleDisplayLabel(record.absenceReason ?? "Sem justificativa"),
                   record.isJustified ? "Justificada" : "Sem justificativa",
                   <a key={`${record.id}-open`} href={`/escalas?startDate=${record.dateIso ?? dateRange.startDate}&collaborator=${encodeURIComponent(record.employeeName)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
                 ])}

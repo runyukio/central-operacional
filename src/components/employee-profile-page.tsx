@@ -1,5 +1,6 @@
 "use client";
 
+import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
@@ -393,7 +394,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         <div className="grid min-w-0 gap-4 xl:col-span-5">
           <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(profileLinks.schedule)}>
             <div className="grid gap-2 sm:grid-cols-3">
-              <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
+              <MetricBox label="Dias no cronograma" value={data.schedule.scheduledDays} />
               <MetricBox label="Presentes" value={data.schedule.presentDays} />
               <MetricBox label="Faltas" value={data.schedule.absenceDays} />
             </div>
@@ -401,7 +402,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
               <p className="text-xs font-black uppercase tracking-wide text-muted">Próximo turno</p>
               {data.schedule.nextShift ? (
                 <p className="mt-1 font-bold text-navy-950">
-                  {data.schedule.nextShift.date} • {data.schedule.nextShift.status} • {data.schedule.nextShift.shift}
+                  {data.schedule.nextShift.date} • {scheduleDisplayLabel(data.schedule.nextShift.status)} • {data.schedule.nextShift.shift}
                 </p>
               ) : (
                 <p className="mt-1 font-bold text-muted">Sem próximo cronograma.</p>
@@ -599,7 +600,7 @@ function ScheduleChip({ day }: { day: { day: string; weekday: string; status: st
   const tone = scheduleTone(day.status);
   const shortStatus = abbreviateScheduleStatus(day.status);
   return (
-    <div title={`${day.date} • ${day.status}`} className={cn("grid h-[76px] min-w-0 place-items-center overflow-hidden rounded-lg border p-1.5 text-center", tone)}>
+    <div title={`${day.date} • ${scheduleDisplayLabel(day.status)}`} className={cn("grid h-[76px] min-w-0 place-items-center overflow-hidden rounded-lg border p-1.5 text-center", tone)}>
       <div className="min-w-0">
         <p className="truncate text-[9px] font-black uppercase leading-none tracking-wide opacity-70">{day.weekday}</p>
         <p className="mt-1 text-base font-black leading-none">{day.day}</p>
@@ -621,7 +622,7 @@ function scheduleTone(status: string) {
 function abbreviateScheduleStatus(status: string) {
   const normalized = status.toLowerCase();
   if (normalized.includes("presente")) return "Pres.";
-  if (normalized.includes("escalado")) return "Escal.";
+  if (normalized.includes("escalado")) return "Cronog.";
   if (normalized.includes("falta justificada")) return "F. Just.";
   if (normalized.includes("falta injustificada")) return "F. Injust.";
   if (normalized.includes("falta")) return "Falta";
