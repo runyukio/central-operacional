@@ -71,6 +71,9 @@ type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEn
 
 type SchedulePlannedCell = {
   scheduleId: string;
+  lobId?: string;
+  lob?: string;
+  lobSource?: "slot" | "cadastro";
   startsAt: string;
   endsAt: string;
   shiftName?: string;
@@ -697,7 +700,7 @@ export function SchedulesPage() {
       startsAt: statusNeedsTime(cellStatus) ? plannedStart : "",
       endsAt: statusNeedsTime(cellStatus) ? plannedEnd : "",
       status: cellStatus,
-      lob: targetEmployee.lob,
+      lob: plannedCell?.lob ?? targetEmployee.lob,
       supervisor: targetEmployee.supervisor,
       observation: plannedCell?.observation ?? "",
       pendingJustification: false
@@ -1957,7 +1960,10 @@ export function SchedulesPage() {
                   />
                   <FormInput disabled={!canManageSchedules} label="Entrada prevista" value={scheduleEditForm.startsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, startsAt: value })} />
                   <FormInput disabled={!canManageSchedules} label="Saída prevista" value={scheduleEditForm.endsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, endsAt: value })} />
-                  <FormInput disabled={!canManageSchedules} label="LOB" value={scheduleEditForm.lob} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, lob: value })} />
+                  <div>
+                    <FormSelect disabled={!canManageSchedules} label="LOB do slot" value={scheduleEditForm.lob} options={Array.from(new Set([...uniqueLobs.filter((lob) => lob !== "Todos"), scheduleEditForm.lob].filter(Boolean)))} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, lob: value })} />
+                    <p className="mt-1 text-xs text-muted">Usada no planejamento deste dia.{selectedScheduleEmployee?.lob && selectedScheduleEmployee.lob !== scheduleEditForm.lob ? ` Cadastro atual: ${selectedScheduleEmployee.lob}.` : ""}</p>
+                  </div>
                   <FormInput disabled={!canManageSchedules} label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
                   <label className="md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação do cronograma"}</span>

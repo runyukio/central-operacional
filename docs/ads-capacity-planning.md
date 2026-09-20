@@ -9,6 +9,8 @@ Read-only tab in Necessidade. Requires both existing `STAFF_COVERAGE_ADS` and `P
 - To avoid treating missing data as zero, a historical shift needs explicit valid hourly coverage throughout its scheduled interval, plus registered presence or production. Full absences are excluded. A partial-hour boundary cannot safely partition an hourly submit bucket, so that historical shift is excluded and reported. Future partial-hour schedules are supported.
 - Null productivity and explicit observed zero are distinct. No extra break, ABS, backlog, or legacy requirement adjustment is applied.
 - Scheduled coverage reuses Necessidade's status, agent, PROJECT and nesting eligibility, excludes leave, honors effective schedule times, and assigns overlapping minutes to only one schedule per partner. Night shifts remain on their start date.
+- LOB ownership belongs to the saved schedule slot (`Schedule.lobId`), not the current employee registry. The slot editor and planning use the same resolver. Only legacy slots with no LOB use the registry fallback; a dangling LOB identifier is shown as unavailable rather than reassigned silently.
+- The slot editor shows the saved LOB and identifies a different current registry LOB. Explicit edits resolve a registered LOB and persist its ID with the existing slot audit; omitted LOB fields preserve the saved allocation. Deployment does not rewrite past or future schedules or employee profiles.
 - Imports encode local Brasiltime as UTC wall-clock fields. Never subtract the timezone offset a second time.
 
 ## Forecast and allocation

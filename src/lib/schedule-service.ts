@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { scheduleDisplayLabel, scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import { resolveScheduleStatusFilter, validScheduleSlotCountFilter } from "@/lib/schedule-slot-filter";
+import { editedScheduleSlotLobId, resolveScheduleSlotLob } from "@/lib/schedule-slot-lob";
 import { hasOwnTeamAbsenceDelegation, isDelegatedAbsenceStatus } from "@/lib/attendance-delegation";
 import { AttendanceStatus, Prisma, ScheduleStatus, type WorkHourRecordStatus } from "@prisma/client";
 
@@ -542,6 +543,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         select: {
         id: true,
         employeeId: true,
+        lobId: true,
         date: true,
         startsAt: true,
         endsAt: true,
@@ -579,7 +581,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
             roleTitle: true,
             skill: true,
             user: { select: { email: true } },
-            lob: { select: { name: true } },
+            lob: { select: { id: true, name: true } },
             shift: { select: { name: true } },
             supervisor: { select: { fullName: true } }
           }
@@ -589,6 +591,11 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       })
       : [];
     markPhase("scheduleRowsMs");
+    const slotLobIds = Array.from(new Set(scheduleRows.flatMap((schedule) => schedule.lobId ? [schedule.lobId] : [])));
+    const slotLobs = slotLobIds.length
+      ? await prisma.lob.findMany({ where: { id: { in: slotLobIds } }, select: { id: true, name: true } })
+      : [];
+    const slotLobNames = new Map(slotLobs.map((lob) => [lob.id, lob.name]));
     const scheduleEmployeeIds = Array.from(new Set(scheduleRows.map((schedule) => schedule.employeeId)));
     const relatedWorkHourRecords = scheduleEmployeeIds.length
       ? await prisma.workHourRecord.findMany({
@@ -671,6 +678,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         return schedule
           ? {
             scheduleId: schedule.id,
+            ...resolveScheduleSlotLob(schedule.lobId, employee.lob, slotLobNames),
             startsAt: schedule.startsAt ?? "",
             endsAt: schedule.endsAt ?? "",
             shiftName: cleanShiftName(schedule.shift?.name ?? employee.shift?.name) || "Sem turno",
@@ -897,6 +905,15 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
     const requestedStatus = uiToScheduleStatus[input.status] ?? "ESCALADO";
     const status = classifiedScheduleStatusForInput(input, requestedStatus);
     const before = await prisma.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date } }, include: { shift: true } });
+    const requestedLobs = input.lob === undefined ? [] : await prisma.lob.findMany({
+      where: { name: { equals: input.lob.trim(), mode: "insensitive" } }, select: { id: true, name: true }, take: 2
+    });
+    let slotLobId: string;
+    try {
+      slotLobId = editedScheduleSlotLobId(input.lob, before?.lobId, employee.lobId, requestedLobs);
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
     const adminRetainsExistingWorkflowStatus = Boolean(
       before
       && before.status === requestedStatus
@@ -916,7 +933,7 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
           startsAt: needsTime(input.status) ? input.startsAt || shift?.startsAt || employee.shift.startsAt : null,
           endsAt: needsTime(input.status) ? input.endsAt || shift?.endsAt || employee.shift.endsAt : null,
           status,
-          lobId: employee.lobId,
+          lobId: slotLobId,
           supervisorId: employee.supervisorId,
           observation: input.observation
         },
@@ -928,7 +945,7 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
           endsAt: needsTime(input.status) ? input.endsAt || shift?.endsAt || employee.shift.endsAt : null,
           status,
           source: "manual-edit",
-          lobId: employee.lobId,
+          lobId: slotLobId,
           supervisorId: employee.supervisorId,
           observation: input.observation
         }

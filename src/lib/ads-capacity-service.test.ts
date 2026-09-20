@@ -43,3 +43,18 @@ test("read-only adapter preserves swaps, sales, nesting, overrides and excludes 
   assert.equal(result[0].end, Date.parse("2026-09-20T14:00:00Z"));
   assert.equal(db.findMany.mock.callCount(), 1);
 });
+
+test("ADS planning follows each slot's LOB, not the employee's current LOB", async (t) => {
+  const shift = { id: "morning", name: "Manhã", startsAt: "08:00", endsAt: "17:00" };
+  const employee = { id: "agent", fullName: "Agent", wbLogin: "wb_agent", roleTitle: "Agente", skill: "Material Queues", operationalStatus: "Ativo", lob: { id: "cec", name: "CEC" }, shift, supervisor: null };
+  const base = { employee, shift, date: new Date("2026-09-23"), startsAt: "08:00", endsAt: "17:00", status: "ESCALADO" };
+  mockPrismaDelegate(t, "schedule", { findMany: async () => [
+    { ...base, id: "ads-slot-cec-registry", lobId: "ads" },
+    { ...base, id: "cec-slot-ads-registry", lobId: "cec", employee: { ...employee, lob: { id: "ads", name: "ADS" } } },
+    { ...base, id: "unknown-slot", lobId: "unknown", employee: { ...employee, lob: { id: "ads", name: "ADS" } } }
+  ] });
+  const lobReads = mockPrismaDelegate(t, "lob", { findMany: async () => [{ id: "ads", name: "ADS" }, { id: "cec", name: "CEC" }] });
+  const result = await readAdsCapacitySchedules({ startDate: base.date, endDate: base.date });
+  assert.deepEqual(result.map((row) => row.id), ["ads-slot-cec-registry"]);
+  assert.equal(lobReads.findMany.mock.callCount(), 1, "one batched lookup, not one query per slot");
+});

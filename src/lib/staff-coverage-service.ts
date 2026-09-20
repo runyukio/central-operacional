@@ -7,6 +7,7 @@ import { createPermissionError } from "@/lib/api-errors";
 import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
+import { resolveScheduleSlotLob } from "@/lib/schedule-slot-lob";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { canAccessStaffCoverage, canAutoUpdateAdsRequirement, canExportStaffCoverage, canManageStaffCoverageRequirements } from "@/lib/permissions";
@@ -923,11 +924,10 @@ async function listCoverageSchedules(period: { startDate: Date; endDate: Date },
   const lobs = lobIds.length ? await prisma.lob.findMany({ where: { id: { in: lobIds } }, select: { id: true, name: true } }) : [];
   const lobNameById = new Map(lobs.map((lob) => [lob.id, lob.name]));
   return schedules
-    .map((schedule) => ({
-      ...schedule,
-      coverageLobId: schedule.lobId ?? schedule.employee.lob.id,
-      coverageLobName: schedule.lobId ? lobNameById.get(schedule.lobId) ?? schedule.employee.lob.name : schedule.employee.lob.name
-    }))
+    .map((schedule) => {
+      const slotLob = resolveScheduleSlotLob(schedule.lobId, schedule.employee.lob, lobNameById);
+      return { ...schedule, coverageLobId: slotLob.lobId, coverageLobName: slotLob.lob };
+    })
     .filter((schedule) => scheduleMatchesFilters(schedule, query));
 }
 
