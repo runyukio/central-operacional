@@ -8,7 +8,7 @@ import { EmptyState, MetricPill, PageHeader, Panel, StatCard, StatusBadge } from
 import { cn } from "@/lib/utils";
 import { FormInput, IMPORT_PREVIEW_ROW_LIMIT, ImportIssueSummary, apiJson, coverageTerminology, currentOperationalDateInput, dateInputFromUtc, downloadFile, parseDateInput } from './shared';
 const AdsCapacityPanel = dynamic(() => import("./ads-capacity-panel").then((module) => module.AdsCapacityPanel), { loading: () => <p className="p-4 text-muted">Carregando planejamento ADS…</p> });
-export function StaffCoveragePage() {
+export function StaffCoveragePage({ initialCanPlanAds = false }: { initialCanPlanAds?: boolean }) {
   const initialRange = currentStaffCoverageWeekRange();
   const staffInitialRange = currentMonthRemainingRange();
   const [view, setView] = useState<"AGENTS" | "STAFF" | "ADS">("AGENTS");
@@ -218,6 +218,7 @@ export function StaffCoveragePage() {
   };
 
   const summary = payload?.summary;
+  const canPlanAds = payload?.permissions.canPlanAds ?? initialCanPlanAds;
   const rows = payload?.data ?? [];
   const lobs = optionList(view === "STAFF" ? staffPayload?.filters.lobs : payload?.filters.lobs, filters.lob);
   const supervisors = optionList(view === "STAFF" ? staffPayload?.filters.staff : payload?.filters.supervisors, filters.supervisor);
@@ -235,7 +236,7 @@ export function StaffCoveragePage() {
       />
 
       <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-sm">
-        {(["AGENTS", "STAFF", ...(payload?.permissions.canPlanAds ? ["ADS" as const] : [])] as const).map((item) => (
+        {(["AGENTS", "STAFF", ...(canPlanAds ? ["ADS" as const] : [])] as const).map((item) => (
           <button
             key={item}
             onClick={() => changeRequiredView(item)}

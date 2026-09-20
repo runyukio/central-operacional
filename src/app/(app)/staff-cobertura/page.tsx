@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { StaffCoveragePage } from "@/components/modules/staff-coverage-page";
 import { authOptions } from "@/lib/auth-options";
+import { canAccessAdsCapacity } from "@/lib/ads-capacity-permissions";
 import { canAccessStaffCoverage } from "@/lib/permissions";
 
 export default async function StaffCoberturaRoute() {
@@ -10,5 +11,5 @@ export default async function StaffCoberturaRoute() {
   if (!canAccessStaffCoverage({ role: session?.user?.role, email: session?.user?.email, name: session?.user?.name, status: "ACTIVE" })) {
     redirect("/central-operacional");
   }
-  return <StaffCoveragePage />;
+  return <StaffCoveragePage initialCanPlanAds={canAccessAdsCapacity({ ...session?.user, status: "ACTIVE" })} />;
 }
