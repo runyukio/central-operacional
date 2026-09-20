@@ -7,6 +7,7 @@ import {
   type AdsExecutiveQueueRow
 } from "@/lib/ads-executive-report-core";
 
+import type { ExecutiveForecastPoint } from "./executive-forecast-core";
 const HOUR_MS = 60 * 60 * 1000;
 
 export type AdsBacklogPlanPoint = {
@@ -37,38 +38,25 @@ export type AdsBacklogHourlyReportSnapshot = {
 // extra calendar day at midnight, so the cloud plan rebuilds the timeline from
 // the first valid timestamp instead of trusting the later workbook dates.
 const PLAN_START = Date.UTC(2026, 7, 4, 20);
-const PLAN_VALUES: ReadonlyArray<readonly [plannedBacklog: number, forecastVolume: number]> = [
-  [3863, 561], [4849, 737], [6355, 997], [6641, 630], [6907, 620], [7053, 560],
-  [6973, 447], [7117, 559], [7025, 441], [6867, 408], [6707, 407], [6785, 526],
-  [6879, 536], [7133, 565], [7407, 575], [7699, 584], [8027, 602], [8463, 656],
-  [8341, 670], [8133, 627], [7837, 583], [7579, 602], [8205, 605], [8727, 553],
-  [9351, 556], [10367, 752], [11759, 940], [11575, 639], [11301, 594], [10919, 540],
-  [10391, 467], [10007, 539], [9413, 434], [8773, 411], [8131, 410], [7759, 545],
-  [7275, 538], [6847, 566], [6443, 578], [6055, 586], [5705, 605], [5481, 668],
-  [4001, 673], [4959, 629], [3273, 570], [1649, 601], [1607, 612], [1459, 559],
-  [1389, 550], [1663, 722], [2469, 988], [2303, 648], [2029, 594], [1763, 598],
-  [1373, 536], [803, 446], [419, 539], [0, 438]
-];
-
-export const ADS_BACKLOG_PLAN: AdsBacklogPlanPoint[] = PLAN_VALUES.map(([plannedBacklog, forecastVolume], index) => {
+const PLAN_BACKLOG_VALUES: readonly number[] = [3863,4849,6355,6641,6907,7053,6973,7117,7025,6867,6707,6785,6879,7133,7407,7699,8027,8463,8341,8133,7837,7579,8205,8727,9351,10367,11759,11575,11301,10919,10391,10007,9413,8773,8131,7759,7275,6847,6443,6055,5705,5481,4001,4959,3273,1649,1607,1459,1389,1663,2469,2303,2029,1763,1373,803,419,0];
+export const ADS_BACKLOG_PLAN = PLAN_BACKLOG_VALUES.map((plannedBacklog, index) => {
   const timestamp = PLAN_START + index * HOUR_MS;
   const date = new Date(timestamp);
-  return {
-    timestamp,
-    dateKey: date.toISOString().slice(0, 10),
-    hour: date.getUTCHours(),
-    plannedBacklog,
-    forecastVolume
-  };
+  return { timestamp, dateKey: date.toISOString().slice(0, 10), hour: date.getUTCHours(), plannedBacklog };
 });
-
 export function buildAdsBacklogHourlyReportSnapshot(input: {
   selectedCycle: string;
   queueRows: AdsExecutiveQueueRow[];
   agentRows: AdsExecutiveAgentRow[];
-  plan?: AdsBacklogPlanPoint[];
+  forecast: ExecutiveForecastPoint[];
+  plan?: Array<Omit<AdsBacklogPlanPoint, "forecastVolume">>;
 }): AdsBacklogHourlyReportSnapshot | null {
-  const plan = input.plan ?? ADS_BACKLOG_PLAN;
+  // Preserve historical backlog targets, never the workbook's forecast of incoming demand.
+  const forecast = new Map(input.forecast.map((p) => [`${p.dateKey}|${p.hour}`, p.input]));
+  const plan = (input.plan ?? ADS_BACKLOG_PLAN).flatMap((p) => {
+    const value = forecast.get(`${p.dateKey}|${p.hour}`);
+    return value === undefined ? [] : [{ ...p, forecastVolume: value }];
+  });
   const selected = parseAdsExecutiveCycle(input.selectedCycle);
   const currentHourTimestamp = selected.timestamp - selected.minute * 60_000;
   const planPoint = plan.find((point) => point.timestamp === currentHourTimestamp);

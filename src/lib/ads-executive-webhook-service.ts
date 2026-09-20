@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import {
+  ADS_BACKLOG_PLAN,
   buildAdsBacklogHourlyReportSnapshot,
   buildAdsBacklogKwaiTalkPayload
 } from "@/lib/ads-backlog-hourly-report-core";
@@ -21,7 +22,7 @@ import {
 } from "@/lib/ads-online-productivity-report-core";
 import { renderAdsOnlineProductivityReportPng } from "@/lib/ads-online-productivity-report-image";
 import { onlineProductivityPageDelivery, paginateOnlineProductivityReport } from "@/lib/online-productivity-report-pages";
-import { loadExecutiveForecast } from "@/lib/executive-forecast-service";
+import { loadExecutiveForecast, loadExecutiveForecastRange } from "@/lib/executive-forecast-service";
 import { prisma } from "@/lib/prisma";
 import { getRealtimeSnapshot } from "@/lib/realtime-service";
 import { uploadPublicObject } from "@/lib/supabase-storage";
@@ -242,8 +243,13 @@ export async function sendLatestAdsBacklogHourlyReport(): Promise<AdsExecutiveWe
     throw new Error("There is no valid Real Time snapshot for the ADS backlog hourly report.");
   }
 
+  const cycle = parseAdsExecutiveCycle(selectedCycle);
+  const inPlan = ADS_BACKLOG_PLAN.some((point) => point.dateKey === cycle.dateKey && point.hour === cycle.hour);
+  // Preserve the finite backlog plan and its future clearance window. Never reactivate an expired plan.
+  const forecast = inPlan ? (await loadExecutiveForecastRange("ADS", [...new Set(ADS_BACKLOG_PLAN.map((point) => point.dateKey))])).points : [];
   const report = buildAdsBacklogHourlyReportSnapshot({
     selectedCycle,
+    forecast,
     queueRows: mapQueueRows(data.queueView.rows),
     agentRows: mapAgentRows(data.agents.rows)
   });

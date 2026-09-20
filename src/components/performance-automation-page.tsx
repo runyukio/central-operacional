@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildForecastDisplay, type ForecastPayload } from "@/lib/volume-forecast-display";
 import dynamic from "next/dynamic";
 import {
   type LucideIcon,
@@ -265,6 +266,9 @@ type ForecastModel = {
   peak: { value: number; at: Date | null };
   adjustment: number | null;
   accuracy: number | null;
+  bias: number | null;
+  evaluatedHours: number;
+  warnings: string[];
   horizonHours: number;
   chartRows: ForecastChartRow[];
   tableRows: ForecastChartRow[];
@@ -273,6 +277,7 @@ type ForecastModel = {
 type ForecastChartRow = {
   key: string;
   label: string;
+  realComplete: boolean;
   real: number | null;
   forecast: number | null;
   lower: number | null;
@@ -281,10 +286,6 @@ type ForecastChartRow = {
   confidence: number | null;
 };
 
-type ForecastActual = { at: Date; timestamp: number; input: number };
-type ForecastModelName = "seasonalSlot" | "sameHourRecent" | "recentProfile" | "shortMomentum";
-type ForecastModelWeights = Record<ForecastModelName, number>;
-type ForecastCandidate = { name: ForecastModelName; value: number; samples: number; confidence: number };
 
 const granularityOptions: Array<{ value: PerformanceGranularity; label: string }> = [
   { value: "monthly", label: "Mensal" },
@@ -302,13 +303,6 @@ const forecastViewOptions: Array<{ value: ForecastView; label: string }> = [
 const forecastHorizons = [7, 14];
 const hourMs = 60 * 60 * 1000;
 const dayMs = 24 * hourMs;
-const forecastModelNames: ForecastModelName[] = ["seasonalSlot", "sameHourRecent", "recentProfile", "shortMomentum"];
-const defaultForecastModelWeights: ForecastModelWeights = {
-  seasonalSlot: 0.34,
-  sameHourRecent: 0.24,
-  recentProfile: 0.26,
-  shortMomentum: 0.16
-};
 
 export function PerformanceAutomationPage() {
   const [activeTab, setActiveTab] = useState<PerformanceTab>("queue");
@@ -320,7 +314,8 @@ export function PerformanceAutomationPage() {
   const [forecastView, setForecastView] = useState<ForecastView>("hour");
   const [forecastHorizon, setForecastHorizon] = useState(14);
   const [queuePayload, setQueuePayload] = useState<PerformanceProductionResponse | null>(null);
-  const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
+  const [forecastPayload, setForecastPayload] = useState<ForecastPayload | null>(null);
+  const forecastRequest = useRef<AbortController | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
   const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
   const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("monthly");
@@ -399,19 +394,26 @@ export function PerformanceAutomationPage() {
   }, [agentEndDate, agentLob, agentSearch, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView]);
 
   const loadForecast = useCallback(async () => {
+    forecastRequest.current?.abort();
+    const controller = new AbortController();
+    forecastRequest.current = controller;
     setLoadingForecast(true);
-    const params = new URLSearchParams({ granularity: "hourly" });
-    if (forecastLob) params.set("lob", forecastLob);
+    setForecastPayload(null);
+    const params = new URLSearchParams({ lob: forecastLob || "ALL", horizon: String(forecastHorizon), evaluation: "true" });
     try {
-      const data = await fetchPerformance(params);
+      const response = await fetch(`/api/performance/forecast?${params}`, { cache: "no-store", signal: controller.signal });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Forecast indisponível.");
+      if (controller.signal.aborted) return;
       setForecastPayload(data);
       setMessage("");
     } catch (error) {
+      if (controller.signal.aborted) return;
       setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar Forecast.");
     } finally {
-      setLoadingForecast(false);
+      if (!controller.signal.aborted) setLoadingForecast(false);
     }
-  }, [forecastLob]);
+  }, [forecastLob, forecastHorizon]);
 
   const loadQuality = useCallback(async (lobOverride?: QualityLob) => {
     setLoadingQuality(true);
@@ -486,6 +488,7 @@ export function PerformanceAutomationPage() {
 
   useEffect(() => {
     if (activeTab === "forecast") void loadForecast();
+    return () => forecastRequest.current?.abort();
   }, [activeTab, loadForecast, manualImportVersion]);
 
   useEffect(() => {
@@ -505,17 +508,15 @@ export function PerformanceAutomationPage() {
     if (activeTab === "supervisors") void loadSupervisors();
   }, [activeTab, loadSupervisors, manualImportVersion]);
 
-  const basePayload = queuePayload ?? forecastPayload;
-  const realtimeFallbackWarning = activeTab === "forecast"
-    ? forecastPayload?.realtimeFallbackWarning
-    : activeTab === "queue" && queueGranularity === "hourly"
+  const basePayload = queuePayload;
+  const realtimeFallbackWarning = activeTab === "queue" && queueGranularity === "hourly"
       ? queuePayload?.realtimeFallbackWarning
       : undefined;
   const lobs = useMemo(() => normalizeLobs(basePayload?.filters.lobs ?? []), [basePayload]);
   const queueRows = queuePayload?.trend ?? [];
   const baseQueueSummary = useMemo(() => summarizeQueueRows(basePayload?.queues ?? []), [basePayload]);
   const forecast = useMemo(
-    () => buildForecastModel(forecastPayload?.trend ?? [], forecastHorizon, forecastView),
+    () => buildForecastDisplay(forecastPayload, forecastHorizon, forecastView),
     [forecastPayload, forecastHorizon, forecastView]
   );
 
@@ -632,7 +633,7 @@ export function PerformanceAutomationPage() {
         <ForecastViewPanel
           loading={loadingForecast && !forecastPayload}
           model={forecast}
-          lobs={lobs}
+          lobs={forecastPayload?.lobs ?? ["ADS", "VIDEO", "COMMENTS"]}
           selectedLob={forecastLob}
           selectedView={forecastView}
           horizon={forecastHorizon}
@@ -1969,11 +1970,13 @@ function ForecastViewPanel({
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <ForecastCard title="Proximas 24h" value={formatOptionalNumber(model.next24h)} helper="enqueue previsto" icon={TrendingUp} tone="cyan" />
           <ForecastCard title={`${horizon} dias`} value={formatOptionalNumber(model.horizonTotal)} helper={`${model.horizonHours} horas base`} icon={BarChart3} tone="blue" />
-          <ForecastCard title="Ajuste recente" value={formatOptionalMultiplier(model.adjustment)} helper="24h, 72h e hora" icon={RefreshCw} tone="green" />
-          <ForecastCard title="Assertividade" value={formatOptionalPercent(model.accuracy)} helper="backtest 7 dias" icon={Gauge} tone="green" />
-          <ForecastCard title="Pico previsto" value={formatOptionalNumber(model.peak.value || null)} helper={formatForecastDate(model.peak.at)} icon={Clock} tone="orange" />
+          <ForecastCard title="Viés" value={formatOptionalPercent(model.bias)} helper="positivo: superestimação" icon={RefreshCw} tone="green" />
+          <ForecastCard title="Assertividade horária" value={formatOptionalPercent(model.accuracy)} helper={`1 − WAPE · ${model.evaluatedHours} horas testadas`} icon={Gauge} tone="green" />
+          <ForecastCard title="Pico previsto" value={formatOptionalNumber(model.peak.at ? model.peak.value : null)} helper={formatForecastDate(model.peak.at)} icon={Clock} tone="orange" />
         </div>
 
+        <p className="text-xs text-muted">Forecast único do sistema, com corte antes do início do dia. Teste reconstruído nos últimos 7 dias completos da base, sem usar o realizado do dia previsto. Não representa garantia de acerto.</p>
+        {model.warnings.map((warning) => <p key={warning} role="status" className="text-xs font-bold text-amber-700 dark:text-amber-300">{warning}</p>)}
         <div className="rounded-xl border border-border bg-white p-3">
           <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-sm font-black text-navy-950">Forecast {forecastViewOptions.find((option) => option.value === selectedView)?.label.toLowerCase()}</h3>
@@ -1989,25 +1992,19 @@ function ForecastViewPanel({
                 <th className="px-3 py-3">Periodo</th>
                 <th className="px-3 py-3 text-right">Enqueue real</th>
                 <th className="px-3 py-3 text-right">Forecast</th>
-                <th className="px-3 py-3 text-right">Min</th>
-                <th className="px-3 py-3 text-right">Max</th>
-                <th className="px-3 py-3 text-right">Ajuste</th>
-                <th className="px-3 py-3 text-right">Confianca</th>
+                <th className="px-3 py-3 text-right">Real − Forecast</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/70">
               {model.tableRows.map((row) => (
                 <tr key={row.key} className="hover:bg-blue-50/40">
                   <td className="px-3 py-2 font-black text-navy-950">{row.label}</td>
-                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(row.real)}</td>
+                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(row.real)}{row.real !== null && !row.realComplete ? <small className="ml-1 text-amber-700 dark:text-amber-300">parcial</small> : null}</td>
                   <td className="px-3 py-2 text-right font-bold text-navy-950">{formatOptionalNumber(row.forecast)}</td>
-                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(row.lower)}</td>
-                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(row.upper)}</td>
-                  <td className="px-3 py-2 text-right font-bold text-navy-950">{formatOptionalMultiplier(row.adjustment)}</td>
-                  <td className="px-3 py-2 text-right font-bold text-navy-950">{formatOptionalPercent(row.confidence)}</td>
+                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(!row.realComplete || row.real === null || row.forecast === null ? null : row.real - row.forecast)}</td>
                 </tr>
               ))}
-              {!model.tableRows.length ? <tr><td colSpan={7} className="px-3 py-8 text-center text-sm font-bold text-muted">Sem forecast valido para o filtro selecionado.</td></tr> : null}
+              {!model.tableRows.length ? <tr><td colSpan={4} className="px-3 py-8 text-center text-sm font-bold text-muted">Sem forecast valido para o filtro selecionado.</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -2027,8 +2024,6 @@ function ForecastChart({ rows }: { rows: ForecastChartRow[] }) {
         <RechartsTooltip content={<ForecastTooltip />} cursor={{ stroke: "#0f172a", strokeDasharray: "4 4" }} />
         <Line type="monotone" dataKey="real" name="Enqueue real" stroke="#2563EB" strokeWidth={3} dot={false} connectNulls={false} />
         <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#0284C7" strokeWidth={3} strokeDasharray="5 5" dot={false} connectNulls={false} />
-        <Line type="monotone" dataKey="upper" name="Max" stroke="#93C5FD" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls={false} />
-        <Line type="monotone" dataKey="lower" name="Min" stroke="#93C5FD" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -2041,9 +2036,8 @@ function ForecastTooltip({ active, payload }: { active?: boolean; payload?: Arra
     <div className="rounded-xl border border-border bg-white p-3 text-xs font-bold shadow-xl">
       <p className="mb-2 font-black text-navy-950">{row.label}</p>
       <div className="space-y-1 text-muted">
-        <div className="flex justify-between gap-4"><span>Enqueue real</span><span>{formatOptionalNumber(row.real)}</span></div>
+        <div className="flex justify-between gap-4"><span>Enqueue real{row.real !== null && !row.realComplete ? " (parcial)" : ""}</span><span>{formatOptionalNumber(row.real)}</span></div>
         <div className="flex justify-between gap-4"><span>Forecast</span><span>{formatOptionalNumber(row.forecast)}</span></div>
-        <div className="flex justify-between gap-4"><span>Faixa</span><span>{formatOptionalNumber(row.lower)} - {formatOptionalNumber(row.upper)}</span></div>
       </div>
     </div>
   );
@@ -2158,371 +2152,6 @@ async function fetchPerformanceSupervisors(params: URLSearchParams): Promise<Per
   if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar os dados dos supervisores.");
   if (body.mode !== "supervisors") throw new Error("Resposta de supervisores inesperada.");
   return body;
-}
-
-function buildForecastModel(rows: PerformanceTrendRow[], horizonDays: number, view: ForecastView): ForecastModel {
-  const actuals = rows
-    .map((row) => ({ at: parseTrendHour(row.key), input: Math.max(0, Number(row.input || 0)) }))
-    .filter((row): row is { at: Date; input: number } => Boolean(row.at))
-    .map((row) => ({ at: row.at, timestamp: row.at.getTime(), input: row.input }))
-    .sort((a, b) => a.timestamp - b.timestamp);
-
-  const positiveActuals = actuals.filter((row) => row.input > 0);
-  const lastReal = positiveActuals.at(-1) ?? actuals.at(-1) ?? null;
-  const horizonHours = horizonDays * 24;
-
-  if (!lastReal || !positiveActuals.length) {
-    return { hasForecast: false, lastRealAt: lastReal?.at ?? null, projectedUntil: null, next24h: null, horizonTotal: null, peak: { value: 0, at: null }, adjustment: null, accuracy: null, horizonHours, chartRows: aggregateForecastRows(actualsToHours(actuals.slice(-168)), view), tableRows: [] };
-  }
-
-  const modelWeights = calculateForecastModelWeights(positiveActuals, lastReal.at);
-  const future: ForecastHour[] = [];
-  for (let index = 1; index <= horizonHours; index++) {
-    const at = new Date(lastReal.timestamp + index * hourMs);
-    const prediction = predictHour(positiveActuals, at, lastReal.at, modelWeights);
-    future.push({
-      at,
-      timestamp: at.getTime(),
-      label: formatHourLabel(at),
-      real: null,
-      forecast: round(prediction.forecast),
-      lower: round(prediction.lower),
-      upper: round(prediction.upper),
-      adjustment: roundRatio(prediction.adjustment),
-      confidence: roundRatio(prediction.confidence),
-      samples: prediction.samples
-    });
-  }
-
-  const projectedRows = future.filter((row) => Number(row.forecast) > 0);
-  const next24h = sum(projectedRows.slice(0, 24).map((row) => row.forecast ?? 0));
-  const horizonTotal = sum(projectedRows.map((row) => row.forecast ?? 0));
-  const peak = projectedRows.reduce<{ value: number; at: Date | null }>((current, row) => {
-    const value = row.forecast ?? 0;
-    return value > current.value ? { value, at: row.at } : current;
-  }, { value: 0, at: null });
-  const adjustment = weightedAverageValue(projectedRows.map((row) => ({ value: row.adjustment ?? 1, weight: row.forecast ?? 1 })));
-  const accuracy = calculateBacktestAccuracy(positiveActuals, lastReal.at, modelWeights);
-  const historical = buildHistoricalForecastHours(actuals, modelWeights, 168);
-  const combinedRows = aggregateForecastRows([...historical, ...future], view);
-  const chartRows = combinedRows;
-  const tableRows = selectForecastTableRows(combinedRows, lastReal.at, view, horizonDays);
-
-  return {
-    hasForecast: projectedRows.length > 0,
-    lastRealAt: lastReal.at,
-    projectedUntil: future.at(-1)?.at ?? null,
-    next24h: projectedRows.length ? next24h : null,
-    horizonTotal: projectedRows.length ? horizonTotal : null,
-    peak,
-    adjustment: projectedRows.length ? adjustment : null,
-    accuracy,
-    horizonHours,
-    chartRows,
-    tableRows
-  };
-}
-
-function buildHistoricalForecastHours(actuals: ForecastActual[], modelWeights: ForecastModelWeights, limit: number): ForecastHour[] {
-  const firstIndex = Math.max(0, actuals.length - limit);
-  return actuals.slice(firstIndex).map((row, index) => {
-    const absoluteIndex = firstIndex + index;
-    const history = actuals.slice(0, absoluteIndex).filter((item) => item.input > 0);
-    if (history.length < 24) {
-      return {
-        at: row.at,
-        timestamp: row.timestamp,
-        label: formatHourLabel(row.at),
-        real: row.input,
-        forecast: null,
-        lower: null,
-        upper: null,
-        adjustment: null,
-        confidence: null,
-        samples: history.length
-      };
-    }
-
-    const referenceAt = new Date(row.timestamp - hourMs);
-    const prediction = predictHour(history, row.at, referenceAt, modelWeights);
-    return {
-      at: row.at,
-      timestamp: row.timestamp,
-      label: formatHourLabel(row.at),
-      real: row.input,
-      forecast: round(prediction.forecast),
-      lower: round(prediction.lower),
-      upper: round(prediction.upper),
-      adjustment: roundRatio(prediction.adjustment),
-      confidence: roundRatio(prediction.confidence),
-      samples: prediction.samples
-    };
-  });
-}
-
-function selectForecastTableRows(rows: ForecastChartRow[], lastRealAt: Date, view: ForecastView, horizonDays: number) {
-  const lastRealTime = lastRealAt.getTime();
-  const pivotIndex = rows.reduce((latestIndex, row, index) => {
-    const timestamp = new Date(row.key).getTime();
-    return Number.isFinite(timestamp) && timestamp <= lastRealTime ? index : latestIndex;
-  }, -1);
-  if (pivotIndex < 0) return rows.slice(0, view === "hour" ? 168 : 60);
-
-  const historicalCount = view === "hour" ? 24 : view === "day" ? 7 : 4;
-  const futureCount = view === "hour"
-    ? Math.min(horizonDays * 24, 168)
-    : view === "day"
-      ? horizonDays
-      : Math.max(1, Math.ceil(horizonDays / 7));
-  return rows.slice(Math.max(0, pivotIndex - historicalCount + 1), pivotIndex + futureCount + 1);
-}
-
-function predictHour(actuals: ForecastActual[], targetAt: Date, referenceAt: Date, modelWeights: ForecastModelWeights = defaultForecastModelWeights) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
-  const candidates = buildForecastCandidates(training, targetAt, referenceAt);
-  const fallbackRows = training.filter((row) => row.timestamp >= referenceTime - 14 * dayMs);
-  const fallback = weightedAverage(fallbackRows.length ? fallbackRows : training, referenceAt);
-  let total = 0;
-  let weight = 0;
-  let sampleCount = 0;
-  for (const candidate of candidates) {
-    const candidateWeight = (modelWeights[candidate.name] ?? 0) * clamp(candidate.confidence, 0.12, 1.25);
-    total += candidate.value * candidateWeight;
-    weight += candidateWeight;
-    sampleCount += candidate.samples;
-  }
-  const blended = weight > 0 ? total / weight : fallback;
-  const adjustment = calculateRecentAdjustment(training, targetAt, referenceAt);
-  const forecast = Math.max(0, blended * adjustment);
-  const dispersionRows = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 28 * dayMs);
-  const stats = statsFor(dispersionRows.length ? dispersionRows : candidates.map((candidate) => ({ input: candidate.value })));
-  const spread = stats.mean > 0 ? stats.stdDev / stats.mean : 0.45;
-  const band = clamp(0.18 + spread * 0.42 + Math.abs(adjustment - 1) * 0.16 + (sampleCount < 8 ? 0.16 : 0), 0.2, 1.05);
-  const confidence = clamp(0.92 - spread * 0.22 - Math.abs(adjustment - 1) * 0.16 + Math.min(sampleCount, 36) * 0.006, 0.34, 0.96);
-  return { forecast, lower: forecast * (1 - band), upper: forecast * (1 + band), adjustment, confidence, samples: sampleCount };
-}
-
-function buildForecastCandidates(actuals: ForecastActual[], targetAt: Date, referenceAt: Date): ForecastCandidate[] {
-  const referenceTime = referenceAt.getTime();
-  const targetDay = targetAt.getUTCDay();
-  const targetHour = targetAt.getUTCHours();
-  const candidates: ForecastCandidate[] = [];
-  const seasonalSlot = actuals.filter((row) => row.at.getUTCDay() === targetDay && row.at.getUTCHours() === targetHour);
-  const sameHourRecent = actuals.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 35 * dayMs);
-  const profileValue = recentHourlyProfileForecast(actuals, targetAt, referenceAt);
-  const momentumValue = shortMomentumForecast(actuals, targetAt, referenceAt);
-
-  if (seasonalSlot.length) {
-    candidates.push({
-      name: "seasonalSlot",
-      value: weightedAverage(seasonalSlot, referenceAt),
-      samples: seasonalSlot.length,
-      confidence: clamp(seasonalSlot.length / 8, 0.25, 1)
-    });
-  }
-  if (sameHourRecent.length) {
-    candidates.push({
-      name: "sameHourRecent",
-      value: weightedAverage(sameHourRecent, referenceAt, 10),
-      samples: sameHourRecent.length,
-      confidence: clamp(sameHourRecent.length / 10, 0.28, 1.05)
-    });
-  }
-  if (profileValue.value > 0) {
-    candidates.push({
-      name: "recentProfile",
-      value: profileValue.value,
-      samples: profileValue.samples,
-      confidence: clamp(profileValue.samples / 24, 0.25, 1.1)
-    });
-  }
-  if (momentumValue.value > 0) {
-    candidates.push({
-      name: "shortMomentum",
-      value: momentumValue.value,
-      samples: momentumValue.samples,
-      confidence: clamp(momentumValue.samples / 8, 0.25, 1)
-    });
-  }
-  return candidates.filter((candidate) => Number.isFinite(candidate.value) && candidate.value > 0);
-}
-
-function recentHourlyProfileForecast(actuals: ForecastActual[], targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const recent = actuals.filter((row) => row.timestamp >= referenceTime - 7 * dayMs);
-  const broader = actuals.filter((row) => row.timestamp >= referenceTime - 28 * dayMs);
-  const recentTotal = sum(recent.map((row) => row.input));
-  const broaderTotal = sum(broader.map((row) => row.input));
-  const recentDays = new Set(recent.map((row) => utcDayKey(row.at))).size;
-  const broaderDays = new Set(broader.map((row) => utcDayKey(row.at))).size;
-  const recentHourShare = recentTotal > 0 ? sum(recent.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / recentTotal : 0;
-  const broaderHourShare = broaderTotal > 0 ? sum(broader.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / broaderTotal : 0;
-  const share = recentHourShare && broaderHourShare ? recentHourShare * 0.72 + broaderHourShare * 0.28 : recentHourShare || broaderHourShare;
-  const recentDailyAverage = recentDays > 0 ? recentTotal / recentDays : 0;
-  const broaderDailyAverage = broaderDays > 0 ? broaderTotal / broaderDays : 0;
-  const dailyAverage = recentDailyAverage && broaderDailyAverage ? recentDailyAverage * 0.72 + broaderDailyAverage * 0.28 : recentDailyAverage || broaderDailyAverage;
-  return { value: dailyAverage * share, samples: recent.length || broader.length };
-}
-
-function shortMomentumForecast(actuals: ForecastActual[], targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const recentSameHour = actuals.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 10 * dayMs);
-  const last72h = actuals.filter((row) => row.timestamp >= referenceTime - 72 * hourMs);
-  const last24h = actuals.filter((row) => row.timestamp >= referenceTime - 24 * hourMs);
-  const sameHourValue = recentSameHour.length ? weightedAverage(recentSameHour, referenceAt, 5) : 0;
-  const hourlyMomentum = last72h.length ? sum(last72h.map((row) => row.input)) / Math.max(1, Math.min(72, Math.ceil((referenceTime - last72h[0].timestamp) / hourMs))) : 0;
-  const hotNow = last24h.length ? sum(last24h.map((row) => row.input)) / Math.max(1, Math.min(24, Math.ceil((referenceTime - last24h[0].timestamp) / hourMs))) : 0;
-  const value = sameHourValue > 0 ? sameHourValue * 0.62 + (hotNow || hourlyMomentum) * 0.38 : hotNow || hourlyMomentum;
-  return { value, samples: recentSameHour.length + last24h.length };
-}
-
-function calculateForecastModelWeights(actuals: ForecastActual[], referenceAt: Date): ForecastModelWeights {
-  const referenceTime = referenceAt.getTime();
-  const testRows = actuals.filter((row) => row.timestamp >= referenceTime - 7 * dayMs && row.input > 0).slice(-168);
-  const errors = new Map<ForecastModelName, { total: number; weight: number }>();
-  for (const row of testRows) {
-    const history = actuals.filter((item) => item.timestamp < row.timestamp && item.input > 0);
-    if (history.length < 48) continue;
-    const candidates = buildForecastCandidates(history, row.at, new Date(row.timestamp - hourMs));
-    const recencyWeight = Math.pow(0.5, Math.max(0, (referenceTime - row.timestamp) / dayMs) / 3);
-    for (const candidate of candidates) {
-      const current = errors.get(candidate.name) ?? { total: 0, weight: 0 };
-      const errorRatio = Math.abs(row.input - candidate.value) / Math.max(1, row.input);
-      const rowWeight = Math.max(1, row.input) * recencyWeight * clamp(candidate.confidence, 0.25, 1.15);
-      current.total += errorRatio * rowWeight;
-      current.weight += rowWeight;
-      errors.set(candidate.name, current);
-    }
-  }
-
-  const scores = forecastModelNames.reduce<Record<ForecastModelName, number>>((acc, name) => {
-    const error = errors.get(name);
-    const averageError = error && error.weight > 0 ? error.total / error.weight : null;
-    acc[name] = averageError === null ? defaultForecastModelWeights[name] : 1 / (averageError + 0.08);
-    return acc;
-  }, { ...defaultForecastModelWeights });
-  const scoreTotal = forecastModelNames.reduce((total, name) => total + scores[name], 0);
-  if (!scoreTotal) return defaultForecastModelWeights;
-  return forecastModelNames.reduce<ForecastModelWeights>((acc, name) => {
-    const learned = scores[name] / scoreTotal;
-    acc[name] = learned * 0.72 + defaultForecastModelWeights[name] * 0.28;
-    return acc;
-  }, { ...defaultForecastModelWeights });
-}
-
-function calculateRecentAdjustment(actuals: ForecastActual[], targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const ratios: Array<{ ratio: number; weight: number }> = [];
-  addWindowRatio(ratios, actuals, referenceTime, 24 * hourMs, 0.36, 3.4);
-  addWindowRatio(ratios, actuals, referenceTime, 72 * hourMs, 0.3, 3);
-  addWindowRatio(ratios, actuals, referenceTime, 7 * dayMs, 0.18, 2.6);
-  const sameHour = actuals.filter((row) => row.at.getUTCHours() === targetHour);
-  const recentSameHour = sum(sameHour.filter((row) => row.timestamp > referenceTime - 10 * dayMs).map((row) => row.input));
-  const previousSameHour = sum(sameHour.filter((row) => row.timestamp <= referenceTime - 10 * dayMs && row.timestamp > referenceTime - 50 * dayMs).map((row) => row.input)) / 4;
-  if (previousSameHour > 0) ratios.push({ ratio: clamp(recentSameHour / previousSameHour, 0.35, 3.4), weight: 0.24 });
-  if (!ratios.length) return 1;
-  const raw = ratios.reduce((total, item) => total + item.ratio * item.weight, 0) / ratios.reduce((total, item) => total + item.weight, 0);
-  return clamp(1 + (raw - 1) * 0.94, 0.45, 3.1);
-}
-
-function addWindowRatio(ratios: Array<{ ratio: number; weight: number }>, actuals: ForecastActual[], referenceTime: number, windowMs: number, weight: number, maxRatio: number) {
-  const recent = sum(actuals.filter((row) => row.timestamp > referenceTime - windowMs).map((row) => row.input));
-  const previous = sum(actuals.filter((row) => row.timestamp <= referenceTime - windowMs && row.timestamp > referenceTime - windowMs * 2).map((row) => row.input));
-  if (previous > 0) ratios.push({ ratio: clamp(recent / previous, 0.35, maxRatio), weight });
-}
-
-function calculateBacktestAccuracy(actuals: ForecastActual[], lastReal: Date, modelWeights: ForecastModelWeights) {
-  const testStart = lastReal.getTime() - 7 * dayMs;
-  const testRows = actuals.filter((row) => row.timestamp > testStart && row.input > 0);
-  let actualTotal = 0;
-  let errorTotal = 0;
-  let evaluated = 0;
-  for (const row of testRows) {
-    const history = actuals.filter((item) => item.timestamp < row.timestamp && item.input > 0);
-    if (history.length < 24) continue;
-    const predicted = predictHour(history, row.at, new Date(row.timestamp - hourMs), modelWeights).forecast;
-    actualTotal += row.input;
-    errorTotal += Math.abs(row.input - predicted);
-    evaluated += 1;
-  }
-  if (!evaluated || actualTotal <= 0) return null;
-  return clamp(1 - errorTotal / actualTotal, 0, 1);
-}
-
-function actualsToHours(actuals: Array<{ at: Date; timestamp: number; input: number }>): ForecastHour[] {
-  return actuals.map((row) => ({ at: row.at, timestamp: row.timestamp, label: formatHourLabel(row.at), real: row.input, forecast: null, lower: null, upper: null, adjustment: null, confidence: null, samples: 0 }));
-}
-
-function aggregateForecastRows(rows: ForecastHour[], view: ForecastView): ForecastChartRow[] {
-  if (view === "hour") {
-    return rows.map((row) => ({ key: row.at.toISOString(), label: row.label, real: row.real, forecast: row.forecast, lower: row.lower, upper: row.upper, adjustment: row.adjustment, confidence: row.confidence }));
-  }
-  const byKey = new Map<string, { at: Date; real: number; forecast: number; lower: number; upper: number; adjustmentWeight: number; adjustmentTotal: number; confidenceWeight: number; confidenceTotal: number }>();
-  for (const row of rows) {
-    const start = view === "day" ? startOfUtcDay(row.at) : startOfUtcWeek(row.at);
-    const key = start.toISOString();
-    const current = byKey.get(key) ?? { at: start, real: 0, forecast: 0, lower: 0, upper: 0, adjustmentWeight: 0, adjustmentTotal: 0, confidenceWeight: 0, confidenceTotal: 0 };
-    current.real += row.real ?? 0;
-    current.forecast += row.forecast ?? 0;
-    current.lower += row.lower ?? 0;
-    current.upper += row.upper ?? 0;
-    if (row.adjustment !== null && row.forecast !== null) {
-      current.adjustmentTotal += row.adjustment * Math.max(1, row.forecast);
-      current.adjustmentWeight += Math.max(1, row.forecast);
-    }
-    if (row.confidence !== null && row.forecast !== null) {
-      current.confidenceTotal += row.confidence * Math.max(1, row.forecast);
-      current.confidenceWeight += Math.max(1, row.forecast);
-    }
-    byKey.set(key, current);
-  }
-  return Array.from(byKey.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, row]) => ({
-    key,
-    label: view === "day" ? formatDayLabel(row.at) : formatWeekLabel(row.at),
-    real: row.real > 0 ? round(row.real) : null,
-    forecast: row.forecast > 0 ? round(row.forecast) : null,
-    lower: row.lower > 0 ? round(row.lower) : null,
-    upper: row.upper > 0 ? round(row.upper) : null,
-    adjustment: row.adjustmentWeight > 0 ? roundRatio(row.adjustmentTotal / row.adjustmentWeight) : null,
-    confidence: row.confidenceWeight > 0 ? roundRatio(row.confidenceTotal / row.confidenceWeight) : null
-  }));
-}
-
-function weightedAverage(rows: Array<{ timestamp: number; input: number }>, referenceAt: Date, halfLifeDays = 21) {
-  const reference = referenceAt.getTime();
-  let total = 0;
-  let weight = 0;
-  for (const row of rows) {
-    const ageDays = Math.max(0, (reference - row.timestamp) / dayMs);
-    const rowWeight = Math.pow(0.5, ageDays / halfLifeDays);
-    total += row.input * rowWeight;
-    weight += rowWeight;
-  }
-  return weight > 0 ? total / weight : 0;
-}
-
-function weightedAverageValue(rows: Array<{ value: number; weight: number }>) {
-  const totalWeight = rows.reduce((total, row) => total + row.weight, 0);
-  return totalWeight > 0 ? rows.reduce((total, row) => total + row.value * row.weight, 0) / totalWeight : null;
-}
-
-function statsFor(rows: Array<{ input: number }>) {
-  if (!rows.length) return { mean: 0, stdDev: 0 };
-  const mean = sum(rows.map((row) => row.input)) / rows.length;
-  const variance = rows.reduce((total, row) => total + (row.input - mean) ** 2, 0) / rows.length;
-  return { mean, stdDev: Math.sqrt(variance) };
-}
-
-function parseTrendHour(value: string) {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):/);
-  if (!match) return null;
-  const [, year, month, day, hour] = match;
-  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), 0, 0, 0));
 }
 
 function normalizeLobs(lobs: string[]) {

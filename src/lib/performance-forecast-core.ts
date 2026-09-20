@@ -22,7 +22,7 @@ export function predictForecastHour(
 ) {
   const referenceTime = referenceAt.getTime();
   const targetHour = targetAt.getUTCHours();
-  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
+  const training = actuals.filter((row) => row.timestamp <= referenceTime && Number.isFinite(row.input) && row.input >= 0);
   const candidates = buildForecastCandidates(training, targetAt, referenceAt);
   const fallbackRows = training.filter((row) => row.timestamp >= referenceTime - 14 * dayMs);
   const fallback = weightedAverage(fallbackRows.length ? fallbackRows : training, referenceAt);
@@ -48,10 +48,10 @@ export function predictForecastHour(
 
 export function calculateForecastModelWeights(actuals: ForecastActual[], referenceAt: Date): ForecastModelWeights {
   const referenceTime = referenceAt.getTime();
-  const testRows = actuals.filter((row) => row.timestamp >= referenceTime - 7 * dayMs && row.input > 0).slice(-168);
+  const testRows = actuals.filter((row) => row.timestamp >= referenceTime - 7 * dayMs && row.timestamp <= referenceTime && Number.isFinite(row.input) && row.input >= 0).slice(-168);
   const errors = new Map<ForecastModelName, { total: number; weight: number }>();
   for (const row of testRows) {
-    const history = actuals.filter((item) => item.timestamp < row.timestamp && item.input > 0);
+    const history = actuals.filter((item) => item.timestamp < row.timestamp && Number.isFinite(item.input) && item.input >= 0);
     if (history.length < 48) continue;
     const candidates = buildForecastCandidates(history, row.at, new Date(row.timestamp - hourMs));
     const recencyWeight = Math.pow(0.5, Math.max(0, (referenceTime - row.timestamp) / dayMs) / 3);
@@ -106,7 +106,7 @@ function buildForecastCandidates(actuals: ForecastActual[], targetAt: Date, refe
       confidence: clamp(sameHourRecent.length / 10, 0.28, 1.05)
     });
   }
-  if (profileValue.value > 0) {
+  if (profileValue.samples > 0) {
     candidates.push({
       name: "recentProfile",
       value: profileValue.value,
@@ -114,7 +114,7 @@ function buildForecastCandidates(actuals: ForecastActual[], targetAt: Date, refe
       confidence: clamp(profileValue.samples / 24, 0.25, 1.1)
     });
   }
-  if (momentumValue.value > 0) {
+  if (momentumValue.samples > 0) {
     candidates.push({
       name: "shortMomentum",
       value: momentumValue.value,
@@ -122,7 +122,7 @@ function buildForecastCandidates(actuals: ForecastActual[], targetAt: Date, refe
       confidence: clamp(momentumValue.samples / 8, 0.25, 1)
     });
   }
-  return candidates.filter((candidate) => Number.isFinite(candidate.value) && candidate.value > 0);
+  return candidates.filter((candidate) => Number.isFinite(candidate.value) && candidate.value >= 0);
 }
 
 function recentHourlyProfileForecast(actuals: ForecastActual[], targetAt: Date, referenceAt: Date) {
@@ -136,10 +136,10 @@ function recentHourlyProfileForecast(actuals: ForecastActual[], targetAt: Date, 
   const broaderDays = new Set(broader.map((row) => utcDayKey(row.at))).size;
   const recentHourShare = recentTotal > 0 ? sum(recent.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / recentTotal : 0;
   const broaderHourShare = broaderTotal > 0 ? sum(broader.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / broaderTotal : 0;
-  const share = recentHourShare && broaderHourShare ? recentHourShare * 0.72 + broaderHourShare * 0.28 : recentHourShare || broaderHourShare;
+  const share = recent.length && broader.length ? recentHourShare * 0.72 + broaderHourShare * 0.28 : recent.length ? recentHourShare : broaderHourShare;
   const recentDailyAverage = recentDays > 0 ? recentTotal / recentDays : 0;
   const broaderDailyAverage = broaderDays > 0 ? broaderTotal / broaderDays : 0;
-  const dailyAverage = recentDailyAverage && broaderDailyAverage ? recentDailyAverage * 0.72 + broaderDailyAverage * 0.28 : recentDailyAverage || broaderDailyAverage;
+  const dailyAverage = recentDays && broaderDays ? recentDailyAverage * 0.72 + broaderDailyAverage * 0.28 : recentDays ? recentDailyAverage : broaderDailyAverage;
   return { value: dailyAverage * share, samples: recent.length || broader.length };
 }
 
@@ -152,7 +152,8 @@ function shortMomentumForecast(actuals: ForecastActual[], targetAt: Date, refere
   const sameHourValue = recentSameHour.length ? weightedAverage(recentSameHour, referenceAt, 5) : 0;
   const hourlyMomentum = last72h.length ? sum(last72h.map((row) => row.input)) / Math.max(1, Math.min(72, Math.ceil((referenceTime - last72h[0].timestamp) / hourMs))) : 0;
   const hotNow = last24h.length ? sum(last24h.map((row) => row.input)) / Math.max(1, Math.min(24, Math.ceil((referenceTime - last24h[0].timestamp) / hourMs))) : 0;
-  const value = sameHourValue > 0 ? sameHourValue * 0.62 + (hotNow || hourlyMomentum) * 0.38 : hotNow || hourlyMomentum;
+  const momentum = last24h.length ? hotNow : hourlyMomentum;
+  const value = recentSameHour.length ? sameHourValue * 0.62 + momentum * 0.38 : momentum;
   return { value, samples: recentSameHour.length + last24h.length };
 }
 

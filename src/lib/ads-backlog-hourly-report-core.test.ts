@@ -15,21 +15,20 @@ test("rebuilds the workbook as 58 continuous hours ending on Aug 7 at 05:00", ()
     timestamp: Date.UTC(2026, 7, 4, 20),
     dateKey: "2026-08-04",
     hour: 20,
-    plannedBacklog: 3863,
-    forecastVolume: 561
+    plannedBacklog: 3863
   });
   assert.deepEqual(ADS_BACKLOG_PLAN.at(-1), {
     timestamp: Date.UTC(2026, 7, 7, 5),
     dateKey: "2026-08-07",
     hour: 5,
-    plannedBacklog: 0,
-    forecastVolume: 438
+    plannedBacklog: 0
   });
 });
 
 test("projects the next hour with ADS backlog, remaining forecast and Material-only hourly productivity", () => {
   const report = buildAdsBacklogHourlyReportSnapshot({
     selectedCycle: "2026-08-04 20:30",
+    forecast: ADS_BACKLOG_PLAN.map((p) => ({ dateKey: p.dateKey, hour: p.hour, input: 561 })),
     queueRows: [queueRow()],
     agentRows: [
       agent("Material agent", "wb_material", "Material Queues", 100, 220),
@@ -55,6 +54,7 @@ test("projects the next hour with ADS backlog, remaining forecast and Material-o
 test("builds an English Kim message with the next-hour projection", () => {
   const report = buildAdsBacklogHourlyReportSnapshot({
     selectedCycle: "2026-08-04 20:30",
+    forecast: ADS_BACKLOG_PLAN.map((p) => ({ dateKey: p.dateKey, hour: p.hour, input: 561 })),
     queueRows: [queueRow()],
     agentRows: [agent("Material agent", "wb_material", "Material Queues", 100, 220)]
   });
@@ -73,6 +73,12 @@ test("matches only the Material Queues skill", () => {
   assert.equal(isMaterialQueuesSkill("  MATERIAL QUÉUES "), true);
   assert.equal(isMaterialQueuesSkill("Nesting"), false);
   assert.equal(isMaterialQueuesSkill("Project"), false);
+});
+
+test("backlog consumes the canonical forecast and never falls back to the expired workbook volume", () => {
+  const base = { selectedCycle:"2026-08-04 20:30", queueRows:[queueRow()], agentRows:[agent("Agent","wb_test","Material Queues",100,220)] };
+  assert.equal(buildAdsBacklogHourlyReportSnapshot({...base,forecast:[]}),null);
+  assert.equal(buildAdsBacklogHourlyReportSnapshot({...base,forecast:[{dateKey:"2026-08-04",hour:20,input:123}]})?.forecastedVolume,123);
 });
 
 function queueRow(): AdsExecutiveQueueRow {

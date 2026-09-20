@@ -74,7 +74,7 @@ test("login reports rate limiting and transport errors while always ending loadi
   }
 });
 
-test("Performance displays a fallback warning only in hourly queue or forecast views", async () => {
+test("Performance retains Real Time fallback only for hourly actuals, never for forecast", async () => {
   const { source, declaration } = componentSource("PerformanceAutomationPage");
   const warningVariable = declaration.body!.statements
     .filter(ts.isVariableStatement)
@@ -86,7 +86,7 @@ test("Performance displays a fallback warning only in hourly queue or forecast v
     ["queue", "hourly", "queue incomplete"],
     ["queue", "daily", undefined],
     ["queue", "monthly", undefined],
-    ["forecast", "monthly", "forecast incomplete"],
+    ["forecast", "monthly", undefined],
     ["agents", "hourly", undefined],
     ["quality", "hourly", undefined],
     ["supervisors", "hourly", undefined]
@@ -156,7 +156,7 @@ test("profile removes only the Performance detail panel and keeps the other sect
 });
 
 test("Performance keeps successful imported data when its Real Time fallback carries a warning", async () => {
-  for (const name of ["loadQueue", "loadForecast"]) {
+  for (const name of ["loadQueue"]) {
     let shown: unknown, loading = false, message = "previous error";
     const payload = { trend: [{ submit: 42 }], realtimeFallbackWarning: "Only uncovered hours may be incomplete" };
     const showPayload = (value: unknown) => { shown = value; };
@@ -172,6 +172,24 @@ test("Performance keeps successful imported data when its Real Time fallback car
     assert.equal(loading, false);
     assert.equal(message, "");
   }
+});
+
+test("Forecast fetches only the canonical API, cancels stale filters and handles network failures", async () => {
+  const forecastRequest: {current: AbortController | null} = {current:null};
+  const requests: Array<ReturnType<typeof deferred<{ok:boolean;json:()=>Promise<unknown>}>>> = [];
+  let shown: unknown, loading=false, message="";
+  const load = runFunction(callback("PerformanceAutomationPage","loadForecast"), {
+    forecastRequest, forecastLob:"ADS", forecastHorizon:14,
+    setForecastPayload:(v:unknown)=>{shown=v;},setLoadingForecast:(v:boolean)=>{loading=v;},setMessage:(v:string)=>{message=v;},
+    fetch:(url:string)=>{assert.match(url,/^\/api\/performance\/forecast\?/);const r=deferred<{ok:boolean;json:()=>Promise<unknown>}>();requests.push(r);return r.promise;}
+  });
+  const first=load(),second=load();
+  requests[0].resolve({ok:true,json:async()=>({old:true})});await first;
+  assert.equal(shown,null);assert.equal(loading,true);
+  requests[1].resolve({ok:true,json:async()=>({series:[]})});await second;
+  assert.deepEqual(shown,{series:[]});assert.equal(loading,false);
+  const failing=load();requests[2].reject(new Error("Offline"));await failing;
+  assert.equal(message,"Offline");assert.equal(loading,false);
 });
 
 test("Billing ignores an old month's response and an old request's loading finalizer", async () => {

@@ -353,11 +353,7 @@ type ExecutiveReport = {
   topAgents: ExecutiveAgentPerformanceRow[];
   lowAgents: ExecutiveAgentPerformanceRow[];
 };
-type PerformanceForecastTrendRow = {
-  key: string;
-  label?: string;
-  input?: number | null;
-};
+type PerformanceForecastTrendRow = { dateKey: string; hour: number; input: number };
 type StaffCoverageExecutiveRow = {
   date: string;
   lob: string;
@@ -366,6 +362,7 @@ type StaffCoverageExecutiveRow = {
 };
 type ExecutiveSourceData = {
   lob: ExecutiveReportLob;
+  dateKey: string;
   performanceTrend: PerformanceForecastTrendRow[];
   requiredRows: StaffCoverageExecutiveRow[];
 };
@@ -656,7 +653,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
   const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
-  const currentExecutiveSourceData = executiveSourceData?.lob === executiveLob ? executiveSourceData : null;
+  const currentExecutiveSourceData = executiveSourceData?.lob === executiveLob && executiveSourceData.dateKey === parseRealtimeCycle(selectedCycleValue, "").dateKey ? executiveSourceData : null;
   const executiveReport = useMemo(
     () => buildExecutiveReport(
       queueView?.rows ?? [],
@@ -679,13 +676,9 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
 
     async function loadExecutiveSources() {
       setExecutiveSourceData(null);
-      const forecastStart = new Date(selected.date);
-      forecastStart.setDate(forecastStart.getDate() - 42);
       const performanceParams = new URLSearchParams({
         lob: executiveLob,
-        granularity: "hourly",
-        trendOnly: "true",
-        startDate: formatDateKey(forecastStart),
+        startDate: selected.dateKey,
         endDate: selected.dateKey
       });
       const requiredParams = new URLSearchParams({
@@ -696,11 +689,11 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       });
 
       const [performanceResult, requiredResult] = await Promise.allSettled([
-        fetch(`/api/performance?${performanceParams.toString()}`, { cache: "no-store", signal: controller.signal })
+        fetch(`/api/performance/forecast?${performanceParams.toString()}`, { cache: "no-store", signal: controller.signal })
           .then(async (response) => {
             const json = await response.json();
-            if (!response.ok || json?.mode !== "production") throw new Error(json?.message || json?.error || "Performance indisponível.");
-            return Array.isArray(json.trend) ? json.trend as PerformanceForecastTrendRow[] : [];
+            if (!response.ok) throw new Error(json?.message || json?.error || "Forecast indisponível.");
+            return (json.series?.find((series: { lob: string }) => series.lob === executiveLob)?.points ?? []) as PerformanceForecastTrendRow[];
           }),
         fetch(`/api/staff-coverage?${requiredParams.toString()}`, { cache: "no-store", signal: controller.signal })
           .then(async (response) => {
@@ -719,6 +712,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       }
       setExecutiveSourceData({
         lob: executiveLob,
+        dateKey: selected.dateKey,
         performanceTrend: performanceResult.status === "fulfilled" ? performanceResult.value : [],
         requiredRows: requiredResult.status === "fulfilled" ? requiredResult.value : []
       });
@@ -3923,31 +3917,14 @@ function buildExecutiveSelectedFromDate(date: Date) {
   };
 }
 
-function buildExecutiveInputForecastHistory(rows: QueueReportRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>, performanceTrend: PerformanceForecastTrendRow[] = []) {
-  const selectedHour = selected.date.getHours();
-  const performanceForecast = markExecutiveInputForecastLabels(buildExecutivePerformanceForecastHistory(performanceTrend, buckets, selected), selectedHour);
-  if (performanceForecast.some((row) => row.forecast !== null)) return performanceForecast;
-
-  const inputByDateHour = buildExecutiveQueueInputByDateHour(rows, selected);
-  const fallbackValues = buckets
-    .filter((bucket) => bucket.hour <= selectedHour && typeof bucket.input === "number")
-    .map((bucket) => bucket.input as number);
-  const fallbackForecast = fallbackValues.length ? averageNumber(fallbackValues) : null;
-
-  return markExecutiveInputForecastLabels(buckets.map((bucket) => {
-    const historicalValues = Array.from(inputByDateHour.entries())
-      .filter(([dateKey]) => dateKey !== selected.dateKey)
-      .map(([, byHour]) => byHour.get(bucket.hour))
-      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-    const forecast = historicalValues.length ? averageNumber(historicalValues) : fallbackForecast;
-    return {
-      label: bucket.label,
-      input: bucket.hour <= selectedHour ? bucket.input : null,
-      forecast: forecast === null ? null : Math.round(forecast)
-    };
-  }), selectedHour);
+function buildExecutiveInputForecastHistory(_rows: QueueReportRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>, points: PerformanceForecastTrendRow[] = []) {
+  const forecastByHour = new Map(points.filter((p) => p.dateKey === selected.dateKey).map((p) => [p.hour, p.input]));
+  return markExecutiveInputForecastLabels(buckets.map((bucket) => ({
+    label: bucket.label,
+    input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
+    forecast: forecastByHour.get(bucket.hour) ?? null
+  })), selected.date.getHours());
 }
-
 function markExecutiveInputForecastLabels(rows: Array<{ label: string; input: number | null; forecast: number | null; inputDataLabel?: string; forecastDataLabel?: string }>, currentHour: number) {
   const nextRows = rows.map((row) => ({ ...row }));
   const current = nextRows[currentHour];
@@ -4024,128 +4001,6 @@ function formatSignedPercent(delta: number, base: number | null) {
   if (!base || !Number.isFinite(base)) return delta >= 0 ? "+0%" : "-0%";
   const percent = Math.round((delta / base) * 100);
   return `${percent > 0 ? "+" : ""}${percent}%`;
-}
-
-function buildExecutivePerformanceForecastHistory(performanceTrend: PerformanceForecastTrendRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const actuals = performanceTrend
-    .map((row) => {
-      const at = parsePerformanceTrendHour(row.key);
-      const input = Math.max(0, Number(row.input ?? 0));
-      return at ? { at, timestamp: at.getTime(), input } : null;
-    })
-    .filter((row): row is { at: Date; timestamp: number; input: number } => Boolean(row))
-    .sort((a, b) => a.timestamp - b.timestamp);
-  const positiveActuals = actuals.filter((row) => row.input > 0);
-  const lastReal = positiveActuals.at(-1) ?? actuals.at(-1) ?? null;
-  if (!lastReal || !positiveActuals.length) {
-    return buckets.map((bucket) => ({
-      label: bucket.label,
-      input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
-      forecast: null
-    }));
-  }
-
-  // Keep the projection independent from the selected day's actual volume. The
-  // whole 24-hour curve is produced with data available before that day starts,
-  // so elapsed hours remain comparable instead of being replaced by actuals.
-  const selectedDayStart = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), 0, 0, 0, 0));
-  const referenceTime = Math.min(lastReal.timestamp, selectedDayStart.getTime() - 1);
-  const training = positiveActuals.filter((row) => row.timestamp <= referenceTime);
-  const referenceAt = training.at(-1)?.at ?? null;
-
-  return buckets.map((bucket) => {
-    const at = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), bucket.hour, 0, 0, 0));
-    const forecast = referenceAt ? executivePerformanceForecastValue(training, at, referenceAt) : 0;
-    return {
-      label: bucket.label,
-      input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
-      forecast: Number.isFinite(forecast) && forecast > 0 ? Math.round(forecast) : null
-    };
-  });
-}
-
-function executivePerformanceForecastValue(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const targetDay = targetAt.getUTCDay();
-  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
-  if (!training.length) return 0;
-  const recentSameHour = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp > referenceTime - 72 * EXECUTIVE_HOUR_MS);
-  const sevenDaySameHour = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp > referenceTime - 7 * EXECUTIVE_DAY_MS);
-  const olderSeasonalSlot = training.filter((row) => row.at.getUTCHours() === targetHour && row.at.getUTCDay() === targetDay && row.timestamp <= referenceTime - 7 * EXECUTIVE_DAY_MS);
-  const sevenDayProfile = executiveWeightedAverage(sevenDaySameHour, referenceAt, 3.5)
-    || executiveWeightedAverage(training.filter((row) => row.timestamp > referenceTime - 7 * EXECUTIVE_DAY_MS), referenceAt, 3.5);
-  const recentProfile = executiveWeightedAverage(recentSameHour, referenceAt, 1.5) || sevenDayProfile;
-  const olderSeasonalProfile = executiveWeightedAverage(olderSeasonalSlot, referenceAt, 21) || sevenDayProfile;
-  return Math.max(0, sevenDayProfile * 0.6 + recentProfile * 0.35 + olderSeasonalProfile * 0.05);
-}
-
-function executiveRecentHourlyProfileForecast(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const recent = actuals.filter((row) => row.timestamp >= referenceTime - 7 * EXECUTIVE_DAY_MS);
-  const broader = actuals.filter((row) => row.timestamp >= referenceTime - 28 * EXECUTIVE_DAY_MS);
-  const recentTotal = executiveSum(recent.map((row) => row.input));
-  const broaderTotal = executiveSum(broader.map((row) => row.input));
-  const recentDays = new Set(recent.map((row) => performanceDateKey(row.at))).size;
-  const broaderDays = new Set(broader.map((row) => performanceDateKey(row.at))).size;
-  const recentHourShare = recentTotal > 0 ? executiveSum(recent.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / recentTotal : 0;
-  const broaderHourShare = broaderTotal > 0 ? executiveSum(broader.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / broaderTotal : 0;
-  const share = recentHourShare && broaderHourShare ? recentHourShare * 0.72 + broaderHourShare * 0.28 : recentHourShare || broaderHourShare;
-  const recentDailyAverage = recentDays > 0 ? recentTotal / recentDays : 0;
-  const broaderDailyAverage = broaderDays > 0 ? broaderTotal / broaderDays : 0;
-  const dailyAverage = recentDailyAverage && broaderDailyAverage ? recentDailyAverage * 0.72 + broaderDailyAverage * 0.28 : recentDailyAverage || broaderDailyAverage;
-  return { value: dailyAverage * share, samples: recent.length || broader.length };
-}
-
-function executiveShortMomentumForecast(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const recentSameHour = actuals.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 10 * EXECUTIVE_DAY_MS);
-  const last72h = actuals.filter((row) => row.timestamp >= referenceTime - 72 * EXECUTIVE_HOUR_MS);
-  const last24h = actuals.filter((row) => row.timestamp >= referenceTime - 24 * EXECUTIVE_HOUR_MS);
-  const sameHourValue = recentSameHour.length ? executiveWeightedAverage(recentSameHour, referenceAt, 5) : 0;
-  const hourlyMomentum = last72h.length ? executiveSum(last72h.map((row) => row.input)) / Math.max(1, Math.min(72, Math.ceil((referenceTime - last72h[0].timestamp) / EXECUTIVE_HOUR_MS))) : 0;
-  const hotNow = last24h.length ? executiveSum(last24h.map((row) => row.input)) / Math.max(1, Math.min(24, Math.ceil((referenceTime - last24h[0].timestamp) / EXECUTIVE_HOUR_MS))) : 0;
-  return { value: sameHourValue > 0 ? sameHourValue * 0.62 + (hotNow || hourlyMomentum) * 0.38 : hotNow || hourlyMomentum, samples: recentSameHour.length + last24h.length };
-}
-
-function addExecutiveWindowRatio(ratios: Array<{ ratio: number; weight: number }>, actuals: Array<{ timestamp: number; input: number }>, referenceTime: number, windowMs: number, weight: number, maxRatio: number) {
-  const recent = executiveSum(actuals.filter((row) => row.timestamp > referenceTime - windowMs).map((row) => row.input));
-  const previous = executiveSum(actuals.filter((row) => row.timestamp <= referenceTime - windowMs && row.timestamp > referenceTime - windowMs * 2).map((row) => row.input));
-  if (previous > 0) ratios.push({ ratio: executiveClamp(recent / previous, 0.35, maxRatio), weight });
-}
-
-function executiveWeightedAverage(rows: Array<{ timestamp: number; input: number }>, referenceAt: Date, halfLifeDays = 21) {
-  const reference = referenceAt.getTime();
-  let total = 0;
-  let weight = 0;
-  for (const row of rows) {
-    const ageDays = Math.max(0, (reference - row.timestamp) / EXECUTIVE_DAY_MS);
-    const rowWeight = Math.pow(0.5, ageDays / halfLifeDays);
-    total += row.input * rowWeight;
-    weight += rowWeight;
-  }
-  return weight > 0 ? total / weight : 0;
-}
-
-function parsePerformanceTrendHour(value: string) {
-  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):/);
-  if (!match) return null;
-  const [, year, month, day, hour] = match;
-  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), 0, 0, 0));
-}
-
-function performanceDateKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-}
-
-function executiveClamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function executiveSum(values: number[]) {
-  return values.reduce((total, value) => total + value, 0);
 }
 
 function buildExecutiveRequiredByHour(rows: StaffCoverageExecutiveRow[], dateKey: string, lob: ExecutiveReportLob) {

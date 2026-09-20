@@ -49,7 +49,7 @@ export async function readAdsCapacityPlan(actor: Actor, query: AdsCapacityQuery,
     prisma.attendanceRecord.findMany({ where: { date: { gte: historyStart, lt: historyEnd } }, select: { scheduleId: true, employeeId: true, date: true, status: true } }),
     prisma.staffCoverage.findMany({ where: { date: { gte: new Date(capacityDay(period.startDate)), lte: new Date(capacityDay(period.endDate)) }, lob: { name: { equals: "ADS", mode: "insensitive" } } }, select: { date: true, requiredStaff: true, shift: { select: { name: true } } }, orderBy: [{ date: "asc" }, { shift: { name: "asc" } }] }),
     prisma.shift.findMany({ select: { id: true, name: true, startsAt: true, endsAt: true }, orderBy: { name: "asc" } }),
-    loadExecutiveForecastRange("ADS", forecastDates, today),
+    loadExecutiveForecastRange("ADS", forecastDates),
     // Resolve fallback against the whole registry, including inactive/duplicate aliases.
     prisma.employeeProfile.findMany({ select: { id: true, wbLogin: true } })
   ]);
@@ -89,7 +89,7 @@ export async function readAdsCapacityPlan(actor: Actor, query: AdsCapacityQuery,
     if (!registered.has(key)) registered.set(key, { date, shift, required: requirement.requiredStaff });
   }
   const plan = buildAdsCapacityPlan({ ...period, schedules, history, requirements: [...registered.values()], forecast: forecast.points, templates });
-  const warnings: string[] = [];
+  const warnings: string[] = [...forecast.warnings];
   if (!plan.reconciliation.forecastComplete) warnings.push("Forecast indisponível ou incompleto. A capacidade continua disponível, mas o saldo não pode ser calculado.");
   if (templates.length < 3) warnings.push("Existem turnos sem horário cadastrado. Revise a cobertura do período.");
   if (incompleteProductionRows) warnings.push("Há produção vinculada a importações não concluídas integralmente. Os turnos afetados não formam a média individual.");
