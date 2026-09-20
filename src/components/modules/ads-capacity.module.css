@@ -1,0 +1,79 @@
+.tableViewport { container-type: inline-size; min-width: 0; }
+.detailTable,
+.planningTable {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+
+.detailTable th,
+.detailTable td,
+.planningTable th,
+.planningTable td {
+  padding: 12px 10px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.detailTable th { font-size: 12px; font-weight: 700; }
+.detailTable td { border-top: 1px solid var(--border); }
+.detailTable small { margin-top: 3px; }
+.planningTable th { font-size: 11px; font-weight: 700; }
+.planningTable td { border-top: 1px solid var(--border); font-size: 13px; }
+.planningTable tr[data-new-day] td { border-top-width: 3px; }
+.planningTable tr[data-state="deficit"] { background: #fef2f266; }
+:global(.dark) .planningTable tr[data-state="deficit"] { background: #7f1d1d19; }
+.planningTable tr:hover { background: var(--space-tint); }
+.legendItem { display: inline-flex; align-items: center; gap: 6px; }
+.legendItem i { width: 9px; height: 9px; border-radius: 3px; }
+.balance { display: inline-flex; align-items: center; gap: 3px; font-weight: 700; }
+.balance[data-negative] { color: #b91c1c; }
+:global(.dark) .balance[data-negative] { color: #fca5a5; }
+.coverageTrack { height: 5px; margin-top: 8px; border-radius: 10px; background: var(--surface-nested, #e2e8f0); overflow: hidden; }
+.coverageTrack span { display: block; height: 100%; background: #14b8a6; border-radius: inherit; }
+.coverageTrack span[data-negative] { background: #ef4444; }
+
+/* Keep every field readable on narrow screens without a sideways table. */
+@container (max-width: 899px) {
+  .detailTable,
+  .detailTable tbody,
+  .planningTable,
+  .planningTable tbody { display: block; }
+  .detailTable colgroup,
+  .detailTable thead,
+  .planningTable colgroup,
+  .planningTable thead { display: none; }
+  .detailTable tr,
+  .planningTable tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+    padding: 16px;
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .detailTable td,
+  .planningTable td,
+  .planningTable tr[data-new-day] td { display: block; min-width: 0; border: 0; padding: 0; }
+  .detailTable td:first-child,
+  .detailTable td:last-child,
+  .planningTable td:first-child,
+  .planningTable td:last-child { grid-column: 1 / -1; }
+  .detailTable td::before,
+  .planningTable td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .detailTable .emptyRow { display: block; }
+  .detailTable .emptyRow td::before { display: none; }
+  .planningTable td:last-child { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .planningTable td:last-child::before { display: none; }
+}
