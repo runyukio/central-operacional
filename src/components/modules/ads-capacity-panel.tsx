@@ -36,6 +36,7 @@ export function AdsCapacityPanel() {
       <FormInput label="Data inicial" type="date" value={draft.startDate} onChange={(startDate) => setDraft((d) => ({ ...d, startDate }))} />
       <FormInput label="Data final" type="date" value={draft.endDate} onChange={(endDate) => setDraft((d) => ({ ...d, endDate }))} />
       <SpaceButtons label="Turno" value={draft.shift} onChange={(shift) => setDraft((d) => ({ ...d, shift }))} options={[{ id: "Todos", label: "Todos" }, ...CAPACITY_SHIFTS.map((id) => ({ id, label: id }))]} />
+      <SpaceButtons label="Exibir" value={dayView} onChange={setDayView} options={[{id:"all",label:"Todos os dias"},{id:"deficit",label:data && !read.loading && !read.error ? `Dias com déficit (${visible.deficitDates.size})` : "Dias com déficit"}]} />
       <button type="submit" className={`${styles.chip} !bg-blue-600 !text-white`} disabled={read.loading}><RefreshCw className={`h-4 w-4 ${read.loading ? "animate-spin" : ""}`} />Aplicar</button>
       <p className="basis-full text-xs text-muted">Até 31 dias · data de início do turno, incluindo a madrugada seguinte · somente consulta.</p>
     </form>
@@ -43,8 +44,7 @@ export function AdsCapacityPanel() {
     {!read.loading && !read.error && data ? <>
       <div className={styles.panel}>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-          <div><h3 className="font-extrabold">Forecast e capacidade por dia</h3><p className="mt-1 text-xs text-muted">Compare o volume previsto com a capacidade do cronograma.</p></div>
-          <SpaceButtons label="Exibir" value={dayView} onChange={setDayView} options={[{id:"all",label:"Todos os dias"},{id:"deficit",label:`Dias com déficit (${visible.deficitDates.size})`}]} />
+          <div><h3 className="font-extrabold">Forecast e capacidade por dia</h3><p className="mt-1 text-xs text-muted">{dayView === "deficit" ? "Totais diários dos turnos selecionados. A tabela abaixo mostra somente os turnos com déficit." : "Compare o volume previsto com a capacidade do cronograma."}</p></div>
         </div>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
           <div className="flex flex-wrap gap-4"><span className={capacityStyles.legendItem}><i style={{background:"#2563eb"}} />Forecast</span><span className={capacityStyles.legendItem}><i style={{background:"#14b8a6"}} />Capacidade</span><span className={capacityStyles.legendItem}><i style={{background:"#ef4444"}} />Capacidade abaixo do forecast</span></div>
@@ -64,7 +64,7 @@ export function AdsCapacityPanel() {
         </> : <div className="flex flex-col items-center gap-2 py-10 text-center"><CheckCircle2 className="h-8 w-8 text-muted" /><p className="font-bold">Nenhum dia com déficit identificado neste filtro.</p><p className="text-xs text-muted">Dias com dados incompletos não são considerados déficit confirmado.</p><button type="button" className={styles.chip} onClick={() => setDayView("all")}>Ver todos os dias</button></div>}
       </div>
       {visible.rows.length ? <div className={styles.panel}>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-extrabold">Planejamento por dia e turno</h3><p className="mt-1 text-xs text-muted">Abra “Ver parceiros” para entender a capacidade de cada pessoa.</p></div><span className="text-xs text-muted">{visible.rows.length} turno(s)</span></div>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-extrabold">Planejamento por dia e turno</h3><p className="mt-1 text-xs text-muted">Abra “Ver parceiros” para entender a capacidade de cada pessoa.</p></div><span className="text-xs text-muted" aria-live="polite">{visible.rows.length} turno(s){dayView === "deficit" ? " com déficit" : ""}</span></div>
         <div className={capacityStyles.tableViewport}><table className={`${styles.table} ${capacityStyles.planningTable}`} aria-label="Planejamento por dia e turno"><colgroup>{[13,7,17,11,11,12,10,19].map((width,index)=><col key={index} style={{width:`${width}%`}} />)}</colgroup><thead><tr>{["Dia / turno", "Pessoas", "Dimensionamento", "Forecast", "Capacidade", "Saldo submits", "Cobertura", "Situação"].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
           <tbody>{visible.rows.map((row,index) => <tr key={row.key} data-state={row.state} data-new-day={index > 0 && visible.rows[index-1].date !== row.date || undefined}>
             <td data-label="Dia / turno"><strong className="block">{dateLabel(row.date)}</strong><span className="mt-1 block text-muted">{row.shift}</span></td>
