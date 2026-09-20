@@ -34,7 +34,10 @@ export async function readAdsCapacityPlan(actor: Actor, query: AdsCapacityQuery,
   for (let day = addCapacityDays(period.startDate, -1); day <= addCapacityDays(period.endDate, 2); day = addCapacityDays(day, 1)) forecastDates.push(day);
   const [historySchedules, schedules, rawProduction, attendances, requirements, shifts, forecast, identities] = await Promise.all([
     readAdsCapacitySchedules({ startDate: historyStart, endDate: new Date(capacityDay(historyPeriod.endDate)) }),
-    readAdsCapacitySchedules({ startDate: new Date(capacityDay(addCapacityDays(period.startDate, -1))), endDate: new Date(capacityDay(addCapacityDays(period.endDate, 1))) }),
+    readAdsCapacitySchedules(
+      { startDate: new Date(capacityDay(addCapacityDays(period.startDate, -1))), endDate: new Date(capacityDay(addCapacityDays(period.endDate, 1))) },
+      { currentAdsOnly: true }
+    ),
     prisma.$queryRaw<Array<{ employeeId: string | null; wbLogin: string; at: Date; submit: number; valid: boolean; updatedAt: Date }>>(Prisma.sql`
       SELECT p."employeeId", p."wbLogin", p."bzTime" AS "at", SUM(p."submitNum")::double precision AS "submit",
         BOOL_AND(p."submitNum" >= 0 AND (p."importBatchId" IS NULL OR b."status" = 'SUCCESS')) AS "valid", MAX(p."updatedAt") AS "updatedAt"

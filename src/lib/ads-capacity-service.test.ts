@@ -44,17 +44,29 @@ test("read-only adapter preserves swaps, sales, nesting, overrides and excludes 
   assert.equal(db.findMany.mock.callCount(), 1);
 });
 
-test("ADS planning follows each slot's LOB, not the employee's current LOB", async (t) => {
+test("historical ADS work follows the slot while future ADS capacity also requires the current ADS roster", async (t) => {
   const shift = { id: "morning", name: "Manhã", startsAt: "08:00", endsAt: "17:00" };
   const employee = { id: "agent", fullName: "Agent", wbLogin: "wb_agent", roleTitle: "Agente", skill: "Material Queues", operationalStatus: "Ativo", lob: { id: "cec", name: "CEC" }, shift, supervisor: null };
   const base = { employee, shift, date: new Date("2026-09-23"), startsAt: "08:00", endsAt: "17:00", status: "ESCALADO" };
-  mockPrismaDelegate(t, "schedule", { findMany: async () => [
+  const rows = [
     { ...base, id: "ads-slot-cec-registry", lobId: "ads" },
     { ...base, id: "cec-slot-ads-registry", lobId: "cec", employee: { ...employee, lob: { id: "ads", name: "ADS" } } },
-    { ...base, id: "unknown-slot", lobId: "unknown", employee: { ...employee, lob: { id: "ads", name: "ADS" } } }
-  ] });
+    { ...base, id: "unknown-slot", lobId: "unknown", employee: { ...employee, lob: { id: "ads", name: "ADS" } } },
+    { ...base, id: "ads-slot-ads-registry", lobId: "ads", employee: { ...employee, lob: { id: "ads", name: "ADS" } } },
+    { ...base, id: "legacy-slot-ads-registry", lobId: null, employee: { ...employee, lob: { id: "ads", name: " ads " } } },
+    { ...base, id: "legacy-slot-cec-registry", lobId: null },
+    { ...base, id: "cec-slot-cec-registry", lobId: "cec" }
+  ];
+  const savedRows = structuredClone(rows);
+  const scheduleReads = mockPrismaDelegate(t, "schedule", { findMany: async () => rows });
   const lobReads = mockPrismaDelegate(t, "lob", { findMany: async () => [{ id: "ads", name: "ADS" }, { id: "cec", name: "CEC" }] });
-  const result = await readAdsCapacitySchedules({ startDate: base.date, endDate: base.date });
-  assert.deepEqual(result.map((row) => row.id), ["ads-slot-cec-registry"]);
-  assert.equal(lobReads.findMany.mock.callCount(), 1, "one batched lookup, not one query per slot");
+  const period = { startDate: base.date, endDate: base.date };
+  const historical = await readAdsCapacitySchedules(period);
+  assert.deepEqual(historical.map((row) => row.id), ["ads-slot-cec-registry", "ads-slot-ads-registry", "legacy-slot-ads-registry"]);
+  const future = await readAdsCapacitySchedules(period, { currentAdsOnly: true });
+  assert.deepEqual(future.map((row) => row.id), ["ads-slot-ads-registry", "legacy-slot-ads-registry"]);
+  assert.deepEqual(await readAdsCapacitySchedules(period), historical, "future filtering must not change historical reads");
+  assert.deepEqual(rows, savedRows, "neither registry nor saved slots are modified");
+  assert.equal(scheduleReads.findMany.mock.callCount(), 3, "one schedule query per read");
+  assert.equal(lobReads.findMany.mock.callCount(), 3, "one batched LOB lookup per read, not per slot");
 });

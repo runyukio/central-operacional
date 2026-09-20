@@ -884,9 +884,17 @@ async function listRequirements(period: { startDate: Date; endDate: Date }, quer
 }
 
 /** Internal read-only adapter; callers must authorize before exposing planning data. */
-export async function readAdsCapacitySchedules(period: { startDate: Date; endDate: Date }) {
+export async function readAdsCapacitySchedules(
+  period: { startDate: Date; endDate: Date },
+  options: { currentAdsOnly?: boolean } = {}
+) {
   const schedules = await listCoverageSchedules(period, { lob: "ADS", roleTitle: "Agente" });
-  return schedules.filter((schedule) => !["afastado", "afastada", "afastamento", "on leave"].includes(normalizeComparableJobTitle(schedule.employee.operationalStatus))).map((schedule) => ({
+  return schedules.filter((schedule) => {
+    // Historical ADS work stays tied to the slot. Future capacity additionally
+    // requires the current ADS roster, so transfers do not remain as missing ADS capacity.
+    if (options.currentAdsOnly && lookupKey(schedule.employee.lob.name) !== lookupKey("ADS")) return false;
+    return !["afastado", "afastada", "afastamento", "on leave"].includes(normalizeComparableJobTitle(schedule.employee.operationalStatus));
+  }).map((schedule) => ({
     id: schedule.id, date: formatDateKey(schedule.date), employeeId: schedule.employee.id,
     wbLogin: schedule.employee.wbLogin, name: schedule.employee.fullName, skill: schedule.employee.skill ?? "",
     shift: scheduleShiftCategory(schedule), status: schedule.status, statusLabel: statusLabels[schedule.status] ?? schedule.status,
