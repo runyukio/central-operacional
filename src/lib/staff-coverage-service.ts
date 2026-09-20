@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { AuditAction, CoverageRisk, Prisma, type ScheduleStatus } from "@prisma/client";
 
 import { buildAdsRequirementPlan } from "@/lib/ads-requirement-planning-service";
+import { canAccessAdsCapacity } from "@/lib/ads-capacity-permissions";
 import { createPermissionError } from "@/lib/api-errors";
 import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
@@ -250,6 +251,7 @@ export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery 
         skills: computed.filterOptions.skills
       },
       permissions: {
+        canPlanAds: canAccessAdsCapacity(permissionUser(user)),
         canImport: canManageStaffCoverageRequirements(permissionUser(user)),
         canExport: canExportStaffCoverage(permissionUser(user)),
         canAutoUpdate: canAutoUpdateAdsRequirement(permissionUser(user))
@@ -878,6 +880,17 @@ async function listRequirements(period: { startDate: Date; endDate: Date }, quer
     orderBy: [{ date: "asc" }, { lob: { name: "asc" } }, { shift: { name: "asc" } }]
   });
   return rows.map((row) => ({ ...row, observation: null }));
+}
+
+/** Internal read-only adapter; callers must authorize before exposing planning data. */
+export async function readAdsCapacitySchedules(period: { startDate: Date; endDate: Date }) {
+  const schedules = await listCoverageSchedules(period, { lob: "ADS", roleTitle: "Agente" });
+  return schedules.filter((schedule) => !["afastado", "afastada", "afastamento", "on leave"].includes(normalizeComparableJobTitle(schedule.employee.operationalStatus))).map((schedule) => ({
+    id: schedule.id, date: formatDateKey(schedule.date), employeeId: schedule.employee.id,
+    wbLogin: schedule.employee.wbLogin, name: schedule.employee.fullName, skill: schedule.employee.skill ?? "",
+    shift: scheduleShiftCategory(schedule), status: schedule.status, statusLabel: statusLabels[schedule.status] ?? schedule.status,
+    start: scheduleCoverageWindow(schedule)?.start ?? null, end: scheduleCoverageWindow(schedule)?.end ?? null
+  }));
 }
 
 async function listCoverageSchedules(period: { startDate: Date; endDate: Date }, query: StaffCoverageQuery) {

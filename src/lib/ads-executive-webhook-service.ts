@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { createHash, randomUUID } from "node:crypto";
-import { unstable_cache } from "next/cache";
+import { randomUUID } from "node:crypto";
 
 import {
   buildAdsBacklogHourlyReportSnapshot,
@@ -10,7 +9,6 @@ import {
   buildAdsExecutiveReportSnapshot,
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
-  type AdsExecutiveForecastPoint,
   type AdsExecutiveRequirement,
   type AdsExecutiveQueueRow,
   type ExecutiveReportLob
@@ -23,16 +21,12 @@ import {
 } from "@/lib/ads-online-productivity-report-core";
 import { renderAdsOnlineProductivityReportPng } from "@/lib/ads-online-productivity-report-image";
 import { onlineProductivityPageDelivery, paginateOnlineProductivityReport } from "@/lib/online-productivity-report-pages";
-import { calculateForecastModelWeights, predictForecastHour, type ForecastActual } from "@/lib/performance-forecast-core";
+import { loadExecutiveForecast } from "@/lib/executive-forecast-service";
 import { prisma } from "@/lib/prisma";
-import { QUEUE_METADATA } from "@/lib/queue-metadata";
-import { QUEUE_REPORT_METADATA } from "@/lib/queue-report-metadata";
 import { getRealtimeSnapshot } from "@/lib/realtime-service";
 import { uploadPublicObject } from "@/lib/supabase-storage";
 import type { Actor } from "@/lib/mock-db";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const FORECAST_HISTORY_DAYS = 120;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 const automationActor = {
@@ -434,60 +428,6 @@ function mapAgentRows(rows: Array<Record<string, unknown>>): AdsExecutiveAgentRo
   }));
 }
 
-async function loadExecutiveForecast(lob: ExecutiveReportLob, dateKey: string): Promise<AdsExecutiveForecastPoint[]> {
-  const queueIds = queueIdsForLob(lob);
-  if (!queueIds.length) return [];
-  const dayStart = utcDate(dateKey);
-  const historyStart = new Date(dayStart.getTime() - FORECAST_HISTORY_DAYS * DAY_MS);
-  // Cache only the operational aggregate, never actor-specific data. Any import,
-  // correction or deletion in the source window changes this version immediately.
-  const [source] = await prisma.$queryRaw<Array<{ rows: string; updated: string | null; input: string }>>(Prisma.sql`
-    SELECT COUNT(*)::text AS "rows", MAX("updatedAt")::text AS "updated",
-      COALESCE(SUM("inputCount"), 0)::text AS "input"
-    FROM "PerformanceQueueVolumeRecord"
-    WHERE "queueId" IN (${Prisma.join(queueIds)}) AND "bzTime" >= ${historyStart} AND "bzTime" < ${dayStart}
-  `);
-  const version = createHash("sha256").update(JSON.stringify({ source, queueIds: [...queueIds].sort() })).digest("hex");
-  return unstable_cache(
-    () => calculateExecutiveForecast(dateKey, queueIds, historyStart, dayStart),
-    // Bump the model version when changing performance-forecast-core formulas.
-    ["executive-hourly-forecast-v1", lob, dateKey, version],
-    { revalidate: 24 * 60 * 60 }
-  )();
-}
-
-async function calculateExecutiveForecast(dateKey: string, queueIds: string[], historyStart: Date, dayStart: Date): Promise<AdsExecutiveForecastPoint[]> {
-  const rows = await prisma.$queryRaw<Array<{ at: Date; input: number }>>(Prisma.sql`
-    SELECT
-      date_trunc('hour', "bzTime") AS "at",
-      COALESCE(SUM("inputCount"), 0)::double precision AS "input"
-    FROM "PerformanceQueueVolumeRecord"
-    WHERE "queueId" IN (${Prisma.join(queueIds)})
-      AND "bzTime" >= ${historyStart}
-      AND "bzTime" < ${dayStart}
-    GROUP BY date_trunc('hour', "bzTime")
-    ORDER BY date_trunc('hour', "bzTime") ASC
-  `);
-  const actuals = rows
-    .map<ForecastActual>((row) => {
-      const at = startOfUtcHour(row.at);
-      return { at, timestamp: at.getTime(), input: Math.max(0, Number(row.input ?? 0)) };
-    })
-    .filter((row) => row.input > 0)
-    .sort((a, b) => a.timestamp - b.timestamp);
-  const reference = actuals.at(-1);
-  if (!reference || actuals.length < 48) return [];
-  const weights = calculateForecastModelWeights(actuals, reference.at);
-  return Array.from({ length: 24 }, (_, hour) => {
-    const target = new Date(dayStart.getTime() + hour * 60 * 60 * 1000);
-    return {
-      dateKey,
-      hour,
-      input: Math.max(0, Math.round(predictForecastHour(actuals, target, reference.at, weights).forecast))
-    };
-  });
-}
-
 async function loadAdsRequirements(dateKey: string) {
   const date = utcDate(dateKey);
   const [rows, shiftFallback] = await Promise.all([
@@ -671,13 +611,6 @@ async function postAdsBacklogWebhook(input: {
   }
 }
 
-function queueIdsForLob(lob: ExecutiveReportLob) {
-  return Array.from(new Set([
-    ...Object.entries(QUEUE_METADATA).filter(([, metadata]) => metadata.lob === lob).map(([queueId]) => queueId),
-    ...Object.entries(QUEUE_REPORT_METADATA).filter(([, metadata]) => metadata.lob === lob).map(([queueId]) => queueId)
-  ]));
-}
-
 function isWebhookEnabled(config: ExecutiveWebhookConfig) {
   return ["1", "true", "yes", "on"].includes(String(process.env[`${config.envPrefix}_ENABLED`] ?? "").trim().toLowerCase());
 }
@@ -811,10 +744,6 @@ function normalizeShift(value: string) {
 
 function utcDate(dateKey: string) {
   return new Date(`${dateKey}T00:00:00.000Z`);
-}
-
-function startOfUtcHour(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours()));
 }
 
 function safeFilePart(value: string) {

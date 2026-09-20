@@ -1,0 +1,32 @@
+# ADS capacity planning
+
+Read-only tab in Necessidade. Requires both existing `STAFF_COVERAGE_ADS` and `PERFORMANCE` capabilities. Both GET endpoints validate the current database user before reading any planning data. No table, migration, operational update, or background job is added.
+
+## Definitions
+
+- Reference: last two complete Monday–Sunday weeks in America/Sao_Paulo. Default horizon: today plus 13 days; inclusive maximum 31 days.
+- Individual rate: total ADS hourly submits / total scheduled hours in valid completed shifts. At least three valid shifts are required. A weighted principal-skill donor pool (only partners meeting that minimum) is the fallback.
+- To avoid treating missing data as zero, a historical shift needs explicit valid hourly coverage throughout its scheduled interval, plus registered presence or production. Full absences are excluded. A partial-hour boundary cannot safely partition an hourly submit bucket, so that historical shift is excluded and reported. Future partial-hour schedules are supported.
+- Null productivity and explicit observed zero are distinct. No extra break, ABS, backlog, or legacy requirement adjustment is applied.
+- Scheduled coverage reuses Necessidade's status, agent, PROJECT and nesting eligibility, excludes leave, honors effective schedule times, and assigns overlapping minutes to only one schedule per partner. Night shifts remain on their start date.
+- Imports encode local Brasiltime as UTC wall-clock fields. Never subtract the timezone offset a second time.
+
+## Forecast and allocation
+
+`executive-forecast-service.ts` is shared with the existing executive report. Training range, queue mappings, positive-hour filter, 48-hour minimum, weights and rounding are unchanged. Planning fixes the cutoff at today's operational midnight for every future prediction; forecasts never become training observations.
+
+Allocate each forecast interval by scheduled person-hours across the entire operation, before filtering shifts. Attribute shares to each shift's start date. Read adjacent schedules to account for overlapping boundary cohorts. Demand without scheduled people remains in explicit "Sem cobertura" rows.
+
+`reconciliation.sourceForecast = sum(all operational rows' forecast) + reconciliation.outsideForecast`; the outside share belongs to adjacent start-date cohorts and is not silently lost. The operational window covers the canonical shift windows and any wider actual scheduled windows. Missing forecast hours invalidate forecast-based comparisons rather than becoming zero.
+
+Calculated need = ceil(assigned forecast / average capacity per scheduled unique person). Without people or complete productivity references, need is unavailable. Registered requirement is independent and distinguishes no row from a registered zero.
+
+## Delivery contract
+
+- `/api/staff-coverage/ads/planning`: aggregate cards, chart, day/shift rows, source dates, coverage warnings and a content version; no partner details.
+- `/api/staff-coverage/ads/planning/details`: same authorization and filters; checks content version and selected row, then returns partner details. Changed snapshots return 409.
+- Requests are no-store, loaded on tab activation/apply, and cancelled on filter/navigation changes. No polling.
+
+## Regression tests
+
+Run `npx tsx --test src/lib/ads-capacity-*.test.ts src/lib/executive-forecast-core.test.ts src/lib/ads-executive-webhook-service.test.ts src/lib/coverage-lob-rules.test.ts`, then `npm run typecheck` and `npm run build`.

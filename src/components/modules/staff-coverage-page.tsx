@@ -1,15 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { AlertTriangle, CalendarDays, ChevronRight, Clock, ClipboardList, Download, Headphones, RefreshCw, ShieldCheck, Target, Upload, UserCheck, UsersRound, XCircle } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
 import { EmptyState, MetricPill, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import { FormInput, IMPORT_PREVIEW_ROW_LIMIT, ImportIssueSummary, apiJson, coverageTerminology, currentOperationalDateInput, dateInputFromUtc, downloadFile, parseDateInput } from './shared';
+const AdsCapacityPanel = dynamic(() => import("./ads-capacity-panel").then((module) => module.AdsCapacityPanel), { loading: () => <p className="p-4 text-muted">Carregando planejamento ADS…</p> });
 export function StaffCoveragePage() {
   const initialRange = currentStaffCoverageWeekRange();
   const staffInitialRange = currentMonthRemainingRange();
-  const [view, setView] = useState<"AGENTS" | "STAFF">("AGENTS");
+  const [view, setView] = useState<"AGENTS" | "STAFF" | "ADS">("AGENTS");
   const [payload, setPayload] = useState<StaffCoverageResponse | null>(null);
   const [staffPayload, setStaffPayload] = useState<RequiredStaffCoverageResponse | null>(null);
   const [filters, setFilters] = useState({
@@ -97,7 +99,7 @@ export function StaffCoveragePage() {
     setPage(1);
   };
 
-  const changeRequiredView = (nextView: "AGENTS" | "STAFF") => {
+  const changeRequiredView = (nextView: "AGENTS" | "STAFF" | "ADS") => {
     setView(nextView);
     if (nextView === "STAFF" && !dateFilterTouched) {
       setFilters((current) => ({ ...current, startDate: staffInitialRange.startDate, endDate: staffInitialRange.endDate }));
@@ -233,7 +235,7 @@ export function StaffCoveragePage() {
       />
 
       <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-sm">
-        {(["AGENTS", "STAFF"] as const).map((item) => (
+        {(["AGENTS", "STAFF", ...(payload?.permissions.canPlanAds ? ["ADS" as const] : [])] as const).map((item) => (
           <button
             key={item}
             onClick={() => changeRequiredView(item)}
@@ -247,6 +249,7 @@ export function StaffCoveragePage() {
         ))}
       </div>
 
+      {view === "ADS" ? <AdsCapacityPanel /> : <>
       <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
         <div className={cn("grid gap-2 md:grid-cols-3", view === "AGENTS" ? "xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]" : "xl:grid-cols-[140px_140px_140px_140px_190px_170px_1fr]")}>
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
@@ -535,6 +538,7 @@ export function StaffCoveragePage() {
           </div>
         </div>
       ) : null}
+      </>}
     </div>
   );
 }
@@ -594,7 +598,7 @@ type StaffCoverageResponse = {
   matrix: Array<{ date: string; label: string; Manhã: number; Tarde: number; Noite: number; total: number }>;
   pagination: { page: number; limit: number; total: number; totalPages: number };
   filters: { lobs: string[]; shifts: string[]; supervisors: string[]; skills: string[] };
-  permissions: { canImport: boolean; canExport: boolean; canAutoUpdate: boolean };
+  permissions: { canImport: boolean; canExport: boolean; canAutoUpdate: boolean; canPlanAds: boolean };
 };
 
 
