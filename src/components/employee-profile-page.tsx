@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  Cake,
   ClipboardList,
   Clock,
   HeartPulse,
@@ -45,6 +46,7 @@ type ProfilePayload = {
       userStatus: string;
       systemRole: string;
       admissionDate: string;
+      birthday: string;
       terminationDate: string;
       terminationType: string;
       terminationReason: string;
@@ -240,6 +242,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
                 <span className="inline-flex items-center gap-1"><Mail className="h-3.5 w-3.5" /> {data.employee.email || "Sem e-mail"}</span>
                 <span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {data.employee.lob}</span>
                 <span>Supervisor: {data.employee.supervisor}</span>
+                <span className="inline-flex items-center gap-1"><Cake className="h-3.5 w-3.5" aria-hidden="true" /> Aniversário: {data.employee.birthday || "Não informado"}</span>
               </div>
             </div>
           </div>

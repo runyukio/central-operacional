@@ -121,7 +121,11 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       viewerEmployeeId: viewer.employeeProfile?.id,
       targetEmployeeId: employee.id
     });
-    const [schedule, workHours, requests, equipments, mood, performance, billing, anonymousFeedbacks] = await Promise.all([
+    const [birthday, schedule, workHours, requests, equipments, mood, performance, billing, anonymousFeedbacks] = await Promise.all([
+      profileSection("birthday", employee.id, prisma.employeeSensitiveData.findUnique({
+        where: { employeeId: employee.id },
+        select: { birthDate: true }
+      }).then((record) => formatProfileBirthday(record?.birthDate))),
       profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
       profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
       profileSection("requests", employee.id, buildRequestsSummary(employee)),
@@ -144,7 +148,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
           canViewDiversityData,
           canViewSensitiveData: canViewDiversityData
         },
-        employee: mapProfileEmployee(employee, canViewDiversityData),
+        employee: mapProfileEmployee(employee, canViewDiversityData, birthday),
         schedule,
         workHours,
         performance,
@@ -160,7 +164,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       viewerRole,
       isOwnProfile,
       employeeId: employee.id,
-      sections: 6 + Number(Boolean(billing)) + Number(Boolean(anonymousFeedbacks))
+      sections: 7 + Number(Boolean(billing)) + Number(Boolean(anonymousFeedbacks))
     });
     return response;
   } catch (error) {
@@ -194,7 +198,7 @@ function canViewThirdPartyProfiles(viewer: ProfileUser) {
   return canAccessEmployeeMap({ role: viewer.role.name, status: viewer.status });
 }
 
-function mapProfileEmployee(employee: ProfileEmployee, canViewDiversityData: boolean) {
+function mapProfileEmployee(employee: ProfileEmployee, canViewDiversityData: boolean, birthday: string) {
   return {
     id: employee.id,
     name: employee.fullName,
@@ -217,6 +221,7 @@ function mapProfileEmployee(employee: ProfileEmployee, canViewDiversityData: boo
     userStatus: displayUserStatus(employee.user?.status),
     systemRole: employee.user?.role?.name ?? "",
     admissionDate: formatDate(employee.admissionDate),
+    birthday,
     admissionDateIso: formatDateInput(employee.admissionDate),
     terminationDate: employee.terminationDate ? formatDate(employee.terminationDate) : "",
     terminationDateIso: employee.terminationDate ? formatDateInput(employee.terminationDate) : "",
@@ -530,6 +535,12 @@ function startOfTodayUtc() {
 
 function formatDate(date: Date) {
   return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(date);
+}
+
+/** Birthday is a calendar date: share day/month only, never the birth year. */
+export function formatProfileBirthday(date?: Date | null) {
+  if (!date || !Number.isFinite(date.getTime())) return "";
+  return `${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function formatDateTime(date: Date) {
