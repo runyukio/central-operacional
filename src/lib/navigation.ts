@@ -4,8 +4,6 @@ import { canAccessMeuEspaco, meuEspacoRoles } from "@/lib/meu-espaco-access";
 import {
   canAccessOwnPerformance,
   canAccessPerformance,
-  canAccessCampaignAgent,
-  canViewCampaignStaff,
   canAccessRealTimeQueues,
   canAccessStaffCoverage,
   canResetEmployeePassword,
@@ -13,6 +11,7 @@ import {
   type PermissionUser
 } from "@/lib/permissions";
 import { canAccessOwnRealtimeHours, canAccessRealtimeHoursCapture } from "@/lib/realtime-hours-permissions";
+import { isRetiredFeaturePath } from "@/lib/retired-features";
 
 export type NavItem = {
   label: string;
@@ -20,12 +19,6 @@ export type NavItem = {
   icon: string;
   roles: AppRole[];
 };
-
-const campaignRoles = Array.from(new Set([
-  ...rolesWithCapability("CAMPAIGN_AGENT"),
-  ...rolesWithCapability("CAMPAIGN_STAFF"),
-  "SUPERVISOR" as const, "GESTOR" as const
-]));
 
 export type NavSection = {
   label: string;
@@ -48,12 +41,6 @@ export const navSections: NavSection[] = [
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") },
       { label: "Meus Dados", href: "/performance/meus-dados", icon: "ChartNoAxesCombined", roles: personalRoles }
-    ]
-  },
-  {
-    label: "Campanha",
-    items: [
-      { label: "Rifa", href: "/campanha", icon: "Gift", roles: campaignRoles }
     ]
   },
   {
@@ -108,9 +95,6 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
     if (item.href === "/performance") return canAccessPerformance(permissionUser);
     if (item.href === "/performance/meus-dados") return canAccessOwnPerformance(permissionUser);
-    if (item.href === "/campanha") return canAccessCampaignAgent(permissionUser) || canViewCampaignStaff(permissionUser);
-    if (item.href === "/campanha/agente") return canAccessCampaignAgent(permissionUser);
-    if (item.href === "/campanha/staff") return canViewCampaignStaff(permissionUser);
     if (item.href === "/minhas-horas") return canAccessOwnRealtimeHours(permissionUser);
     return item.roles.includes(normalizedRole);
   });
@@ -129,6 +113,7 @@ export function getDefaultPathForRole(role?: string) {
 }
 
 export function canAccessPathForRole(pathname: string, userOrRole?: string | PermissionUser) {
+  if (isRetiredFeaturePath(pathname)) return false;
   const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
   const normalizedRole = normalizeRole(user?.role);
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
@@ -153,9 +138,6 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   }
 
   if (pathname === "/performance" || pathname.startsWith("/performance/") || pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return canAccessPerformance(permissionUser);
-  if (pathname === "/campanha/agente" || pathname.startsWith("/campanha/agente/")) return canAccessCampaignAgent(permissionUser);
-  if (pathname === "/campanha/staff" || pathname.startsWith("/campanha/staff/")) return canViewCampaignStaff(permissionUser);
-  if (pathname === "/campanha" || pathname.startsWith("/api/campaigns/raffle")) return canAccessCampaignAgent(permissionUser) || canViewCampaignStaff(permissionUser);
   if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/") || pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return canAccessStaffCoverage(permissionUser);
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return personalRoles.includes(normalizedRole);
   if (pathname === "/minhas-horas" || pathname.startsWith("/minhas-horas/") || pathname === "/api/realtime-hours/me" || pathname.startsWith("/api/realtime-hours/me/")) return canAccessOwnRealtimeHours(permissionUser);

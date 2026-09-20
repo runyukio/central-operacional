@@ -1,6 +1,5 @@
 import type { AppRole } from "@/lib/demo-auth";
 import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
-import { isRaffleEligibleLob } from "@/lib/campaign-raffle-core";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 
 export type PermissionUser = {
@@ -178,30 +177,6 @@ export function canAccessOwnPerformance(user: PermissionUser) {
     && roleHasCapability(user.role, "PERSONAL")
     && isAgentJobTitle(user.roleTitle ?? user.jobTitle)
   );
-}
-
-export function canAccessCampaignAgent(user: PermissionUser) {
-  return (
-    isActiveUser(user)
-    && roleHasCapability(user.role, "CAMPAIGN_AGENT")
-    && isRaffleEligibleLob(user.lob)
-    && isAgentJobTitle(user.roleTitle ?? user.jobTitle)
-  );
-}
-
-export function canManageCampaignStaff(user: PermissionUser) {
-  return isActiveUser(user) && roleHasCapability(user.role, "CAMPAIGN_STAFF");
-}
-
-export function canViewCampaignStaff(user: PermissionUser) {
-  if (!isActiveUser(user)) return false;
-  const role = normalizeRole(user.role);
-  return canManageCampaignStaff(user) || role === "GESTOR"
-    || (role === "SUPERVISOR" && user.lob?.trim().toUpperCase() === "ADS");
-}
-
-export function canAccessCampaign(user: PermissionUser) {
-  return canAccessCampaignAgent(user) || canViewCampaignStaff(user);
 }
 
 export function canAccessPerformanceWfh(user: PermissionUser) {

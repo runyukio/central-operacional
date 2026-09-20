@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
+import { allAppRoles, normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
 import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } from "@/lib/billing-permissions";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
-import { canAccessPathForRole, getNavItems } from "@/lib/navigation";
+import { canAccessPathForRole, getNavItems, getNavSections } from "@/lib/navigation";
 import {
-  canAccessCampaignAgent,
-  canManageCampaignStaff,
   canAccessOwnPerformance,
   canAccessPerformance,
   canAccessRealTime,
@@ -73,69 +71,42 @@ test("prévia de invoice no perfil fica disponível ao próprio parceiro, a ADMI
   }), false);
 });
 
-test("Campanha separa a visão do agente ADS da gestão Staff", () => {
-  const adsAgent = { role: "COLABORADOR", roleTitle: "Agente", lob: "ADS", status: "ACTIVE" };
-  const videoAgent = { role: "COLABORADOR", roleTitle: "Agente", lob: "VIDEO", status: "ACTIVE" };
-
-  assert.equal(canAccessCampaignAgent(adsAgent), true);
-  assert.equal(canAccessCampaignAgent(videoAgent), false);
-  assert.equal(canAccessCampaignAgent({ ...adsAgent, roleTitle: "Supervisor" }), false);
-  assert.equal(canManageCampaignStaff({ role: "WFM", status: "ACTIVE" }), true);
-  assert.equal(canManageCampaignStaff({ role: "ADMIN", status: "ACTIVE" }), true);
-  assert.equal(canManageCampaignStaff(adsAgent), false);
-  assert.equal(getNavItems(adsAgent).filter((item) => item.href === "/campanha").length, 1);
-  assert.equal(getNavItems(adsAgent).find((item) => item.href === "/campanha")?.label, "Rifa");
-  assert.equal(getNavItems({ role: "WFM", status: "ACTIVE" }).filter((item) => item.href === "/campanha").length, 1);
-  assert.equal(getNavItems(videoAgent).some((item) => item.href.startsWith("/campanha")), false);
+test("Rifa removida não aparece no menu nem permite acesso direto por qualquer perfil", () => {
+  for (const role of allAppRoles) {
+    for (const lob of ["ADS", "PROJECT", "CEC", ""]) {
+      const user = { role, lob, roleTitle: "Agente", status: "ACTIVE" };
+      assert.equal(getNavItems(user).some((item) => item.href.startsWith("/campanha")), false);
+      assert.equal(getNavSections(user).some((section) => section.label === "Campanha"), false);
+      for (const path of ["/campanha", "/campanha/agente", "/campanha/staff", "/api/campaigns/raffle", "/api/campaigns/raffle/export"]) {
+        assert.equal(canAccessPathForRole(path, user), false, `${role}: ${path}`);
+      }
+    }
+  }
 });
 
-test("POC ADS acessa Meus Dados e seus tickets sem acesso à gestão", () => {
+test("POC ADS acessa Meus Dados sem acesso à Performance geral", () => {
   const poc = { role: "POC", roleTitle: "Agente", lob: "ADS", status: "ACTIVE" };
 
   assert.equal(canAccessOwnPerformance(poc), true);
-  assert.equal(canAccessCampaignAgent(poc), true);
-  assert.equal(roleHasCapability(poc.role, "CAMPAIGN_AGENT"), true);
   const menu = getNavItems(poc);
   assert.equal(menu.some((item) => item.href === "/performance/meus-dados"), true);
-  assert.equal(menu.filter((item) => item.href === "/campanha").length, 1);
   assert.equal(menu.some((item) => item.href === "/performance"), false);
 
-  for (const path of ["/performance/meus-dados", "/api/performance/me", "/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
+  for (const path of ["/performance/meus-dados", "/api/performance/me"]) {
     assert.equal(canAccessPathForRole(path, poc), true, path);
   }
-  for (const path of ["/performance", "/api/performance", "/api/performance/export", "/api/performance/import", "/campanha/staff"]) {
+  for (const path of ["/performance", "/api/performance", "/api/performance/export", "/api/performance/import"]) {
     assert.equal(canAccessPathForRole(path, poc), false, path);
   }
   assert.equal(canAccessPerformance(poc), false);
   assert.equal(canImportPerformance(poc), false);
-  assert.equal(canManageCampaignStaff(poc), false);
-  assert.equal(roleHasCapability(poc.role, "CAMPAIGN_STAFF"), false);
 });
 
-test("agentes e POC de PROJECT acessam a Rifa ADS sem ganhar gestão Staff", () => {
-  for (const role of ["COLABORADOR", "POC"]) {
-    const user = { role, roleTitle: "Agente", lob: "PROJECT", status: "ACTIVE" };
-    assert.equal(canAccessCampaignAgent(user), true);
-    assert.equal(getNavItems(user).filter((item) => item.href === "/campanha").length, 1);
-    for (const path of ["/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
-      assert.equal(canAccessPathForRole(path, user), true, path);
-    }
-    assert.equal(canAccessPathForRole("/campanha/staff", user), false);
-    assert.equal(canManageCampaignStaff(user), false);
-    assert.equal(canAccessCampaignAgent({ ...user, roleTitle: "Supervisor" }), false);
-    assert.equal(canAccessCampaignAgent({ ...user, status: "INACTIVE" }), false);
-  }
-});
-
-test("POC de outras LOBs acessa Meus Dados mas a Rifa continua exclusiva de ADS e PROJECT", () => {
-  for (const lob of ["CEC", "VIDEO", "COMMENTS", "ALL", ""]) {
+test("POC de todas as LOBs continua acessando Meus Dados", () => {
+  for (const lob of ["ADS", "PROJECT", "CEC", "VIDEO", "COMMENTS", "ALL", ""]) {
     const poc = { role: "POC", roleTitle: "Agente", lob, status: "ACTIVE" };
     assert.equal(canAccessOwnPerformance(poc), true, lob);
     assert.equal(canAccessPathForRole("/api/performance/me", poc), true, lob);
-    assert.equal(canAccessCampaignAgent(poc), false, lob);
-    assert.equal(getNavItems(poc).some((item) => item.href === "/campanha"), false, lob);
-    assert.equal(canAccessPathForRole("/campanha", poc), false, lob);
-    assert.equal(canAccessPathForRole("/api/campaigns/raffle", poc), false, lob);
   }
 });
 
@@ -149,16 +120,11 @@ test("acesso pessoal de POC exige agente ativo e não é concedido apenas pela s
   ]) {
     const user = { ...denied, lob: "ADS" };
     assert.equal(canAccessOwnPerformance(user), false);
-    assert.equal(canAccessCampaignAgent(user), false);
     assert.equal(canAccessPathForRole("/performance/meus-dados", user), false);
     assert.equal(canAccessPathForRole("/api/performance/me", user), false);
-    // ADS supervisors now have a read-only campaign view, never the personal agent view.
-    assert.equal(canAccessPathForRole("/campanha", user), user.role === "SUPERVISOR");
-    assert.equal(canAccessPathForRole("/campanha/agente", user), false);
   }
   const normalizedPoc = { role: " poc ", jobTitle: "agente", lob: "ads", status: "ACTIVE" };
   assert.equal(canAccessOwnPerformance(normalizedPoc), true);
-  assert.equal(canAccessCampaignAgent(normalizedPoc), true);
 });
 
 test("somente ADMIN e WFM alteram cronogramas", () => {

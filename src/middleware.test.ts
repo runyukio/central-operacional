@@ -34,27 +34,43 @@ async function requestAs(path: string, claims?: JWT) {
   return middleware(new NextRequest(`http://localhost${path}`, { headers }));
 }
 
-test("middleware libera as telas pessoais de POC ADS sem liberar Performance geral ou Staff", async () => {
+test("middleware libera as telas pessoais de POC ADS sem liberar Performance geral", async () => {
   const poc = { role: "POC", roleTitle: "Agente", lob: "ADS" };
-  for (const path of ["/performance/meus-dados", "/api/performance/me", "/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
+  for (const path of ["/performance/meus-dados", "/api/performance/me"]) {
     const response = await requestAs(path, poc);
     assert.equal(response.headers.get("x-middleware-next"), "1", path);
   }
   for (const path of ["/api/performance", "/api/performance/export", "/api/performance/import"]) {
     assert.equal((await requestAs(path, poc)).status, 403, path);
   }
-  for (const path of ["/performance", "/campanha/staff"]) {
+  for (const path of ["/performance"]) {
     assert.equal((await requestAs(path, poc)).status, 307, path);
   }
 });
 
-test("middleware libera Rifa para agentes e POC de PROJECT sem liberar Staff", async () => {
-  for (const role of ["COLABORADOR", "POC"]) {
-    const user = { role, roleTitle: "Agente", lob: "PROJECT" };
-    for (const path of ["/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
-      assert.equal((await requestAs(path, user)).headers.get("x-middleware-next"), "1", path);
+test("Rifa encerrada bloqueia links antigos e todos os métodos sem consultar sessão ou banco", async () => {
+  const lookup = sessionValidationData.findUser;
+  sessionValidationData.findUser = async () => { throw new Error("Retired routes must not query the database"); };
+  try {
+    for (const role of ["ADMIN", "WFM", "GESTOR", "SUPERVISOR", "POC", "COLABORADOR", undefined]) {
+      const headers = new Headers();
+      if (role) headers.set("authorization", `Bearer ${await encode({
+        token: { sub: "u1", role, lob: "ADS", roleTitle: "Agente" },
+        secret: testSecret, maxAge: 60
+      })}`);
+      for (const path of ["/campanha", "/campanha/agente", "/campanha/staff", "/api/campaigns/raffle", "/api/campaigns/raffle/export?campaignId=old"]) {
+        for (const method of ["GET", "POST", "DELETE", "PUT", "PATCH", "HEAD", "OPTIONS"]) {
+          const response = await middleware(new NextRequest(`http://localhost${path}`, { method, headers }));
+          assert.equal(response.status, 410, `${role}: ${method} ${path}`);
+          assert.equal(response.headers.get("Cache-Control"), "no-store");
+          assert.equal(response.headers.get("x-middleware-next"), null);
+          if (path.startsWith("/api/")) assert.equal((await response.json()).success, false);
+          else assert.match(await response.text(), /Rifa foi encerrada/);
+        }
+      }
     }
-    assert.equal((await requestAs("/campanha/staff", user)).status, 307);
+  } finally {
+    sessionValidationData.findUser = lookup;
   }
 });
 
@@ -79,22 +95,17 @@ test("middleware returns 401 for revoked API sessions before any service can run
   assert.match((await response.json()).message, /Entre novamente/);
 });
 
-test("middleware não concede Rifa ao POC de outra LOB", async () => {
-  for (const lob of ["CEC", "VIDEO"]) {
+test("middleware preserva Meus Dados para POC de todas as LOBs", async () => {
+  for (const lob of ["ADS", "PROJECT", "CEC", "VIDEO", "COMMENTS"]) {
     const poc = { role: "POC", roleTitle: "Agente", lob };
     assert.equal((await requestAs("/api/performance/me", poc)).status, 200);
-    assert.equal((await requestAs("/campanha", poc)).status, 307);
-    assert.equal((await requestAs("/api/campaigns/raffle", poc)).status, 403);
   }
 });
 
-test("sessões atuais de POC e agente sem LOB chegam à validação da Rifa no servidor", async () => {
+test("POC e agente sem LOB continuam sem acesso à Performance geral", async () => {
   for (const role of ["POC", "COLABORADOR"]) {
-    const response = await requestAs("/api/campaigns/raffle", { role, roleTitle: "Agente" });
-    assert.equal(response.headers.get("x-middleware-next"), "1", role);
     assert.equal((await requestAs("/api/performance", { role, roleTitle: "Agente" })).status, 403);
   }
-  assert.equal((await requestAs("/api/campaigns/raffle", { role: "RTA", roleTitle: "Agente" })).status, 403);
 });
 
 test("middleware rejects legacy unversioned sessions and explains the new login", async () => {
@@ -107,7 +118,7 @@ test("middleware rejects legacy unversioned sessions and explains the new login"
 });
 
 test("telas pessoais continuam exigindo autenticação e troca de senha obrigatória", async () => {
-  for (const path of ["/performance/meus-dados", "/campanha"]) {
+  for (const path of ["/performance/meus-dados", "/meu-perfil"]) {
     const unauthenticated = await requestAs(path);
     assert.equal(new URL(unauthenticated.headers.get("location")!).pathname, "/login");
     const changePassword = await requestAs(path, { role: "POC", roleTitle: "Agente", lob: "ADS", mustChangePassword: true });

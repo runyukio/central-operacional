@@ -6,11 +6,19 @@ import { canAccessBilling } from "@/lib/billing-permissions";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import { canAccessPathForRole, getDefaultPathForRole } from "@/lib/navigation";
 import { validateCurrentSessionToken } from "@/lib/session-validation";
+import { isRetiredFeaturePath } from "@/lib/retired-features";
 
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  if (isRetiredFeaturePath(pathname)) {
+    const message = "A Rifa foi encerrada e removida do site.";
+    const headers = { "Cache-Control": "no-store" };
+    return pathname.startsWith("/api/")
+      ? NextResponse.json({ success: false, error: message, message }, { status: 410, headers })
+      : new NextResponse(message, { status: 410, headers: { ...headers, "Content-Type": "text/plain; charset=utf-8" } });
+  }
   const originalToken = await getToken({ req: request });
   const token = originalToken ? await validateCurrentSessionToken(originalToken) : null;
-  const pathname = request.nextUrl.pathname;
 
   if (!token || token.authInvalid) {
     if (pathname.startsWith("/api/")) {
@@ -55,12 +63,6 @@ export async function middleware(request: NextRequest) {
     lob: typeof token.lob === "string" ? token.lob : null,
     status: "ACTIVE"
   };
-
-  // Some active profiles still have no LOB. The page/API rechecks ADS/PROJECT eligibility
-  // in Postgres before returning any raffle data for these users.
-  const isCampaignPath = pathname === "/campanha" || pathname.startsWith("/campanha/") || pathname.startsWith("/api/campaigns/raffle");
-  const isLegacyCampaignCandidate = (role === "COLABORADOR" || role === "POC") && !permissionUser.lob;
-  if (isCampaignPath && isLegacyCampaignCandidate) return NextResponse.next();
 
   if (!isBillingPath && !canAccessPathForRole(pathname, permissionUser)) {
     if (pathname.startsWith("/api/")) {
