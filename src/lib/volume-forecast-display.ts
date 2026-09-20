@@ -37,11 +37,18 @@ export function buildForecastDisplay(payload: ForecastPayload | null, horizon: n
   const evaluationRows = new Map<string, { actual: number; forecast: number; count: number }>();
   for (const s of series) for (const r of s.evaluation?.rows ?? []) { const key = `${r.date}|${r.hour}`, e = evaluationRows.get(key) ?? { actual: 0, forecast: 0, count: 0 }; e.actual += r.actual; e.forecast += r.forecast; e.count++; evaluationRows.set(key, e); }
   let actual = 0, predicted = 0, error = 0, evaluatedHours = 0;
-  for (const e of evaluationRows.values()) if (e.count === series.length) { actual += e.actual; predicted += e.forecast; error += Math.abs(e.actual - e.forecast); evaluatedHours++; }
+  const evaluatedDays = new Map<string, {actual:number;forecast:number}>();
+  for (const [key,e] of evaluationRows) if (e.count === series.length) {
+    actual += e.actual; predicted += e.forecast; error += Math.abs(e.actual - e.forecast); evaluatedHours++;
+    const date=key.split("|")[0],day=evaluatedDays.get(date)??{actual:0,forecast:0};day.actual+=e.actual;day.forecast+=e.forecast;evaluatedDays.set(date,day);
+  }
+  const dailyError=[...evaluatedDays.values()].reduce((sum,day)=>sum+Math.abs(day.actual-day.forecast),0);
   const latest = series.map((s) => s.latestVolumeAt).filter((s): s is string => !!s).sort().at(-1);
   return { hasForecast: future.some((r) => r.forecast !== null), lastRealAt: latest ? new Date(latest) : null,
     projectedUntil: future.length ? new Date(future.at(-1)!.at) : null, next24h: sum(future.filter((r) => r.at < start + D), 24), horizonTotal: sum(future, horizon * 24), peak,
     adjustment: null, accuracy: actual > 0 ? Math.max(0, 1 - error / actual) : null, bias: actual > 0 ? (predicted - actual) / actual : null,
+    dailyAccuracy: actual > 0 ? Math.max(0, 1 - dailyError / actual) : null,
+    modelLabels: series.map(s=>s.modelLabel),
     evaluatedHours, horizonHours: horizon * 24, chartRows, tableRows: chartRows,
     warnings: [...new Set([...(payload?.warnings ?? []), ...series.flatMap((s) => s.warnings)])]
   };

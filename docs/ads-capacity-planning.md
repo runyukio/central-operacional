@@ -16,7 +16,7 @@ Read-only tab in Necessidade. Requires both existing `STAFF_COVERAGE_ADS` and `P
 
 ## Forecast and allocation
 
-`volume-forecast-service.ts` is the single volume forecast source for Performance, Real Time, executive reports/exports/webhooks, ADS requirements and capacity planning. `executive-forecast-service.ts` is only a compatibility adapter. It uses the Performance queue mapping, up to 120 days of observations, a 48-observed-hour minimum and centrally calibrated recency/seasonality candidates. Explicit zeros remain observations. Historical days use their own midnight cutoff; today and future dates use today's operational midnight. Forecasts never become training observations. See `docs/volume-forecast.md` for the validation contract.
+`volume-forecast-service.ts` is the single volume forecast source for Performance, Real Time, executive reports/exports/webhooks, ADS requirements and capacity planning. `executive-forecast-service.ts` is only a compatibility adapter. It uses the Performance queue mapping, up to 120 days of complete observations and one versioned policy per LOB. ADS retains the recency-adjusted ensemble, with at least two complete days. Explicit zeros remain observations. Historical days use their own midnight cutoff; today and future dates use today's operational midnight. Forecasts never become training observations. See `docs/volume-forecast.md` for the 167-configuration comparison and hourly/daily validation contract.
 
 Allocate each forecast interval by scheduled person-hours across the entire operation, before filtering shifts. Attribute shares to each shift's start date. Read adjacent schedules to account for overlapping boundary cohorts. Demand without scheduled people remains in explicit "Sem cobertura" rows.
 

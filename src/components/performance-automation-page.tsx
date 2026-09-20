@@ -266,6 +266,8 @@ type ForecastModel = {
   peak: { value: number; at: Date | null };
   adjustment: number | null;
   accuracy: number | null;
+  dailyAccuracy: number | null;
+  modelLabels: string[];
   bias: number | null;
   evaluatedHours: number;
   warnings: string[];
@@ -1967,15 +1969,17 @@ function ForecastViewPanel({
           </SlicerGroup>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <ForecastCard title="Proximas 24h" value={formatOptionalNumber(model.next24h)} helper="enqueue previsto" icon={TrendingUp} tone="cyan" />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <ForecastCard title="Hoje · 24h" value={formatOptionalNumber(model.next24h)} helper="forecast do dia completo" icon={TrendingUp} tone="cyan" />
           <ForecastCard title={`${horizon} dias`} value={formatOptionalNumber(model.horizonTotal)} helper={`${model.horizonHours} horas base`} icon={BarChart3} tone="blue" />
           <ForecastCard title="Viés" value={formatOptionalPercent(model.bias)} helper="positivo: superestimação" icon={RefreshCw} tone="green" />
           <ForecastCard title="Assertividade horária" value={formatOptionalPercent(model.accuracy)} helper={`1 − WAPE · ${model.evaluatedHours} horas testadas`} icon={Gauge} tone="green" />
+          <ForecastCard title="Assertividade diária" value={formatOptionalPercent(model.dailyAccuracy)} helper="erro dos totais de cada dia" icon={Gauge} tone="blue" />
           <ForecastCard title="Pico previsto" value={formatOptionalNumber(model.peak.at ? model.peak.value : null)} helper={formatForecastDate(model.peak.at)} icon={Clock} tone="orange" />
         </div>
 
-        <p className="text-xs text-muted">Forecast único do sistema, com corte antes do início do dia. Teste reconstruído nos últimos 7 dias completos da base, sem usar o realizado do dia previsto. Não representa garantia de acerto.</p>
+        <p className="text-xs font-bold text-muted">{model.modelLabels.join(" · ")}</p>
+        <p className="text-xs text-muted">Um modelo oficial por LOB em todo o sistema, com corte antes do início do dia. Teste reconstruído nos últimos 7 dias completos da base, sem usar o realizado do dia previsto. Assertividade horária mede também quando o volume entra; diária compara os totais. Não representa garantia de acerto.</p>
         {model.warnings.map((warning) => <p key={warning} role="status" className="text-xs font-bold text-amber-700 dark:text-amber-300">{warning}</p>)}
         <div className="rounded-xl border border-border bg-white p-3">
           <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">

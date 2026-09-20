@@ -3,10 +3,10 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { buildForecastDisplay, type ForecastPayload } from "./volume-forecast-display";
 import { buildAdsExecutiveReportSnapshot } from "./ads-executive-report-core";
-import { selectVolumeModel, type VolumeModel } from "./volume-forecast-core";
+import { VOLUME_FORECAST_POLICIES } from "./volume-forecast-policies";
 const day = "2026-09-20", H = 3600000;
 function series(value: number): ForecastPayload["series"][number] {
-  return { lob: "ADS", points: Array.from({length:24}, (_,hour) => ({dateKey:day,hour,input:value,model:"recent",cutoff:day})), actuals: [], latestVolumeAt:null, updatedAt:null, version:"test",modelVersion:"test",cutoff:day,evaluation:null,warnings:[] };
+  return { lob: "ADS", points: Array.from({length:24}, (_,hour) => ({dateKey:day,hour,input:value,model:"report-ensemble",cutoff:day})), actuals: [], latestVolumeAt:null, updatedAt:null, version:"test",modelVersion:"test",modelLabel:VOLUME_FORECAST_POLICIES.ADS.label,cutoff:day,evaluation:null,warnings:[] };
 }
 function payload(rows = [series(10)]): ForecastPayload { return { today:day,horizon:1,canImport:false,lobs:["ADS"],warnings:[],series:rows }; }
 test("Performance hours, daily totals and executive exports use identical server points, including zero", () => {
@@ -32,9 +32,19 @@ test("partial actual days cannot be compared with full-day forecasts", () => {
   const result=buildForecastDisplay(payload([source]),1,"day");
   assert.equal(result.chartRows[0].real,60);assert.equal(result.chartRows[0].realComplete,false);assert.equal(result.chartRows[0].forecast,240);
 });
-test("weekly seasonality needs a material advantage; missing calibration keeps the baseline", () => {
-  const errors=new Map<VolumeModel,number>([["ensemble",100],["recent",90],["seasonal",88]]);
-  assert.equal(selectVolumeModel(errors,14),"recent");errors.set("seasonal",70);assert.equal(selectVolumeModel(errors,14),"seasonal");assert.equal(selectVolumeModel(errors,6),"ensemble");
+test("LOB policies are distinct and centrally controlled", () => {
+  assert.equal(new Set(Object.values(VOLUME_FORECAST_POLICIES).map(p=>p.id)).size,3);
+  assert.equal(VOLUME_FORECAST_POLICIES.ADS.id,"report-ensemble");
+  assert.equal(VOLUME_FORECAST_POLICIES.VIDEO.id,"daily-3-h0-profile-120-all");
+  assert.equal(VOLUME_FORECAST_POLICIES.COMMENTS.id,"weekday-28d-h7");
+});
+test("daily accuracy does not conceal hourly timing error and labels come from the canonical source", () => {
+  const source = series(100);
+  source.evaluation = { hours:24,days:1,actual:2400,predicted:2400,absoluteError:200,dailyAbsoluteError:0,wape:200/2400,accuracy:1-200/2400,dailyAccuracy:1,bias:0,
+    rows:Array.from({length:24},(_,hour)=>({date:day,hour,actual:100,forecast:hour===0?0:hour===1?200:100,model:VOLUME_FORECAST_POLICIES.ADS.id})) };
+  const result = buildForecastDisplay(payload([source]),1,"hour");
+  assert.equal(result.dailyAccuracy,1);assert.equal(result.accuracy,1-200/2400);assert.equal(result.evaluatedHours,24);
+  assert.deepEqual(result.modelLabels,[VOLUME_FORECAST_POLICIES.ADS.label]);
 });
 test("active consumers cannot reintroduce independent volume models or workbook forecasts", () => {
   const source=(file:string)=>readFileSync(new URL(file,import.meta.url),"utf8");

@@ -14,7 +14,7 @@ export async function loadVolumeForecastRange(lob: VolumeForecastLob, requestedD
   if (!dates.length || dates.length > 40 || dates.some((d) => !isForecastDate(d))) throw new Error("Período inválido para forecast.");
   const today = operationalForecastToday(now), lastCutoff = dates.at(-1)! < today ? dates.at(-1)! : today;
   const firstCutoff = dates[0] < today ? dates[0] : today;
-  // 120 training days + 14 calibration days + 7 evaluation days, independent of requested range.
+  // 120 training days + evaluation/coverage buffer, independent of requested range.
   const start = new Date(forecastDateAdd(firstCutoff, -142));
   const end = new Date(forecastDateAdd(lastCutoff, 1));
   const queueIds = volumeForecastQueueIds(lob);
@@ -31,7 +31,7 @@ export async function loadVolumeForecastRange(lob: VolumeForecastLob, requestedD
       FROM "PerformanceQueueVolumeRecord" p LEFT JOIN "PerformanceImportBatch" b ON b.id=p."importBatchId" WHERE ${predicate}
       GROUP BY 1 ORDER BY 1
     `);
-    const engine = createVolumeForecastEngine(rows);
+    const engine = createVolumeForecastEngine(rows, lob);
     const points = dates.flatMap((date) => engine.predictDay(date, date < today ? date : today));
     const latest = engine.actuals.at(-1);
     const lastComplete = latest ? Math.min(Date.parse(today) - 86400000, Date.parse(latest.at.toISOString().slice(0, 10)) - (latest.at.getUTCHours() < 23 ? 86400000 : 0)) : null;
@@ -39,9 +39,9 @@ export async function loadVolumeForecastRange(lob: VolumeForecastLob, requestedD
     return {
       points, actuals: engine.actuals.filter((r) => dates.includes(r.at.toISOString().slice(0, 10))).map((r) => ({ at: r.at.toISOString(), input: r.input })),
       latestVolumeAt: latest?.at.toISOString() ?? null, updatedAt: source?.updated ? new Date(source.updated).toISOString() : null,
-      version, modelVersion: VOLUME_FORECAST_VERSION, cutoff: lastCutoff, evaluation,
+      version, modelVersion: VOLUME_FORECAST_VERSION, modelLabel: engine.policy.label, cutoff: lastCutoff, evaluation,
       warnings: [
-        ...(!points.length ? ["Histórico insuficiente: são necessárias 48 horas observadas. Ausências não são consideradas zero."] : []),
+        ...(points.length < dates.length * 24 ? ["Histórico insuficiente para parte do período nesta LOB. São necessários dias completos; ausência não é considerada zero."] : []),
         ...(latest && Date.parse(today) - latest.timestamp > 86400000 ? ["A base de volume está desatualizada. O forecast utiliza somente o último realizado disponível, sem inventar observações."] : [])
       ]
     };

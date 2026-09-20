@@ -38,7 +38,7 @@ async function main() {
     `;
     if (process.argv.includes("--source-only")) { console.log(JSON.stringify({ lob, sql: statement.text, parameters: statement.values })); continue; }
     const raw = await prisma.$queryRaw<Array<{ at: Date; input: number }>>(statement);
-    const engine = createVolumeForecastEngine(raw);
+    const engine = createVolumeForecastEngine(raw, lob);
     for (const leadDays of [1, 7, 14]) {
       const { rows, ...canonical } = evaluateVolumeForecast(engine, forecastDates(start, end), leadDays);
       const baselines = { previousReport: { predicted: 0, absoluteError: 0, dailyAbsoluteError: 0 }, previousRealtime: { predicted: 0, absoluteError: 0, dailyAbsoluteError: 0 } };
@@ -58,7 +58,7 @@ async function main() {
           baselines[key].predicted += predicted; baselines[key].dailyAbsoluteError += Math.abs(predicted - actual);
         }
       }
-      console.log(JSON.stringify({ lob, leadDays, canonical, modelDays: Object.fromEntries(["ensemble", "recent", "seasonal"].map((m) => [m, new Set(rows.filter((r) => r.model === m).map((r) => r.date)).size])), baselines: Object.fromEntries(Object.entries(baselines).map(([k, v]) => [k, { ...v, accuracy: canonical.actual > 0 ? Math.max(0, 1 - v.absoluteError / canonical.actual) : null, dailyAccuracy: canonical.actual > 0 ? Math.max(0, 1 - v.dailyAbsoluteError / canonical.actual) : null }])) }));
+      console.log(JSON.stringify({ lob, leadDays, canonical, modelDays: Object.fromEntries([...new Set(rows.map(r=>r.model))].map((m) => [m, new Set(rows.filter((r) => r.model === m).map((r) => r.date)).size])), baselines: Object.fromEntries(Object.entries(baselines).map(([k, v]) => [k, { ...v, accuracy: canonical.actual > 0 ? Math.max(0, 1 - v.absoluteError / canonical.actual) : null, dailyAccuracy: canonical.actual > 0 ? Math.max(0, 1 - v.dailyAbsoluteError / canonical.actual) : null }])) }));
     }
   }
 }
