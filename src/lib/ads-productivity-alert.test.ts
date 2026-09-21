@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { AlertReading, buildAdsAlertMessages, evaluateAdsProductivityHour, kimAcceptedMessageKey,
   kimSupervisorMention, latestClosedAlertHour, validateAdsAlertWebhook } from "./ads-productivity-alert-core";
 import { AlertDeliveryStore, deliverAdsAlertMessages, prepareAlertReadings, readAdsProductivityAlert } from "./ads-productivity-alert-service";
@@ -9,6 +11,17 @@ import { GET } from "../app/api/cron/ads-productivity-alerts/route";
 
 const now = new Date("2026-09-21T17:10:00Z");
 const interval = latestClosedAlertHour(now);
+
+test("hourly alert runs at minute 03 and bypasses sessions, not its own cron authorization", () => {
+  const middleware = readFileSync("src/middleware.ts", "utf8");
+  const matcher = JSON.parse(middleware.match(/matcher: (\[[^\n]+\])/u)![1]);
+  assert.equal(unstable_doesMiddlewareMatch({ config: { matcher }, url: "https://test/api/cron/ads-productivity-alerts" }), false);
+  assert.equal(unstable_doesMiddlewareMatch({ config: { matcher }, url: "https://test/api/performance" }), true);
+  assert.equal(unstable_doesMiddlewareMatch({ config: { matcher }, url: "https://test/meu-espaco" }), true);
+  const crons = JSON.parse(readFileSync("vercel.json", "utf8")).crons;
+  assert.equal(crons.find((cron: { path: string }) => cron.path === "/api/cron/ads-productivity-alerts").schedule, "3 * * * *");
+  assert.deepEqual(latestClosedAlertHour(new Date("2026-09-21T17:03:00Z")), interval);
+});
 function readings(submit = 20, minutes = 30, extra: Partial<AlertReading> = {}): AlertReading[] {
   return [interval.start, interval.middle, interval.end].map((cycle, index) => ({ cycle, employeeId: "agent-1",
     name: "Agent One", wbLogin: "wb_agent", lob: "ADS", personType: "Agente", employeeStatus: "Ativo", crossingStatus: "Encontrado",

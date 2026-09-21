@@ -1,13 +1,13 @@
 # ADS hourly productivity alerts
 
-Independent of the existing image reports. Runs at minute 10 of every hour in production (`/api/cron/ads-productivity-alerts`). The endpoint requires `CRON_SECRET` and returns no cached response.
+Independent of the existing image reports. Runs at minute 03 of every hour in production (`/api/cron/ads-productivity-alerts`). The endpoint bypasses interactive session middleware, requires `CRON_SECRET` itself, and returns no cached response.
 
 ## Confirmed rule
 
 - Only matched, active/nesting ADS agents.
 - **1–34 submits AND moderation duration <45 minutes in the same completed hour**. Zero-submit agents never appear, even if capture/presence is available.
 - Positive interval submits prove activity; no schedule eligibility or pause/partial-shift adjustment. Capture is not used as moderation duration.
-- Previous full civil hour, `America/Sao_Paulo`: at 14:10 evaluate 13:00–14:00, at 00:10 evaluate 23:00–00:00 across the date boundary.
+- Previous full civil hour, `America/Sao_Paulo`: at 14:03 evaluate 13:00–14:00, at 00:03 evaluate 23:00–00:00 across the date boundary.
 - Read successful Real Time collections at 13 five-minute checkpoints (opening through closing). Pick the collection nearest each checkpoint, globally, within 90 seconds, before associating agents by employee ID. The half-hour cycle label is NOT the observation time: repeated imports inside that cycle have changing counters. Choosing its latest version can compare only 45 minutes. Validate each selected summary against its raw observations so missing fields cannot become zero.
 - Sum the five-minute counter deltas. Preserve the established 13:00 upstream reset, including its first collection at 13:05; any other counter decrease excludes the agent as inconsistent. Midnight is not a reset. Collection clock/upload precision is approximately ±90 seconds, never interpolation or missing-to-zero.
 - Missing checkpoints, unmapped identities and invalid readings do not generate a performance accusation. No backfill to stale hours, no message when nobody meets both conditions.
