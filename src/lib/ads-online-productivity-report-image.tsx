@@ -207,7 +207,7 @@ function TableHeader({ report }: { report: AdsOnlineProductivityReportSnapshot }
       <div style={{ display: "flex", width: 145 }}>AVG AHT</div>
       {report.reportScope === "ADS" ? <div style={{ display: "flex", flexDirection: "column", width: 170 }}>
         <span style={{ display: "flex" }}>MODERATION</span>
-        <span style={{ display: "flex", fontSize: 11, letterSpacing: 0.5, marginTop: 4 }}>SHIFT TOTAL · HH:MM</span>
+        <span style={{ display: "flex", fontSize: 11, letterSpacing: 0.5, marginTop: 4 }}>INTERVAL · MIN</span>
       </div> : <div style={{ display: "flex", width: 170 }}>MODERATION (MIN)</div>}
     </div>
   );
@@ -255,8 +255,8 @@ function AgentRow({
       <div style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900, width: 180 }}>{formatInteger(row.shiftTotal)}</div>
       <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 145 }}>{formatDuration(row.ahtMs)}</div>
       {report.reportScope === "ADS" ? <div style={{ display: "flex", flexDirection: "column", width: 170 }}>
-        <span style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900 }}>{formatModerationHours(row.shiftModerationMs)}</span>
-        <span style={{ color: MUTED, display: "flex", fontSize: 14, fontWeight: 700, marginTop: 4 }}>{formatMinutes(row.moderationMs)} interval</span>
+        <span style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900 }}>{formatMinutes(row.moderationMs)}</span>
+        <span style={{ color: MUTED, display: "flex", fontSize: 14, fontWeight: 700, marginTop: 4 }}>{formatModerationHours(row.shiftModerationMs)} shift total</span>
       </div> : <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 170 }}>{formatMinutes(row.moderationMs)}</div>}
     </div>
   );
