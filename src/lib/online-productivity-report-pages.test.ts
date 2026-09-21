@@ -18,8 +18,7 @@ function reportFixture(rows = 500, skills = 13): AdsOnlineProductivityReportSnap
     productiveAgentCount: rows,
     averageSubmitPerHour: 123,
     totalShiftSubmit: 9999,
-    totalShiftModerationMs: 123_456_789,
-    rows: Array.from({ length: rows }, (_, index) => ({ name: `Partner ${index}`, wbLogin: `wb-${index}`, skill: `Skill ${index % Math.max(1, skills)}`, currentSubmit: rows - index, previousSubmit: 1, comparisonPercent: 100, comparison: "up", shiftTotal: 10, ahtMs: 60_000, moderationMs: 60_000 })),
+    rows: Array.from({ length: rows }, (_, index) => ({ name: `Partner ${index}`, wbLogin: `wb-${index}`, skill: `Skill ${index % Math.max(1, skills)}`, currentSubmit: rows - index, previousSubmit: 1, comparisonPercent: 100, comparison: "up", shiftTotal: 10, shiftModerationMs: 600_000 + index, ahtMs: 60_000, moderationMs: 60_000 })),
     skillAverages: Array.from({ length: skills }, (_, index) => ({ skill: `Skill ${index}`, averageSubmit: 12, agentCount: 1 }))
   };
 }
@@ -40,7 +39,6 @@ test("all 500 partners and skill summaries survive pagination in order within a 
     assert.equal(page.maxSubmit, 500);
     assert.equal(page.report.averageSubmitPerHour, report.averageSubmitPerHour);
     assert.equal(page.report.totalShiftSubmit, report.totalShiftSubmit);
-    assert.equal(page.report.totalShiftModerationMs, report.totalShiftModerationMs);
     assert.equal(page.report.productiveAgentCount, report.productiveAgentCount);
     assert.equal(page.height, onlineProductivityImageHeight(page.report.rows.length, page.report.skillAverages.length));
     assert.ok(page.height <= ONLINE_PRODUCTIVITY_MAX_IMAGE_HEIGHT);

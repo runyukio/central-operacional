@@ -21,6 +21,7 @@ export type AdsOnlineProductivityAgentRow = {
   comparisonPercent: number | null;
   comparison: "up" | "down" | "equal" | "new";
   shiftTotal: number;
+  shiftModerationMs: number;
   ahtMs: number | null;
   moderationMs: number;
 };
@@ -50,7 +51,6 @@ export type AdsOnlineProductivityReportSnapshot = {
   previousIntervalAhtMs: number | null;
   ahtDeltaMs: number | null;
   totalShiftSubmit: number;
-  totalShiftModerationMs: number;
   skillAverages: AdsOnlineProductivitySkillAverage[];
   rows: AdsOnlineProductivityAgentRow[];
 };
@@ -112,7 +112,6 @@ function buildOnlineProductivityReportSnapshot(input: {
       current,
       previous,
       includeInAht,
-      shiftModerationMs,
       reportRow: {
         name: row.displayName || row.wbLogin || row.rawWbLogin || "Unknown agent",
         wbLogin: row.wbLogin || row.rawWbLogin || "-",
@@ -122,6 +121,7 @@ function buildOnlineProductivityReportSnapshot(input: {
         comparisonPercent,
         comparison: comparisonTone(current.submit, previous.submit, comparisonPercent),
         shiftTotal,
+        shiftModerationMs,
         ahtMs,
         moderationMs: current.moderationMs
       } satisfies AdsOnlineProductivityAgentRow
@@ -183,7 +183,6 @@ function buildOnlineProductivityReportSnapshot(input: {
       ? currentIntervalAhtMs - previousIntervalAhtMs
       : null,
     totalShiftSubmit: sum(rows, (row) => row.shiftTotal),
-    totalShiftModerationMs: sum(productiveRows, (row) => row.shiftModerationMs),
     skillAverages: buildSkillAverages(rows),
     rows
   };

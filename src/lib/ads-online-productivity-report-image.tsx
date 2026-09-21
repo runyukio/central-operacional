@@ -51,7 +51,7 @@ export async function renderAdsOnlineProductivityReportPng(report: AdsOnlineProd
   return Buffer.from(await response.arrayBuffer());
 }
 
-function AdsOnlineProductivityReportImage({ report, page }: { report: AdsOnlineProductivityReportSnapshot; page?: OnlineProductivityReportPage }) {
+export function AdsOnlineProductivityReportImage({ report, page }: { report: AdsOnlineProductivityReportSnapshot; page?: OnlineProductivityReportPage }) {
   const maxSubmit = page?.maxSubmit ?? report.rows.reduce((maximum, row) => Math.max(maximum, row.currentSubmit), 1);
   const reportLabel = report.reportScope;
   return (
@@ -91,13 +91,6 @@ function AdsOnlineProductivityReportImage({ report, page }: { report: AdsOnlineP
           value={formatInteger(report.totalShiftSubmit)}
           comparison={<span style={{ color: MUTED, display: "flex", fontSize: 17, fontWeight: 700 }}>shift date {report.dateLabel.slice(0, 5)}</span>}
         />
-        {report.reportScope === "ADS" ? <KpiCard
-          label="TOTAL SHIFT MODERATION"
-          value={formatModerationHours(report.totalShiftModerationMs)}
-          comparison={<span style={{ color: MUTED, display: "flex", fontSize: 17, fontWeight: 700 }}>
-            {formatModerationHours(report.currentIntervalModerationMs)} in current interval · hh:mm
-          </span>}
-        /> : null}
       </section>
 
       {report.skillAverages.length ? <SkillAverageCards report={report} /> : null}
@@ -212,7 +205,10 @@ function TableHeader({ report }: { report: AdsOnlineProductivityReportSnapshot }
       <div style={{ display: "flex", width: 230 }}>VS. {report.previousHourLabel}</div>
       <div style={{ display: "flex", width: 180 }}>SHIFT TOTAL</div>
       <div style={{ display: "flex", width: 145 }}>AVG AHT</div>
-      <div style={{ display: "flex", width: 170 }}>MODERATION (MIN)</div>
+      {report.reportScope === "ADS" ? <div style={{ display: "flex", flexDirection: "column", width: 170 }}>
+        <span style={{ display: "flex" }}>MODERATION</span>
+        <span style={{ display: "flex", fontSize: 11, letterSpacing: 0.5, marginTop: 4 }}>SHIFT TOTAL · HH:MM</span>
+      </div> : <div style={{ display: "flex", width: 170 }}>MODERATION (MIN)</div>}
     </div>
   );
 }
@@ -258,7 +254,10 @@ function AgentRow({
       </div>
       <div style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900, width: 180 }}>{formatInteger(row.shiftTotal)}</div>
       <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 145 }}>{formatDuration(row.ahtMs)}</div>
-      <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 170 }}>{formatMinutes(row.moderationMs)}</div>
+      {report.reportScope === "ADS" ? <div style={{ display: "flex", flexDirection: "column", width: 170 }}>
+        <span style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900 }}>{formatModerationHours(row.shiftModerationMs)}</span>
+        <span style={{ color: MUTED, display: "flex", fontSize: 14, fontWeight: 700, marginTop: 4 }}>{formatMinutes(row.moderationMs)} interval</span>
+      </div> : <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 170 }}>{formatMinutes(row.moderationMs)}</div>}
     </div>
   );
 }
