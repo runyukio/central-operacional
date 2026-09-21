@@ -77,6 +77,7 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
   assert.equal(report.previousIntervalSubmit, 60);
   assert.equal(report.submitComparisonPercent, 22);
   assert.equal(report.totalShiftSubmit, 313);
+  assert.equal(report.totalShiftModerationMs, 126 * 84_000 + 104 * 90_000 + 83 * 92_000);
   assert.ok(Math.abs(report.averageSubmitPerHour - 24.397260273972602) < 0.0001);
   assert.equal(report.currentIntervalModerationMs, 6_460_000);
   assert.ok(report.currentIntervalAhtMs !== null);
@@ -137,6 +138,7 @@ test("keeps the operational shift total when the China-day counter resets at 13h
   assert.equal(report.rows[0].shiftTotal, 396);
   assert.equal(report.rows[0].ahtMs, 50_000);
   assert.equal(report.totalShiftSubmit, 396);
+  assert.equal(report.totalShiftModerationMs, 396 * 50_000);
 });
 
 test("keeps the night shift total across Sao Paulo midnight", () => {
@@ -160,6 +162,7 @@ test("keeps the night shift total across Sao Paulo midnight", () => {
   });
 
   assert.equal(report.rows[0].shiftTotal, 130);
+  assert.equal(report.totalShiftModerationMs, 130 * 60_000);
   assert.equal(report.rows[0].ahtMs, 60_000);
 });
 
@@ -258,12 +261,34 @@ test("excludes agents with zero submit from the report and averages", () => {
   assert.equal(report.productiveAgentCount, 1);
   assert.deepEqual(report.rows.map((row) => row.wbLogin), ["wb_submitting"]);
   assert.equal(report.currentIntervalSubmit, 20);
+  assert.equal(report.totalShiftModerationMs, 50 * 60_000);
   assert.equal(report.previousIntervalSubmit, 20);
   assert.equal(report.averageSubmitPerHour, 20);
   assert.equal(report.submitComparisonPercent, 0);
   assert.deepEqual(report.skillAverages, [
     { skill: "Nesting", averageSubmit: 20, agentCount: 1 }
   ]);
+});
+
+test("empty ADS totals are zero without inventing moderation", () => {
+  const report = buildAdsOnlineProductivityReportSnapshot({ selectedCycle: "2026-09-21 11:30", agentRows: [] });
+  assert.equal(report.totalShiftModerationMs, 0);
+  assert.equal(report.currentIntervalModerationMs, 0);
+});
+
+test("sums recorded moderation at full precision, not rounded AHT times submits", () => {
+  const report = buildAdsOnlineProductivityReportSnapshot({
+    selectedCycle: "2026-09-21 11:30",
+    agentRows: [1, 2].map((index) => agent({
+      name: `Agent ${index}`, wbLogin: `wb_sum${index}`, presenceStatus: "Online",
+      history: [
+        { ...history("2026-09-21 10:30", 10, 99_000), moderationMs: 1_000 },
+        { ...history("2026-09-21 11:30", 11, 99_000), moderationMs: 20_000 + index }
+      ]
+    }))
+  });
+  assert.equal(report.totalShiftModerationMs, 40_003);
+  assert.equal(report.currentIntervalModerationMs, 38_003);
 });
 
 function agent(input: {

@@ -91,6 +91,13 @@ function AdsOnlineProductivityReportImage({ report, page }: { report: AdsOnlineP
           value={formatInteger(report.totalShiftSubmit)}
           comparison={<span style={{ color: MUTED, display: "flex", fontSize: 17, fontWeight: 700 }}>shift date {report.dateLabel.slice(0, 5)}</span>}
         />
+        {report.reportScope === "ADS" ? <KpiCard
+          label="TOTAL SHIFT MODERATION"
+          value={formatModerationHours(report.totalShiftModerationMs)}
+          comparison={<span style={{ color: MUTED, display: "flex", fontSize: 17, fontWeight: 700 }}>
+            {formatModerationHours(report.currentIntervalModerationMs)} in current interval · hh:mm
+          </span>}
+        /> : null}
       </section>
 
       {report.skillAverages.length ? <SkillAverageCards report={report} /> : null}
@@ -121,6 +128,12 @@ function AdsOnlineProductivityReportImage({ report, page }: { report: AdsOnlineP
       </footer>
     </div>
   );
+}
+
+export function formatModerationHours(value: number) {
+  if (!Number.isFinite(value) || value < 0) return "N/A";
+  const minutes = Math.round(value / 60_000);
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
 function KpiCard({ label, value, comparison }: { label: string; value: string; comparison: ReactNode }) {

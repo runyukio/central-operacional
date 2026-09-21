@@ -50,6 +50,7 @@ export type AdsOnlineProductivityReportSnapshot = {
   previousIntervalAhtMs: number | null;
   ahtDeltaMs: number | null;
   totalShiftSubmit: number;
+  totalShiftModerationMs: number;
   skillAverages: AdsOnlineProductivitySkillAverage[];
   rows: AdsOnlineProductivityAgentRow[];
 };
@@ -111,6 +112,7 @@ function buildOnlineProductivityReportSnapshot(input: {
       current,
       previous,
       includeInAht,
+      shiftModerationMs,
       reportRow: {
         name: row.displayName || row.wbLogin || row.rawWbLogin || "Unknown agent",
         wbLogin: row.wbLogin || row.rawWbLogin || "-",
@@ -181,6 +183,7 @@ function buildOnlineProductivityReportSnapshot(input: {
       ? currentIntervalAhtMs - previousIntervalAhtMs
       : null,
     totalShiftSubmit: sum(rows, (row) => row.shiftTotal),
+    totalShiftModerationMs: sum(productiveRows, (row) => row.shiftModerationMs),
     skillAverages: buildSkillAverages(rows),
     rows
   };
