@@ -136,6 +136,54 @@ export function moderationMinutesLabel(ms: number) {
 }
 
 export type KimAlertPayload = { msgtype: "text"; text: { content: string } };
+export type AdsAlertResult = ReturnType<typeof evaluateAdsProductivityHour>;
+export type KimFormattedAlertPayload = { msgtype: "markdown"; markdown: { content: string } };
+export type KimImageAlertPayload = { msgtype: "image"; image: { media_id: string } };
+export type KimAlertDeliveryPayload = KimAlertPayload | KimFormattedAlertPayload | KimImageAlertPayload;
+
+export function adsAlertPeriodLabel(result: AdsAlertResult) {
+  const date = result.interval.start.slice(0, 10).split("-").reverse().join("/");
+  const nextDay = result.interval.start.slice(0, 10) === result.interval.end.slice(0, 10) ? "" : " (dia seguinte)";
+  return `${date} · ${result.interval.start.slice(11)} a ${result.interval.end.slice(11)}${nextDay} · Brasília`;
+}
+
+export function groupAdsAlertAgents(rows: AlertAgent[]) {
+  const groups = new Map<string, AlertAgent[]>();
+  for (const row of rows) {
+    const key = row.supervisorId ?? "missing-supervisor";
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return [...groups.values()];
+}
+
+export function buildAdsAlertSummary(result: AdsAlertResult): KimFormattedAlertPayload {
+  return { msgtype: "markdown", markdown: { content: [
+    "### ADS | Alerta de produtividade",
+    `**${adsAlertPeriodLabel(result)}**`,
+    `<font color="warning">**${result.offenders.length} agentes abaixo dos dois limites**</font>`,
+    "> **Submits:** menos de 35\n> **Moderation duration:** menos de 45 minutos",
+    "Os dois critérios devem ocorrer no mesmo intervalo. **Zero submit não entra.**",
+    `<font color="comment">Detalhamento por supervisor nas imagens. Limites fixos, sem ajuste de pausas ou jornada.${result.issues.length ? ` ${result.issues.length} agente(s) sem leitura válida ficaram fora da classificação.` : ""}</font>`
+  ].join("\n\n") } };
+}
+
+// KIM documents real @ mentions for text only. Keep this compact and separate
+// from the formatted summary instead of risking a silent notification loss.
+export function buildAdsAlertMentions(result: AdsAlertResult): KimAlertPayload[] {
+  if (!result.offenders.length) return [];
+  const heading = `Supervisão ADS · ${result.interval.start.slice(11)} a ${result.interval.end.slice(11)}\nPor favor, verifiquem os agentes destacados nas imagens.`;
+  const bodies: string[] = []; let body = heading;
+  for (const rows of groupAdsAlertAgents(result.offenders)) {
+    const first = rows[0];
+    const mention = first.supervisorId ? kimSupervisorMention(first.supervisorWb) : "";
+    const supervisor = mention || safeText(first.supervisorName) || "Sem supervisor cadastrado";
+    const line = `\n• ${supervisor}: ${rows.length} ${rows.length === 1 ? "agente" : "agentes"}${!mention && first.supervisorId ? " (WB KIM não disponível)" : ""}`;
+    if (Buffer.byteLength(body + line, "utf8") > 6800) { bodies.push(body); body = heading; }
+    body += line;
+  }
+  bodies.push(body);
+  return bodies.map(content => ({ msgtype: "text", text: { content } }));
+}
 
 export function buildAdsAlertMessages(result: ReturnType<typeof evaluateAdsProductivityHour>): KimAlertPayload[] {
   if (!result.offenders.length) return [];

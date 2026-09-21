@@ -4,6 +4,10 @@ const nextConfig = {
   typedRoutes: false,
   serverExternalPackages: ["@napi-rs/canvas", "pdfjs-dist", "tesseract.js"],
   outputFileTracingIncludes: {
+    "/api/cron/ads-productivity-alerts": [
+      "./node_modules/@fontsource/inter/files/inter-latin-400-normal.woff",
+      "./node_modules/@fontsource/inter/files/inter-latin-700-normal.woff"
+    ],
     "/api/quality-weekly/*": ["./node_modules/@fontsource/inter/files/inter-latin-400-normal.woff"],
     "/api/billing/fiscal-invoice/preview": [
       "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",

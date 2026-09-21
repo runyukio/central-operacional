@@ -14,9 +14,13 @@ Independent of the existing image reports. Runs at minute 03 of every hour in pr
 
 ## KIM
 
+Approved visual format: a short Markdown summary with bold headings and restrained warning color, one or more bounded 1080px PNGs grouped by supervisor, and a compact text message containing real supervisor mentions and counts. The image repeats the exact interval and the two thresholds; values use interval deltas, with moderation minutes/seconds kept below the threshold without display rounding to 45m. Zero submits remain excluded.
+
+Images use the existing bundled Inter regular/bold fonts, explicitly traced into the cron deployment. All agents are paginated without dropping rows. Image uploads go directly to KIM `/api/robot/upload` as multipart `key`, `type=image`, `media`; the resulting `ks://` media ID is used in an image message. There is no public storage bucket, public employee-image URL, or new credential. Rendering and uploads run only after claiming the hour, and all uploads complete before any group message is sent.
+
 The user confirmed that supervisor WB equals the KIM username and that the dedicated robot belongs to only the intended group. Supervisor association uses `EmployeeProfile.supervisorId`; the message tags that supervisor's WB using the official text syntax `<@=username(WB)=>`. No broadcast `@all`, visibility restrictions, or fallback guesses. Missing supervisor/WB is labeled explicitly.
 
-[Official KIM documentation](https://docs.qingque.cn/d/home/eZQAp6nZHEKJ5Es5_avis9bYK?identityId=1oEGOilHO1k), sections 1.1, 2.1 and 3.3: text supports mentions; a nonempty `messageKey` confirms delivery; request body limit is 8,000 characters. Messages are grouped by supervisor and split conservatively below the limit.
+[Official KIM documentation](https://docs.qingque.cn/d/home/eZQAp6nZHEKJ5Es5_avis9bYK?identityId=1oEGOilHO1k), sections 1.1, 1.2, 2.1, 2.2, 2.3 and 3.3: text supports mentions; Markdown supports basic formatting and semantic font colors; native image messages use uploaded media IDs; a nonempty `messageKey` confirms each delivery; JSON request body limit is 8,000 characters. Markdown, PNG and mention messages are sent sequentially. A failure keeps all confirmed message keys and prevents automatic retry of the hour.
 
 Server-only Production variables:
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
-  AlertReading, KimAlertPayload, alertCycle, buildAdsAlertMessages, evaluateAdsProductivityHour,
+  AlertReading, KimAlertDeliveryPayload, alertCycle, buildAdsAlertMessages, buildAdsAlertSummary, buildAdsAlertMentions, evaluateAdsProductivityHour,
   kimAcceptedMessageKey, latestClosedAlertHour, parseAlertCycle, validateAdsAlertWebhook
 } from "@/lib/ads-productivity-alert-core";
 
@@ -134,13 +134,14 @@ const deliveryStore: AlertDeliveryStore = {
 };
 
 export async function deliverAdsAlertMessages(input: {
-  webhook: string; intervalEnd: string; messages: KimAlertPayload[];
+  webhook: string; intervalEnd: string; messages: KimAlertDeliveryPayload[];
+  prepareMessages?: () => Promise<KimAlertDeliveryPayload[]>;
   store?: AlertDeliveryStore; fetcher?: typeof fetch;
 }) {
   const webhook = validateAdsAlertWebhook(input.webhook);
   const store = input.store ?? deliveryStore;
   const fetcher = input.fetcher ?? fetch;
-  const bodies = input.messages.map((message) => JSON.stringify(message));
+  let bodies = input.messages.map((message) => JSON.stringify(message));
   if (bodies.some((body) => Buffer.byteLength(body, "utf8") > 7900)) throw new Error("KIM alert exceeds safe message size.");
   if (!bodies.length) return { sent: 0, alreadyClaimed: 0 };
   // Claim the entire hour, not page numbers: a corrected import must not change
@@ -150,6 +151,12 @@ export async function deliverAdsAlertMessages(input: {
   if (!await store.claim(deliveryKey, digest)) return { sent: 0, alreadyClaimed: 1 };
   const messageKeys: string[] = [];
   try {
+    // The hour is claimed BEFORE rendering/uploading. All image uploads must
+    // succeed before the first group message; failures cannot send a half-built card.
+    if (input.prepareMessages) {
+      bodies = (await input.prepareMessages()).map((message) => JSON.stringify(message));
+      if (!bodies.length || bodies.some((body) => Buffer.byteLength(body, "utf8") > 7900)) throw new Error("Invalid prepared ADS alert size.");
+    }
     for (let index = 0; index < bodies.length; index++) {
       const response = await fetcher(webhook, {
         method: "POST", redirect: "error", signal: AbortSignal.timeout(20_000),
@@ -178,12 +185,16 @@ export async function sendAdsProductivityAlerts(options: { dryRun?: boolean; now
   const presenceOnly = true;
   const evaluation = await readAdsProductivityAlert(options.now ?? new Date(), presenceOnly);
   if (evaluation.status === "skipped") return evaluation;
-  const { result, messages } = evaluation;
+  const { result } = evaluation;
+  const messages: KimAlertDeliveryPayload[] = result.offenders.length ? [buildAdsAlertSummary(result), ...buildAdsAlertMentions(result)] : [];
   const summary = { interval: result.interval, evaluated: result.evaluatedCount, offenders: result.offenders.length,
     excludedInvalid: result.issues.length, excludedNoPresence: result.outsideInterval, presenceOnly,
     sourceBatchIds: evaluation.sourceBatchIds };
   if (options.dryRun) return { status: "preview", ...summary, messages, issues: result.issues };
   if (!messages.length) return { status: "skipped", reason: result.evaluatedCount ? "no_offenders" : "no_valid_readings", ...summary };
-  const delivery = await deliverAdsAlertMessages({ webhook, intervalEnd: result.interval.end, messages });
+  const delivery = await deliverAdsAlertMessages({ webhook, intervalEnd: result.interval.end, messages, prepareMessages: async () => {
+    const { prepareAdsAlertDelivery } = await import("./ads-productivity-alert-kim");
+    return prepareAdsAlertDelivery(result, webhook);
+  } });
   return { status: delivery.sent ? "sent" : "already_claimed", ...summary, ...delivery };
 }
