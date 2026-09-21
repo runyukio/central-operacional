@@ -21,3 +21,4 @@ node_modules
 .kap_body.json
 .kap_auditor_body.json
 kap-downloads/
+.env*.local
