@@ -83,6 +83,8 @@ type AttritionEmployeeItem = {
   admissionDateIso?: string;
   terminationDate?: string;
   terminationDateIso?: string;
+  terminationType?: string;
+  terminationReason?: string;
   employeeStatus?: string;
 };
 
@@ -205,6 +207,7 @@ export function OperationalCommandCenter() {
   const [activePeopleError, setActivePeopleError] = useState("");
   const [selectedAttritionGroup, setSelectedAttritionGroup] = useState<{ title: string; lob?: string } | null>(null);
   const [attritionPeople, setAttritionPeople] = useState<AttritionEmployeeItem[]>([]);
+  const [canViewTerminationData, setCanViewTerminationData] = useState(false);
   const [loadingAttritionPeople, setLoadingAttritionPeople] = useState(false);
   const [attritionPeopleError, setAttritionPeopleError] = useState("");
   const [attritionExportError, setAttritionExportError] = useState("");
@@ -499,6 +502,7 @@ export function OperationalCommandCenter() {
   async function openAttritionPeople(group: { title: string; lob?: string }) {
     setSelectedAttritionGroup(group);
     setAttritionPeople([]);
+    setCanViewTerminationData(false);
     setAttritionPeopleError("");
     setAttritionExportError("");
     setLoadingAttritionPeople(true);
@@ -512,8 +516,9 @@ export function OperationalCommandCenter() {
       appendCommandFilters(params, { includeLob: false });
       if (group.lob) params.set("lob", group.lob);
       else if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
-      const payload = await apiJson<{ data: AttritionEmployeeItem[] }>(`/api/attendance?${params.toString()}`);
+      const payload = await apiJson<{ data: AttritionEmployeeItem[]; canViewTerminationData?: boolean }>(`/api/attendance?${params.toString()}`);
       setAttritionPeople(payload.data);
+      setCanViewTerminationData(payload.canViewTerminationData === true);
     } catch {
       setAttritionPeopleError("Não foi possível carregar os desligamentos deste período.");
     } finally {
@@ -954,6 +959,7 @@ export function OperationalCommandCenter() {
   const attritionPeopleRows = (records: AttritionEmployeeItem[]) => records.map((record) => [
     record.employeeName,
     record.wbLogin ?? "-",
+    ...(canViewTerminationData ? [record.terminationType || "Não informado", record.terminationReason || "Não informado"] : []),
     record.email ?? "-",
     record.lob ?? "Sem LOB",
     record.supervisor ?? "Sem supervisor",
@@ -1656,7 +1662,7 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={attritionPeopleError} />
             ) : attritionPeople.length ? (
               <SimpleTable
-                columns={["Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Cargo/Função", "Skill", "Wave", "Admissão", "Desligamento", "Status do parceiro"]}
+                columns={["Nome", "WB/Login", ...(canViewTerminationData ? ["Tipo de desligamento", "Motivo do desligamento"] : []), "E-mail", "LOB", "Supervisor", "Cargo/Função", "Skill", "Wave", "Admissão", "Desligamento", "Status do parceiro"]}
                 rows={attritionPeopleRows(attritionPeople)}
               />
             ) : (

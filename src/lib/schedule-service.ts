@@ -14,6 +14,7 @@ import {
   canAdminOverrideWorkflowScheduleStatus,
   canEditSchedule,
   canImportCronogramas,
+  canViewEmployeeSensitiveData,
   canViewSchedules,
   normalizeRole
 } from "@/lib/permissions";
@@ -1891,7 +1892,8 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       };
     }
     if (detailType === "attrition") {
-      const data = period ? await listAttritionTerminations(period, summaryFilters) : [];
+      const canViewTerminationData = canViewEmployeeSensitiveData({ role: user.role.name, status: user.status });
+      const data = period ? await listAttritionTerminations(period, summaryFilters, canViewTerminationData) : [];
       logPerformanceMetric("attendance.attrition-detail", startedAt, {
         role,
         recordsReturned: data.length,
@@ -1903,6 +1905,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       });
       return {
         data,
+        canViewTerminationData,
         summary: emptyAttendanceSummary()
       };
     }
@@ -2419,7 +2422,8 @@ export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQue
       employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined
     };
     const attrition = await getAttritionSummary(period, summaryFilters);
-    const terminations = await listAttritionTerminations(period, summaryFilters);
+    const canViewTerminationData = canViewEmployeeSensitiveData({ role: user.role.name, status: user.status });
+    const terminations = await listAttritionTerminations(period, summaryFilters, canViewTerminationData);
     const start = dateKey(period.start);
     const end = dateKey(period.end);
     const summaryRows = [attrition.total, ...attrition.byLob].map((row) => [
@@ -2435,6 +2439,7 @@ export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQue
     const terminationRows = terminations.map((employee) => [
       employee.employeeName,
       employee.wbLogin ?? "",
+      ...(canViewTerminationData ? [employee.terminationType || "Não informado", employee.terminationReason || "Não informado"] : []),
       employee.email ?? "",
       employee.lob ?? "",
       employee.supervisor ?? "Sem supervisor",
@@ -2464,7 +2469,7 @@ export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQue
       sheets: [
         {
           sheetName: "Desligados",
-          headers: ["nome", "wb_login", "email", "lob", "supervisor", "cargo_funcao", "skill", "wave", "data_admissao", "data_desligamento", "status_colaborador"],
+          headers: ["nome", "wb_login", ...(canViewTerminationData ? ["tipo_desligamento", "motivo_desligamento"] : []), "email", "lob", "supervisor", "cargo_funcao", "skill", "wave", "data_admissao", "data_desligamento", "status_colaborador"],
           rows: terminationRows
         }
       ]
@@ -3835,7 +3840,7 @@ async function getAttritionSummary(period: NonNullable<ReturnType<typeof resolve
   return { total, byLob };
 }
 
-async function listAttritionTerminations(period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>, filters: AttendanceSummaryFilters = {}) {
+async function listAttritionTerminations(period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>, filters: AttendanceSummaryFilters = {}, canViewTerminationData = false) {
   const where = await attritionEmployeeWhere(filters);
   const employees = await prisma.employeeProfile.findMany({
     where: {
@@ -3860,6 +3865,8 @@ async function listAttritionTerminations(period: NonNullable<ReturnType<typeof r
       admissionDate: true,
       terminationDate: true,
       operationalStatus: true,
+      terminationType: canViewTerminationData,
+      terminationReason: canViewTerminationData,
       user: { select: { email: true } },
       lob: { select: { name: true } },
       supervisor: { select: { fullName: true } }
@@ -3882,6 +3889,10 @@ async function listAttritionTerminations(period: NonNullable<ReturnType<typeof r
     admissionDateIso: employee.admissionDate ? dateKey(employee.admissionDate) : "",
     terminationDate: employee.terminationDate ? formatDate(employee.terminationDate) : "",
     terminationDateIso: employee.terminationDate ? dateKey(employee.terminationDate) : "",
+    ...(canViewTerminationData ? {
+      terminationType: employee.terminationType?.trim() || "Não informado",
+      terminationReason: employee.terminationReason?.trim() || "Não informado"
+    } : {}),
     employeeStatus: employee.operationalStatus
   }));
 }
