@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/realtime-cycle-monitor",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/realtime-hours-archive",
       "schedule": "15 * * * *"
     },
