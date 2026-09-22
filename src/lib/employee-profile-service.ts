@@ -52,8 +52,7 @@ export async function searchEmployeeProfiles(actor: Actor, query: string, limit 
       { skill: { contains: q, mode: "insensitive" } },
       { wave: { contains: q, mode: "insensitive" } },
       { user: { email: { contains: q, mode: "insensitive" } } },
-      { lob: { name: { contains: q, mode: "insensitive" } } },
-      { supervisor: { fullName: { contains: q, mode: "insensitive" } } }
+      { lob: { name: { contains: q, mode: "insensitive" } } }
     ]
   };
 
