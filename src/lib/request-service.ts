@@ -9,6 +9,7 @@ import {
   updateRequestStatus as updateMockRequestStatus
 } from "@/lib/mock-db";
 import { applyApprovedMonthlyAdvanceChange, isMonthlyAdvanceRequestPayload } from "@/lib/monthly-advance-service";
+import { MONTHLY_ADVANCE_ENDED_MESSAGE, isMonthlyAdvanceReferenceMonthAvailable, isMonthlyAdvanceRequestPeriodOpen } from "@/lib/monthly-advance-constants";
 import { roleHasCapability } from "@/lib/access-control";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
@@ -2031,6 +2032,7 @@ function validateCreateInput(input: CreateRequestInput) {
 
   if (isMonthlyAdvanceRequest(input)) {
     if (!input.monthlyAdvanceReferenceMonth?.trim()) return "Mês de referência é obrigatório.";
+    if (!isMonthlyAdvanceReferenceMonthAvailable(input.monthlyAdvanceReferenceMonth) || !isMonthlyAdvanceRequestPeriodOpen()) return MONTHLY_ADVANCE_ENDED_MESSAGE;
     if (typeof input.requestedAdvanceOptIn !== "boolean") return "Novo status solicitado do adiantamento é obrigatório.";
     if (!input.description.trim()) return "Motivo é obrigatório.";
   }

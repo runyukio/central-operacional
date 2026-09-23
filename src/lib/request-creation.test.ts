@@ -103,3 +103,17 @@ for (const input of inputs) {
     assert.equal(notification.create.mock.callCount(), 0);
   });
 }
+
+test("não permite solicitação de adiantamento para novembro/2026", async () => {
+  const result = await createOperationalRequest(actor, {
+    type: "Alteração de Adiantamento",
+    title: "Alteração de Adiantamento",
+    priority: "Média",
+    description: "Alteração solicitada para novembro",
+    monthlyAdvanceReferenceMonth: "2026-11",
+    requestedAdvanceOptIn: true
+  });
+
+  assert.ok("error" in result);
+  assert.match(result.error ?? "", /somente até outubro\/2026/);
+});

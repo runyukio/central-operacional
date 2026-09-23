@@ -6,6 +6,7 @@ import { TopActions } from "@/components/layout/app-shell";
 import { EmptyState, PageHeader, Panel, PriorityBadge, SimpleTable, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { cn, initials } from "@/lib/utils";
 import { standardShiftNames } from "@/lib/shift-display";
+import { isMonthlyAdvanceRequestPeriodOpen } from "@/lib/monthly-advance-constants";
 import { ClientRequest, CoverageImpactBadge, CoverageWarningDialog, CoverageWarningDialogState, DayOffKind, FormInput, FormSelect, RequestDetailContent, apiJson, coverageImpactFromError, dayOffKindFromRequest, dayOffKindLabels, getRequestIcon, offsetOperationalDateInput, queryParam, requestPriorities, requestStatuses, requestTypes } from './shared';
 type RequestListResponse = {
   data: ClientRequest[];
@@ -171,7 +172,7 @@ function RequestCreateModal({
               }}
               className="h-11 w-full rounded-lg border border-border px-3 outline-none"
             >
-              {requestTypes.map((type) => (
+              {requestTypes.filter((type) => type !== "Alteração de Adiantamento" || isMonthlyAdvanceRequestPeriodOpen()).map((type) => (
                 <option key={type}>{type}</option>
               ))}
             </select>
