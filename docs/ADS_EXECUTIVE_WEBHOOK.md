@@ -79,7 +79,7 @@ O Forecast vem da base de Performance e a necessidade de HC vem da necessidade h
 
 ## ADS Online Productivity
 
-O segundo report usa apenas os agentes ADS considerados online pelo mesmo criterio do Executive: presenca online, presenca no cronograma ou atividade no intervalo atual.
+O segundo report usa a mesma hora completa, os mesmos ciclos validos de cinco em cinco minutos e os mesmos agentes ADS com submit positivo do alerta de produtividade. Os nomes e as metricas do intervalo vem dessa leitura compartilhada; skill e acumulado do turno usam o Real Time apenas como complemento. Quem esta abaixo dos dois limites aparece no alerta; a imagem de produtividade lista todos os agentes com submit positivo.
 
 A imagem inclui:
 
@@ -90,7 +90,7 @@ A imagem inclui:
 - comparacao percentual com o intervalo anterior;
 - submit acumulado no shift date e AHT medio de cada agente.
 
-O endpoint do cron e `/api/cron/ads-online-productivity-report` e o agendamento em `vercel.json` e `58 * * * *`.
+O endpoint do cron e `/api/cron/ads-online-productivity-report` e o agendamento em `vercel.json` e `3 * * * *`, assim como o alerta. Se a hora nao estiver completa, a imagem nao e enviada.
 
 ## TNS Online Productivity
 

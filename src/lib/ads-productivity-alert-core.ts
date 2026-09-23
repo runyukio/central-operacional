@@ -24,6 +24,8 @@ export type AlertReading = {
 export type AlertAgent = Pick<AlertReading, "employeeId" | "name" | "wbLogin" | "supervisorId" | "supervisorName" | "supervisorWb"> & {
   submit: number;
   moderationMs: number;
+  cumulativeSubmit: number;
+  cumulativeModerationMs: number;
 };
 
 export function alertCycle(timestamp: number) {
@@ -113,11 +115,12 @@ export function evaluateAdsProductivityHour(
       outsideInterval++; continue;
     }
     evaluated.push({ employeeId, name: current.name, wbLogin: current.wbLogin, supervisorId: current.supervisorId,
-      supervisorName: current.supervisorName, supervisorWb: current.supervisorWb, submit, moderationMs });
+      supervisorName: current.supervisorName, supervisorWb: current.supervisorWb, submit, moderationMs,
+      cumulativeSubmit: current.submit!, cumulativeModerationMs: current.moderationMs! });
   }
   const offenders = evaluated.filter((row) => row.submit > 0 && row.submit < ADS_ALERT_RULE.submitBelow && row.moderationMs < ADS_ALERT_RULE.moderationBelowMs)
     .sort((a, b) => (a.supervisorName ?? "").localeCompare(b.supervisorName ?? "") || a.moderationMs - b.moderationMs || a.submit - b.submit || a.wbLogin.localeCompare(b.wbLogin));
-  return { interval, evaluatedCount: evaluated.length, offenders, issues, outsideInterval };
+  return { interval, evaluated, evaluatedCount: evaluated.length, offenders, issues, outsideInterval };
 }
 
 function safeText(value: string | null, limit = 100) {

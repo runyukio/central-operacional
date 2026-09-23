@@ -6,6 +6,7 @@ import {
   type ParsedExecutiveCycle
 } from "@/lib/ads-executive-report-core";
 import { baseTimesForShift } from "@/lib/shift-base-times";
+import { parseAlertCycle, type AdsAlertResult } from "@/lib/ads-productivity-alert-core";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -17,11 +18,11 @@ export type AdsOnlineProductivityAgentRow = {
   wbLogin: string;
   skill: string | null;
   currentSubmit: number;
-  previousSubmit: number;
+  previousSubmit: number | null;
   comparisonPercent: number | null;
-  comparison: "up" | "down" | "equal" | "new";
-  shiftTotal: number;
-  shiftModerationMs: number;
+  comparison: "up" | "down" | "equal" | "new" | "unavailable";
+  shiftTotal: number | null;
+  shiftModerationMs: number | null;
   ahtMs: number | null;
   moderationMs: number;
 };
@@ -44,13 +45,13 @@ export type AdsOnlineProductivityReportSnapshot = {
   productiveAgentCount: number;
   averageSubmitPerHour: number;
   currentIntervalSubmit: number;
-  previousIntervalSubmit: number;
+  previousIntervalSubmit: number | null;
   submitComparisonPercent: number | null;
   currentIntervalAhtMs: number | null;
   currentIntervalModerationMs: number;
   previousIntervalAhtMs: number | null;
   ahtDeltaMs: number | null;
-  totalShiftSubmit: number;
+  totalShiftSubmit: number | null;
   skillAverages: AdsOnlineProductivitySkillAverage[];
   rows: AdsOnlineProductivityAgentRow[];
 };
@@ -70,6 +71,98 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   selectedCycle: string;
 }): AdsOnlineProductivityReportSnapshot {
   return buildOnlineProductivityReportSnapshot({ ...input, reportScope: "ADS" });
+}
+
+// The ADS image and hourly alert use the same validated five-minute readings.
+// Real Time's half-hour view only enriches skill and shift totals; it never
+// decides the hour, the agent population, names, or interval metrics.
+export function buildAdsOnlineProductivityReportFromAlert(input: {
+  current: AdsAlertResult;
+  previous: AdsAlertResult | null;
+  agentRows: AdsExecutiveAgentRow[];
+}): AdsOnlineProductivityReportSnapshot {
+  const start = parseAlertCycle(input.current.interval.start);
+  const end = parseAlertCycle(input.current.interval.end);
+  const previousStart = start - HOUR_MS;
+  const previousEnd = start;
+  const metadata = new Map<string, AdsExecutiveAgentRow | null>();
+  for (const row of input.agentRows) {
+    const key = comparableWb(row.wbLogin || row.rawWbLogin);
+    if (!key) continue;
+    metadata.set(key, metadata.has(key) ? null : row);
+  }
+  const previousById = new Map(input.previous?.evaluated.map((row) => [row.employeeId, row]) ?? []);
+  const rows: AdsOnlineProductivityAgentRow[] = input.current.evaluated.filter((row) => row.submit > 0).map((row) => {
+    const match = metadata.get(comparableWb(row.wbLogin)) ?? null;
+    const prior = input.previous ? previousById.get(row.employeeId) : null;
+    const previousSubmit = prior?.submit ?? null;
+    const change = previousSubmit === null ? null : percentChange(row.submit, previousSubmit);
+    const history = match ? parseHistory(match, end - 1) : [];
+    const finalHistory: ParsedHistory[] = [...history, {
+      cycleDownload: input.current.interval.end,
+      submit: row.cumulativeSubmit,
+      moderationMs: row.cumulativeModerationMs,
+      ahtMs: null,
+      parsed: parseAdsExecutiveCycle(input.current.interval.end)
+    }];
+    const shift = match ? shiftMetric(finalHistory, match.shift, end) : null;
+    const shiftTotal = shift?.hasSnapshot ? shift.submit : null;
+    const shiftModerationMs = shift?.hasSnapshot ? shift.moderationMs : null;
+    return {
+      name: row.name || row.wbLogin || "Unknown agent",
+      wbLogin: row.wbLogin || "-",
+      skill: reportableSkill(match?.skill),
+      currentSubmit: row.submit,
+      previousSubmit,
+      comparisonPercent: change,
+      comparison: previousSubmit === null ? "unavailable" : comparisonTone(row.submit, previousSubmit, change),
+      shiftTotal,
+      shiftModerationMs,
+      ahtMs: shiftTotal && shiftModerationMs ? shiftModerationMs / shiftTotal : row.moderationMs / row.submit,
+      moderationMs: row.moderationMs
+    };
+  }).sort((left, right) => right.currentSubmit - left.currentSubmit
+    || (right.shiftTotal ?? 0) - (left.shiftTotal ?? 0) || left.name.localeCompare(right.name));
+  const currentSubmit = sum(rows, (row) => row.currentSubmit);
+  const currentModerationMs = sum(rows, (row) => row.moderationMs);
+  const completeComparison = Boolean(input.previous) && rows.every((row) => row.previousSubmit !== null);
+  const previousSubmit = completeComparison ? sum(rows, (row) => row.previousSubmit ?? 0) : null;
+  const previousModerationMs = completeComparison
+    ? sum(input.current.evaluated.filter((agent) => agent.submit > 0), (agent) => previousById.get(agent.employeeId)?.moderationMs ?? 0)
+    : null;
+  const averageSubmitPerHour = weightedAverage(rows, (row) => row.currentSubmit, (row) => row.currentSubmit);
+  const previousAverage = completeComparison
+    ? weightedAverage(rows, (row) => row.previousSubmit ?? 0, (row) => row.previousSubmit ?? 0)
+    : null;
+  const currentAhtMs = currentSubmit > 0 ? currentModerationMs / currentSubmit : null;
+  const previousAhtMs = previousSubmit && previousModerationMs !== null ? previousModerationMs / previousSubmit : null;
+  const dateKey = input.current.interval.start.slice(0, 10);
+  return {
+    reportScope: "ADS",
+    selectedCycle: input.current.interval.end,
+    dateKey,
+    dateLabel: formatDateLabel(dateKey),
+    currentHourLabel: `${input.current.interval.start.slice(11, 13)}H`,
+    previousHourLabel: `${String(new Date(previousStart).getUTCHours()).padStart(2, "0")}H`,
+    intervalLabel: formatInterval(start, end),
+    previousIntervalLabel: formatInterval(previousStart, previousEnd),
+    productiveAgentCount: rows.length,
+    averageSubmitPerHour,
+    currentIntervalSubmit: currentSubmit,
+    previousIntervalSubmit: previousSubmit,
+    submitComparisonPercent: previousAverage === null ? null : percentChange(averageSubmitPerHour, previousAverage),
+    currentIntervalAhtMs: currentAhtMs,
+    currentIntervalModerationMs: currentModerationMs,
+    previousIntervalAhtMs: previousAhtMs,
+    ahtDeltaMs: currentAhtMs !== null && previousAhtMs !== null ? currentAhtMs - previousAhtMs : null,
+    totalShiftSubmit: rows.every((row) => row.shiftTotal !== null) ? sum(rows, (row) => row.shiftTotal ?? 0) : null,
+    skillAverages: buildSkillAverages(rows),
+    rows
+  };
+}
+
+function comparableWb(value: string | null | undefined) {
+  return String(value ?? "").trim().toLowerCase().replace(/\s+/g, "");
 }
 
 export function buildTnsOnlineProductivityReportSnapshot(input: {
@@ -155,8 +248,8 @@ function buildOnlineProductivityReportSnapshot(input: {
   );
   const previousAverageSubmitPerHour = weightedAverage(
     rows,
-    (row) => row.previousSubmit,
-    (row) => row.previousSubmit
+    (row) => row.previousSubmit ?? 0,
+    (row) => row.previousSubmit ?? 0
   );
 
   return {
@@ -182,7 +275,7 @@ function buildOnlineProductivityReportSnapshot(input: {
     ahtDeltaMs: currentIntervalAhtMs !== null && previousIntervalAhtMs !== null
       ? currentIntervalAhtMs - previousIntervalAhtMs
       : null,
-    totalShiftSubmit: sum(rows, (row) => row.shiftTotal),
+    totalShiftSubmit: sum(rows, (row) => row.shiftTotal ?? 0),
     skillAverages: buildSkillAverages(rows),
     rows
   };

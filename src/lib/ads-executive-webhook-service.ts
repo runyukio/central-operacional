@@ -16,11 +16,12 @@ import {
 } from "@/lib/ads-executive-report-core";
 import { renderAdsExecutiveReportPng } from "@/lib/ads-executive-report-image";
 import {
-  buildAdsOnlineProductivityReportSnapshot,
+  buildAdsOnlineProductivityReportFromAlert,
   buildTnsOnlineProductivityReportSnapshot,
   type OnlineProductivityReportScope
 } from "@/lib/ads-online-productivity-report-core";
 import { renderAdsOnlineProductivityReportPng } from "@/lib/ads-online-productivity-report-image";
+import { readAdsProductivityAlert } from "@/lib/ads-productivity-alert-service";
 import { onlineProductivityPageDelivery, paginateOnlineProductivityReport } from "@/lib/online-productivity-report-pages";
 import { loadExecutiveForecast, loadExecutiveForecastRange } from "@/lib/executive-forecast-service";
 import { prisma } from "@/lib/prisma";
@@ -144,20 +145,32 @@ async function sendLatestOnlineProductivityReport(config: OnlineProductivityWebh
   const webhookUrl = resolveWebhookUrl(config.webhookConfig);
   if (!webhookUrl) throw new Error(`${config.webhookConfig.envPrefix}_URL is not configured.`);
 
-  const realtime = await getRealtimeSnapshot(automationActor, { view: "both" });
+  const now = new Date();
+  const [realtime, adsHour, previousAdsHour] = await Promise.all([
+    getRealtimeSnapshot(automationActor, { view: "both" }),
+    config.reportScope === "ADS" ? readAdsProductivityAlert(now) : Promise.resolve(null),
+    config.reportScope === "ADS" ? readAdsProductivityAlert(new Date(now.getTime() - 3_600_000)) : Promise.resolve(null)
+  ]);
   if ("error" in realtime && realtime.error) throw new Error(realtime.error);
   const data = "data" in realtime ? realtime.data : null;
-  const selectedCycle = data?.agents.selectedCycle || data?.queueView.selectedCycle;
-  if (!data?.summary.hasData || !selectedCycle) {
+  if (config.reportScope === "ADS" && adsHour?.status !== "ready") {
+    throw new Error("The completed ADS hour is not fully available; the image was not sent.");
+  }
+  const selectedCycle = config.reportScope === "ADS" && adsHour?.status === "ready"
+    ? adsHour.result.interval.end
+    : data?.agents.selectedCycle || data?.queueView.selectedCycle;
+  if (!selectedCycle || (config.reportScope === "TNS" && !data?.summary.hasData)) {
     throw new Error(`There is no valid Real Time snapshot for the ${config.reportScope} online productivity report.`);
   }
 
   const reportInput = {
     selectedCycle,
-    agentRows: mapAgentRows(data.agents.rows)
+    agentRows: data?.agents.rows ? mapAgentRows(data.agents.rows) : []
   };
-  const report = config.reportScope === "ADS"
-    ? buildAdsOnlineProductivityReportSnapshot(reportInput)
+  const report = config.reportScope === "ADS" && adsHour?.status === "ready"
+    ? buildAdsOnlineProductivityReportFromAlert({ current: adsHour.result,
+      previous: previousAdsHour?.status === "ready" ? previousAdsHour.result : null,
+      agentRows: reportInput.agentRows })
     : buildTnsOnlineProductivityReportSnapshot(reportInput);
   const pages = paginateOnlineProductivityReport(report);
   const baseFileName = `${config.filePrefix}_${safeFilePart(selectedCycle)}.png`;

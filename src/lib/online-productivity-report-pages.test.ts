@@ -79,7 +79,8 @@ function simulatedDelivery(report: AdsOnlineProductivityReportSnapshot, failPage
   const subject = vm.runInNewContext(ts.transpileModule(`const subject = (${declaration.getText(source)}); subject;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
     Buffer, Date, Error, isWebhookEnabled: () => true, resolveWebhookUrl: () => "https://mock.invalid",
     getRealtimeSnapshot: async () => ({ data: { agents: { selectedCycle: report.selectedCycle, rows: [] }, queueView: {}, summary: { hasData: true } } }),
-    automationActor: {}, mapAgentRows: () => [], buildAdsOnlineProductivityReportSnapshot: () => report, buildTnsOnlineProductivityReportSnapshot: () => report,
+    readAdsProductivityAlert: async () => ({ status: "ready", result: { interval: { end: report.selectedCycle } } }),
+    automationActor: {}, mapAgentRows: () => [], buildAdsOnlineProductivityReportFromAlert: () => report, buildTnsOnlineProductivityReportSnapshot: () => report,
     paginateOnlineProductivityReport, onlineProductivityPageDelivery, safeFilePart: () => "cycle", resolvePayloadMode: () => "kwaitalk", resolveWebhookToken: () => "mock", resolveTimeoutMs: () => 100,
     renderAdsOnlineProductivityReportPng: async (snapshot: AdsOnlineProductivityReportSnapshot, page: { pageNumber: number }) => { events.push(`render:${page.pageNumber}`); renderedRows.push(...snapshot.rows.map((row) => row.wbLogin)); return Buffer.from("mock-png"); },
     publishKwaiTalkImage: async (_: Buffer, name: string) => { events.push(`upload:${name}`); return `https://mock.invalid/${name}`; },

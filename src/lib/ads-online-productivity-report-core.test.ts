@@ -2,10 +2,68 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { AdsExecutiveAgentRow } from "./ads-executive-report-core";
+import type { AdsAlertResult, AlertAgent } from "./ads-productivity-alert-core";
 import {
+  buildAdsOnlineProductivityReportFromAlert,
   buildAdsOnlineProductivityReportSnapshot,
   buildTnsOnlineProductivityReportSnapshot
 } from "./ads-online-productivity-report-core";
+
+function alertAgent(employeeId: string, name: string, wbLogin: string, submit: number, moderationMs: number, cumulativeSubmit = submit): AlertAgent {
+  return { employeeId, name, wbLogin, supervisorId: null, supervisorName: null, supervisorWb: null,
+    submit, moderationMs, cumulativeSubmit, cumulativeModerationMs: cumulativeSubmit * 60_000 };
+}
+
+function alertResult(start: string, middle: string, end: string, evaluated: AlertAgent[]): AdsAlertResult {
+  return { interval: { start, middle, end }, evaluated, evaluatedCount: evaluated.length,
+    offenders: evaluated.filter((row) => row.submit > 0 && row.submit < 35 && row.moderationMs < 45 * 60_000),
+    issues: [], outsideInterval: 0 };
+}
+
+test("ADS image uses the same completed hour, names and agent set as the alert", () => {
+  const current = alertResult("2026-09-23 13:00", "2026-09-23 13:30", "2026-09-23 14:00", [
+    alertAgent("id-1", "Current Rita", "WB_RITA", 60, 54 * 60_000, 70),
+    alertAgent("id-2", "Pedro Andrade", "wb_pedro", 21, 34 * 60_000, 30),
+    alertAgent("id-3", "Zero submit", "wb_zero", 0, 0, 0)
+  ]);
+  const previous = alertResult("2026-09-23 12:00", "2026-09-23 12:30", "2026-09-23 13:00", [
+    alertAgent("id-1", "Old Rita", "wb_rita", 40, 35 * 60_000, 200),
+    alertAgent("id-2", "Pedro Andrade", "wb_pedro", 10, 9 * 60_000, 10)
+  ]);
+  const report = buildAdsOnlineProductivityReportFromAlert({ current, previous, agentRows: [
+    agent({ name: "Old Rita", wbLogin: "wb_rita", skill: "Material Queues", shift: "Manhã", history: [
+      history("2026-09-23 07:30", 100, 60_000), history("2026-09-23 08:00", 100, 60_000),
+      history("2026-09-23 12:30", 180, 60_000), history("2026-09-23 13:30", 40, 60_000)
+    ] })
+  ] });
+  assert.equal(report.intervalLabel, "13:00–14:00");
+  assert.equal(report.previousIntervalLabel, "12:00–13:00");
+  assert.deepEqual(report.rows.map((row) => row.name), ["Current Rita", "Pedro Andrade"]);
+  assert.deepEqual(report.rows.map((row) => row.currentSubmit), [60, 21]);
+  assert.deepEqual(report.rows.map((row) => row.previousSubmit), [40, 10]);
+  assert.deepEqual(report.rows.map((row) => row.moderationMs), [54 * 60_000, 34 * 60_000]);
+  assert.equal(report.rows[0].skill, "Material Queues");
+  assert.equal(report.rows[0].shiftTotal, 150);
+  assert.equal(report.rows[1].shiftTotal, null);
+  assert.equal(report.totalShiftSubmit, null);
+  assert.equal(report.currentIntervalSubmit, 81);
+  assert.equal(report.previousIntervalSubmit, 50);
+  assert.deepEqual(current.offenders.map((row) => row.employeeId), ["id-2"]);
+});
+
+test("ADS image keeps midnight on the shift date and does not invent a missing previous hour", () => {
+  const current = alertResult("2026-09-23 23:00", "2026-09-23 23:30", "2026-09-24 00:00", [
+    alertAgent("id-night", "Night agent", "wb_night", 24, 30 * 60_000, 124)
+  ]);
+  const report = buildAdsOnlineProductivityReportFromAlert({ current, previous: null, agentRows: [] });
+  assert.equal(report.dateKey, "2026-09-23");
+  assert.equal(report.intervalLabel, "23:00–00:00");
+  assert.equal(report.previousIntervalLabel, "22:00–23:00");
+  assert.equal(report.rows[0].previousSubmit, null);
+  assert.equal(report.rows[0].comparison, "unavailable");
+  assert.equal(report.previousIntervalSubmit, null);
+  assert.equal(report.submitComparisonPercent, null);
+});
 
 test("builds the ADS online productivity ranking with hourly and shift metrics", () => {
   const report = buildAdsOnlineProductivityReportSnapshot({

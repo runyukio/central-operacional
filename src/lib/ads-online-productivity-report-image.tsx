@@ -79,7 +79,7 @@ export function AdsOnlineProductivityReportImage({ report, page }: { report: Ads
         <KpiCard
           label="AVG SUBMIT / HOUR / AGENT"
           value={formatInteger(report.averageSubmitPerHour)}
-          comparison={<SubmitComparison percent={report.submitComparisonPercent} />}
+          comparison={<SubmitComparison percent={report.submitComparisonPercent} unavailable={report.previousIntervalSubmit === null} />}
         />
         <KpiCard
           label={report.reportScope === "TNS" ? "AVG AHT · VIDEO 15M" : "AVG AHT"}
@@ -123,8 +123,8 @@ export function AdsOnlineProductivityReportImage({ report, page }: { report: Ads
   );
 }
 
-export function formatModerationHours(value: number) {
-  if (!Number.isFinite(value) || value < 0) return "N/A";
+export function formatModerationHours(value: number | null) {
+  if (value === null || !Number.isFinite(value) || value < 0) return "N/A";
   const minutes = Math.round(value / 60_000);
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
@@ -167,7 +167,10 @@ function SkillAverageCards({ report }: { report: AdsOnlineProductivityReportSnap
   );
 }
 
-function SubmitComparison({ percent }: { percent: number | null }) {
+function SubmitComparison({ percent, unavailable }: { percent: number | null; unavailable?: boolean }) {
+  if (unavailable) {
+    return <span style={{ color: MUTED, display: "flex", fontSize: 17, fontWeight: 700 }}>Previous hour unavailable</span>;
+  }
   if (percent === null) {
     return <span style={{ color: BLUE, display: "flex", fontSize: 17, fontWeight: 900 }}>New activity vs. previous hour</span>;
   }
@@ -311,6 +314,9 @@ function LegendItem({ icon, label }: { icon: string; label: string }) {
 }
 
 function comparisonPresentation(row: AdsOnlineProductivityAgentRow) {
+  if (row.comparison === "unavailable") {
+    return { background: "#F1F5F9", color: MUTED, icon: ICONS.minus, label: "N/A" };
+  }
   if (row.comparison === "new") {
     return {
       background: "#DBEAFE",

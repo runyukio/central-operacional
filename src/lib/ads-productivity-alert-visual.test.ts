@@ -9,10 +9,12 @@ import { deliverAdsAlertMessages, type AlertDeliveryStore } from "./ads-producti
 
 const webhook = "https://kim-robot.kwaitalk.com/api/robot/send?key=test-only";
 function sample(count = 11, supervisors = 2): AdsAlertResult {
-  return { interval: { start: "2026-09-21 14:00", middle: "2026-09-21 14:30", end: "2026-09-21 15:00" }, evaluatedCount: count,
-    offenders: Array.from({ length: count }, (_, index) => ({ employeeId: `agent-${index}`, name: `Agente ${index}`, wbLogin: `wb_agent${index}`,
+  const offenders = Array.from({ length: count }, (_, index) => ({ employeeId: `agent-${index}`, name: `Agente ${index}`, wbLogin: `wb_agent${index}`,
       supervisorId: `supervisor-${Math.floor(index / Math.ceil(count / supervisors))}`, supervisorName: `Supervisor ${Math.floor(index / Math.ceil(count / supervisors))}`,
-      supervisorWb: `wb_sup${Math.floor(index / Math.ceil(count / supervisors))}`, submit: index % 34 + 1, moderationMs: (index % 44) * 60_000 + 35_000 })),
+      supervisorWb: `wb_sup${Math.floor(index / Math.ceil(count / supervisors))}`, submit: index % 34 + 1, moderationMs: (index % 44) * 60_000 + 35_000,
+      cumulativeSubmit: index % 34 + 1, cumulativeModerationMs: (index % 44) * 60_000 + 35_000 }));
+  return { interval: { start: "2026-09-21 14:00", middle: "2026-09-21 14:30", end: "2026-09-21 15:00" }, evaluatedCount: count,
+    evaluated: offenders, offenders,
     issues: [], outsideInterval: 0 };
 }
 

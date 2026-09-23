@@ -1,6 +1,6 @@
 # ADS hourly productivity alerts
 
-Independent of the existing image reports. Runs at minute 03 of every hour in production (`/api/cron/ads-productivity-alerts`). The endpoint bypasses interactive session middleware, requires `CRON_SECRET` itself, and returns no cached response.
+Runs at minute 03 of every hour in production (`/api/cron/ads-productivity-alerts`). The ADS online productivity image uses the same completed hour, validated five-minute readings, and positive-submit agent cohort; its separate delivery remains independent. The endpoint bypasses interactive session middleware, requires `CRON_SECRET` itself, and returns no cached response.
 
 ## Confirmed rule
 
