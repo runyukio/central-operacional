@@ -7,7 +7,7 @@ import { EmptyState, MetricPill, PageHeader, Panel, StatusBadge } from "@/compon
 import { cn } from "@/lib/utils";
 import { cleanShiftName, isSelectableShiftName, standardShiftNames } from "@/lib/shift-display";
 import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours } from "@/lib/work-hours-rules";
-import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
+import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceRequestPeriodOpen } from "@/lib/monthly-advance-constants";
 import { AdditionalRegistrationDataResponse, ClientRequest, CoverageWarningDialog, CoverageWarningDialogState, DayOffKind, FormInput, FormSelect, InfoLine, MonthlyAdvanceRecordClient, RequestDetailContent, SystemSettings, WorkHourRow, WorkHourSummary, apiJson, coverageImpactFromError, currencyFormatter, currentOperationalDateInput, currentOperationalMonth, dateInputFromParts, dayOffKindFromRequest, dayOffKindLabels, formatHourDifference, formatWorkHourSummaryDifference, formatWorkHourValue, getRequestIcon, monthRange, moodOptionForScore, normalizeMoodScoreForUi, offsetOperationalDateInput, operationalDateFromParts, operationalMoodOptions, requestPriorities, requestStatuses, requestTypes, scheduleMonthFormatter, shiftTagClass, statusFromScheduleCell } from './shared';
 const dayOffOptions: Array<{ kind: DayOffKind; title: string; description: string }> = [
   { kind: "DAY_OFF_SWAP", title: "Trocar folga", description: "Mover uma folga para outra data já programada." },
@@ -550,7 +550,7 @@ export function MySchedulePage() {
     : dayOffForm.kind === "DAY_OFF_SELL"
       ? "Enviar venda de folga"
       : "Enviar solicitação de dia de folga";
-  const shouldShowMonthlyAdvancePanel = monthlyAdvanceBlockedReason !== "TRAINING_STATUS";
+  const shouldShowMonthlyAdvancePanel = isMonthlyAdvanceRequestPeriodOpen() && !["TRAINING_STATUS", "ENDED"].includes(monthlyAdvanceBlockedReason);
 
   function moveMyScheduleMonth(delta: number) {
     setMySchedulePeriod((current) => {

@@ -7,6 +7,7 @@ import {
   MONTHLY_ADVANCE_ENDED_MESSAGE,
   MONTHLY_ADVANCE_FIXED_AMOUNT,
   isMonthlyAdvanceReferenceMonthAvailable,
+  isMonthlyAdvanceRequestPeriodOpen,
   monthlyAdvanceAmountForOptIn
 } from "@/lib/monthly-advance-constants";
 import { prisma } from "@/lib/prisma";
@@ -388,7 +389,7 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   const today = new Date();
   const months = employeeMonthlyAdvanceCycleMonths(today);
   if (!months.length) {
-    return { data: [], message: MONTHLY_ADVANCE_ENDED_MESSAGE };
+    return { data: [], message: MONTHLY_ADVANCE_ENDED_MESSAGE, blockedReason: "ENDED" };
   }
   const records = await prisma.monthlyAdvanceRecord.findMany({
     where: { employeeId: employee.id, referenceMonth: { in: months }, status: { not: "REMOVED" } },
@@ -430,7 +431,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
-  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth) || !isMonthlyAdvanceRequestPeriodOpen()) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
   const today = new Date();
   if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
@@ -815,7 +816,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
-  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth) || !isMonthlyAdvanceRequestPeriodOpen()) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
   if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
   }

@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { Coins } from "lucide-react";
 import { EmptyState, MetricPill, PageHeader, Panel, SimpleTable, StatusBadge } from "@/components/ui/primitives";
 import { canEditAdvanceRecords } from "@/lib/permissions";
-import { MONTHLY_ADVANCE_ENDED_MESSAGE, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
+import { MONTHLY_ADVANCE_ENDED_MESSAGE, MONTHLY_ADVANCE_LAST_REFERENCE_MONTH, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { FormInput, IMPORT_PREVIEW_ROW_LIMIT, ImportIssueSummary, MonthlyAdvanceRecordClient, SystemSettings, apiJson, currencyFormatter, currentOperationalMonthInput, downloadFile } from './shared';
 type MonthlyAdvanceListResponse = {
   data: MonthlyAdvanceRecordClient[];
@@ -60,7 +60,10 @@ export function AdvanceManagementPage() {
   const [message, setMessage] = useState("");
   const [advanceRows, setAdvanceRows] = useState<MonthlyAdvanceRecordClient[]>([]);
   const [advanceSummary, setAdvanceSummary] = useState<MonthlyAdvanceListResponse["summary"] | null>(null);
-  const [advanceReferenceMonth, setAdvanceReferenceMonth] = useState(() => currentOperationalMonthInput());
+  const [advanceReferenceMonth, setAdvanceReferenceMonth] = useState(() => {
+    const currentMonth = currentOperationalMonthInput();
+    return currentMonth <= MONTHLY_ADVANCE_LAST_REFERENCE_MONTH ? currentMonth : MONTHLY_ADVANCE_LAST_REFERENCE_MONTH;
+  });
   const [lobFilter, setLobFilter] = useState("Todos");
   const [supervisorFilter, setSupervisorFilter] = useState("Todos");
   const [advanceOptInFilter, setAdvanceOptInFilter] = useState("Todos");
