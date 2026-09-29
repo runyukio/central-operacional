@@ -23,6 +23,7 @@ import {
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursShiftActivityHours } from "@/lib/realtime-hours-service";
+import { loadWorkHourExportCapture } from "@/lib/work-hours-export-capture";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
 import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
@@ -841,9 +842,9 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
       orderBy: { id: "asc" }, take: workHourExportBatchSize, include: workHourReadInclude
     });
     if (!records.length) break;
-    const capturedHours = await workHourReadData.capturedHours(records.map((record) => ({
+    const capturedHours = await loadWorkHourExportCapture(records.map((record) => ({
       key: record.id, employeeId: record.employeeId, wbLogin: record.wbLogin, shiftDate: record.date
-    })));
+    })), workHourReadData.capturedHours);
     data.push(...records.map((record) => formatWorkHourRecord(record, toWorkHourRecordViewer(user), capturedHours.get(record.id) ?? 0)));
     if (data.length > workHourExportMaxRows) {
       return { error: "A seleção excedeu o limite seguro de exportação. Divida o período e tente novamente.", status: 413 };

@@ -102,6 +102,8 @@ export function WorkHoursPage() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [exportingWorkHours, setExportingWorkHours] = useState(false);
+  const exportingWorkHoursRef = useRef(false);
   const [preview, setPreview] = useState<(WorkHourPreview & { fileName: string }) | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [savingImport, setSavingImport] = useState(false);
@@ -435,6 +437,22 @@ export function WorkHoursPage() {
     }
   }
 
+  async function exportWorkHours() {
+    if (exportingWorkHoursRef.current) return;
+    exportingWorkHoursRef.current = true;
+    setExportingWorkHours(true);
+    setMessage("");
+    try {
+      await downloadFile(exportUrl(), `horas_operacionais_${filters.startDate}_${filters.endDate}.xlsx`,
+        "Não foi possível exportar as horas. Tente novamente ou selecione um período menor.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível exportar as horas.");
+    } finally {
+      exportingWorkHoursRef.current = false;
+      setExportingWorkHours(false);
+    }
+  }
+
   function exportUrl() {
     const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
     if (filters.lob !== "Todos") params.set("lob", filters.lob);
@@ -485,10 +503,10 @@ export function WorkHoursPage() {
               </button>
             ) : null}
             {canViewWorkHours(permissionUser) ? (
-              <a href={exportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+              <button type="button" onClick={() => void exportWorkHours()} disabled={exportingWorkHours} aria-busy={exportingWorkHours} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-wait disabled:opacity-60">
                 <FileText className="h-4 w-4" />
-                Exportar XLSX
-              </a>
+                {exportingWorkHours ? "Exportando..." : "Exportar XLSX"}
+              </button>
             ) : null}
           </div>
         }

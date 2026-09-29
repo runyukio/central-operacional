@@ -5,7 +5,23 @@ import { errorStatus } from "@/lib/api-errors";
 import { exportOperationalWorkHoursXlsxData } from "@/lib/work-hours-service";
 import { buildXlsxResponse } from "@/lib/xlsx-export";
 
+export const maxDuration = 300;
+
 export async function GET(request: Request) {
+  const startedAt = Date.now();
+  const log = { route: "/api/work-hours/export", requestId: request.headers.get("x-vercel-id") };
+  console.info({ ...log, event: "start" });
+  try {
+    const response = await exportResponse(request);
+    console.info({ ...log, event: "done", status: response.status, durationMs: Date.now() - startedAt });
+    return response;
+  } catch (error) {
+    console.error({ ...log, event: "failed", error: error instanceof Error ? error.name : "UnknownError", durationMs: Date.now() - startedAt });
+    return NextResponse.json({ error: "Não foi possível exportar as horas. Tente novamente ou selecione um período menor." }, { status: 500 });
+  }
+}
+
+async function exportResponse(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
   const result = await exportOperationalWorkHoursXlsxData(actor, {

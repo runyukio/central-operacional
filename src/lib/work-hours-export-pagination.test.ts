@@ -26,13 +26,19 @@ test("hours export includes all 10001 rows in bounded pages and never computes d
   });
   const batches = hours.findMany;
   const summaries = hours.groupBy;
-  t.mock.method(workHourReadData, "capturedHours", async () => new Map());
+  const capture = t.mock.method(workHourReadData, "capturedHours", async (requests: Parameters<typeof workHourReadData.capturedHours>[0]) => {
+    assert.ok(requests.length <= 20);
+    assert.equal(new Set(requests.map((request) => request.shiftDate.toISOString())).size, 1);
+    return new Map(requests.map((request) => [request.key, 7.75]));
+  });
   mockPrismaDelegate(t, "auditLog", { create: async () => ({}) });
   const result = await exportOperationalWorkHoursXlsxData(actor, { startDate: "2026-07-15", endDate: "2026-07-15", lob: "ADS" });
   assert.ok("rows" in result && result.rows);
   assert.equal(result.rows.length, 10_001);
   assert.equal(batches.mock.callCount(), 21);
   assert.equal(summaries.mock.callCount(), 0);
+  assert.equal(capture.mock.callCount(), 501);
+  assert.ok(result.rows.every((row) => row[9] === "7:45"));
   assert.equal(batches.mock.calls[0].arguments[0].where.AND[0].employee.lob.name, "ADS");
 });
 
