@@ -77,6 +77,12 @@ const municipalDocumentContext = {
   documentHash: "0204976f20b0f8df862d0d4f4c12e7fbaef57e05599759183660a9d9c0ad52a8"
 };
 
+const luiza31MunicipalDocumentContext = {
+  wbLogin: "wb_luiza03",
+  referenceMonth: "2026-09",
+  documentHash: "166556f469ff75e0bae7921a0da770eb881367b9b61fcd2133999655050a88e2"
+};
+
 const geneMunicipalDocumentContext = {
   wbLogin: "wb_gene",
   referenceMonth: "2026-08",
@@ -163,6 +169,42 @@ test("permite o código municipal e a ausência de NBS somente para o documento 
   });
   assert.equal(getBillingFiscalDocumentCodeException(municipalDocumentContext)?.id, "SAO_PAULO_NF30_LUIZA03_2026_08");
   assert.equal(isBillingFiscalAmountMismatchExempt("wb_luiza03"), false);
+});
+
+test("aceita a NFS-e municipal 31 da Luiza no invoice de setembro sem liberar outros documentos", () => {
+  const fields = extractBillingFiscalFieldsFromText(
+    municipalFiscalSampleText
+      .replaceAll("00000029", "00000031")
+      .replace("03/08/2026", "01/10/2026")
+      .replace("3.000,80", "3.000,00")
+      .replaceAll("62.388.834/0001-73", "15.269.932/0001-01")
+  );
+  assert.equal(fields.invoiceNumber, "00000031");
+  assert.equal(fields.serviceAmount, 3000);
+  assert.equal(fields.supplierTaxId, "15269932000101");
+  assert.equal(getBillingFiscalDocumentCodeException(luiza31MunicipalDocumentContext)?.id, "SAO_PAULO_NF31_LUIZA03_2026_09");
+  assert.deepEqual(validateBillingFiscalComplianceFields(fields, "15269932000101", luiza31MunicipalDocumentContext), {
+    customerTaxId: "58151940000161",
+    supplierTaxId: "15269932000101",
+    taxationCode: "03115",
+    nbsCode: ""
+  });
+
+  for (const context of [
+    undefined,
+    { ...luiza31MunicipalDocumentContext, wbLogin: "wb_outro" },
+    { ...luiza31MunicipalDocumentContext, referenceMonth: "2026-10" },
+    { ...luiza31MunicipalDocumentContext, documentHash: "outro-documento" }
+  ]) {
+    assert.throws(
+      () => validateBillingFiscalComplianceFields(fields, "15269932000101", context),
+      /Código de Tributação incorreto/
+    );
+  }
+  assert.throws(
+    () => validateBillingFiscalComplianceFields(fields, "11111111000111", luiza31MunicipalDocumentContext),
+    /CNPJ do prestador incorreto/
+  );
 });
 
 test("não libera o código municipal para outro parceiro, outro PDF, outro ciclo ou sem contexto", () => {
