@@ -354,6 +354,17 @@ test("aceita o Código da NBS alternativo no fluxo Omie", () => {
   });
 });
 
+for (const nbsCode of ["1.1401.13.00", "114011300", "1 1401 13 00", "1-1401-13-00"]) {
+  test(`extrai e valida o NBS da nota sem remover dígitos: ${nbsCode}`, () => {
+    const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));
+    assert.equal(fields.nbsCode, "1.1401.13.00");
+    assert.equal(
+      validateBillingFiscalComplianceFields(fields, "62.388.834/0001-73").nbsCode,
+      "1.1401.13.00"
+    );
+  });
+}
+
 for (const nbsCode of ["1.1806.59.00", "118065900", "1 1806 59 00", "1-1806-59-00"]) {
   test(`extrai e valida o NBS de nove dígitos sem truncar: ${nbsCode}`, () => {
     const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));
@@ -372,7 +383,8 @@ for (const nbsCode of ["1.1806.59.00", "118065900", "1 1806 59 00", "1-1806-59-0
 test("não extrai um NBS permitido a partir de um código maior", () => {
   for (const nbsCode of [
     "1170399000", "1.11703.99.00", "1.1703.99.001", "9.1.1703.99.00", "9 1 1703 99 00",
-    "1180659000", "1.11806.59.00", "1.1806.59.001", "9.1.1806.59.00", "9 1 1806 59 00"
+    "1180659000", "1.11806.59.00", "1.1806.59.001", "9.1.1806.59.00", "9 1 1806 59 00",
+    "1140113000", "1.11401.13.00", "1.1401.13.001", "9.1.1401.13.00", "9 1 1401 13 00"
   ]) {
     const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));
     assert.equal(fields.nbsCode, "", nbsCode);
@@ -431,7 +443,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, nbsCode: "1.111.11.11" }, valid.supplierTaxId),
-    /Código da NBS incorreto.*1\.1703\.99\.00 ou 1\.401\.13\.00 ou 1\.1806\.59\.00/i
+    /Código da NBS incorreto.*1\.1703\.99\.00 ou 1\.401\.13\.00 ou 1\.1401\.13\.00 ou 1\.1806\.59\.00/i
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, customerTaxId: "" }, valid.supplierTaxId),
@@ -447,7 +459,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, nbsCode: "" }, valid.supplierTaxId),
-    /Não foi possível identificar o Código da NBS.*1\.1703\.99\.00 ou 1\.401\.13\.00 ou 1\.1806\.59\.00/i
+    /Não foi possível identificar o Código da NBS.*1\.1703\.99\.00 ou 1\.401\.13\.00 ou 1\.1401\.13\.00 ou 1\.1806\.59\.00/i
   );
 });
 
