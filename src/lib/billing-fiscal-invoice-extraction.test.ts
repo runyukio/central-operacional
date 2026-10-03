@@ -354,6 +354,38 @@ test("aceita o Código da NBS alternativo no fluxo Omie", () => {
   });
 });
 
+test("reconhece CNPJ e NBS quando o OCR troca pontuação e lê NBS como NES", () => {
+  const scannedText = [
+    "PRESTADOR / FORNECEDOR CNFITCPFTNIF Indicador Municipal",
+    "62,388.834/0001-73",
+    "TOMADOR / ADQUIRENTE CNPJ/CPF/NIF",
+    "58.151.940/0001-61",
+    "SERVIÇO PRESTADO Código de Tributação Nacional/Municipal Código da NES Local da Prestação",
+    "17.02.01 /-",
+    "Datilografia, digitação, estenografia e congêneres.",
+    "Descrição do Serviço",
+    "Moderador de conteúdo.",
+    "1.1703.99.00",
+    "TRIBUTAÇÃO MUNICIPAL (ISSQN)"
+  ].join("\n");
+  const fields = extractBillingFiscalFieldsFromText(scannedText);
+  assert.equal(fields.supplierTaxId, "62388834000173");
+  assert.equal(fields.nbsCode, "1.1703.99.00");
+  assert.deepEqual(validateBillingFiscalComplianceFields(fields, "62.388.834/0001-73"), {
+    customerTaxId: "58151940000161",
+    supplierTaxId: "62388834000173",
+    taxationCode: "17.02.01",
+    nbsCode: "1.1703.99.00"
+  });
+});
+
+test("não procura NBS em outra seção após um rótulo lido pelo OCR", () => {
+  const fields = extractBillingFiscalFieldsFromText(
+    "Código da NES\nSem código legível\nTRIBUTAÇÃO MUNICIPAL\n1.1703.99.00"
+  );
+  assert.equal(fields.nbsCode, "");
+});
+
 for (const nbsCode of ["1.1401.13.00", "114011300", "1 1401 13 00", "1-1401-13-00"]) {
   test(`extrai e valida o NBS da nota sem remover dígitos: ${nbsCode}`, () => {
     const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));

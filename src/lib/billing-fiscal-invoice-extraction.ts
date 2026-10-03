@@ -513,7 +513,7 @@ function findPartyTaxId(text: string, sectionPatterns: RegExp[], endMarkers: str
     if (taxId.length === 14) return taxId;
     // Municipal PDFs may put the field labels before the values in reading order.
     // Keep the fallback inside the same party section to avoid swapping the CNPJs.
-    const formattedTaxId = section.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/)?.[0] ?? "";
+    const formattedTaxId = section.match(/\b\d{2}[.,]\d{3}[.,]\d{3}\/\d{4}-\d{2}\b/)?.[0] ?? "";
     if (formattedTaxId) return normalizeTaxId(formattedTaxId);
   }
   return "";
@@ -539,9 +539,12 @@ function findTaxationCode(text: string) {
 }
 
 function findNbsCode(text: string) {
-  const match = /(?:codigo da nbs|codigo nbs|\bnbs\b)/i.exec(text);
+  const match = /(?:codigo da nbs|codigo da nes|codigo nbs|\bnbs\b)/i.exec(text);
   if (!match || match.index === undefined) return "";
-  const nearby = text.slice(match.index + match[0].length, match.index + match[0].length + 180);
+  // OCR can read "NBS" as "NES" and place the value after the service description.
+  // Keep the wider search inside the service block so a later code cannot be mistaken for the NBS.
+  const nearby = text.slice(match.index + match[0].length, match.index + match[0].length + 400)
+    .split(/\btributacao municipal\b/i)[0];
   const code = nearby.match(/(?<![\d.-])(?<!\d\s)\b(\d[.\s-]?\d{3,4}[.\s-]?\d{2}[.\s-]?\d{2})\b(?![.-]\d)/)?.[1] ?? "";
   return normalizeNbsCode(code);
 }
