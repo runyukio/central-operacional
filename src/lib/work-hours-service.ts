@@ -743,6 +743,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
       await cancelOvertimeReviews(tx, [record.id], user.id, "Revisão cancelada pelo lançamento manual");
       await syncWorkHourAdherence(tx, {
         employee: currentEmployee, schedule: currentSchedule, date: date!, durationMs: Math.round(actualHours! * 3_600_000),
+        calculatedDurationMs: actualHours! * 3_600_000,
         actorId: user.id, hadOperationalHours: Boolean(existing), source: "MANUAL",
         sourceChanged: Boolean(existing && !/^manual$/i.test(existing.source ?? ""))
       });

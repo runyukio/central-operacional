@@ -150,6 +150,7 @@ for (const [captured, calculated, pending] of [[7, 7.5, false], [7.5, 8, false],
     assert.equal(result.data.overtimeReviewsPending, pending ? 1 : 0);
     assert.equal(result.data.validationHours, pending ? 0.5 : 0);
     assert.equal(f.state.workHourOvertimeReview.length, pending ? 1 : 0);
+    assert.equal(f.state.workHourAdherenceJustification.length, 0);
   });
 }
 
@@ -376,6 +377,47 @@ test("lote com apenas bloqueios cadastrais também abre revisão e acumula todos
   assert.equal(captureImportNeedsReview({ imported: 0, unchanged: 0, divergences: 1, ignored: 0 }), true);
 });
 
+test("baixa aderência usa total calculado: 6:59 + 0:30 pede justificativa, 7:00 + 0:30 dispensa", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("low"), employee("threshold")], schedule: [slot("low"), slot("threshold")] });
+  f.capture("low", 6 + 59 / 60); f.capture("threshold", 7);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.deepEqual(f.state.workHourAdherenceJustification.map((row) => row.employeeId), ["low"]);
+  assert.equal(f.state.workHourOvertimeReview.length, 0);
+});
+
+test("reimportar baixa aderência como excedente cancela justificativa e alerta, preserva histórico e pede decisão", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" }), employee("sup", { roleTitle: "Supervisor", userId: "sup-user" })], schedule: [slot()] });
+  f.capture("agent", 6);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  const justification = f.state.workHourAdherenceJustification[0];
+  await answerWorkHourAdherenceJustification(actor, { id: justification.id, justification: "Motivo anterior" });
+  f.timeline.rows[0].activeMs = 8 * hour;
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(justification.status, "CANCELLED");
+  assert.ok(f.state.notification.filter((row) => row.entity === "WorkHourAdherenceJustification").every((row) => row.isRead));
+  assert.ok(f.state.auditLog.some((row) => row.entityId === justification.id && row.previousValue?.justification === "Motivo anterior"));
+  assert.equal(f.state.workHourOvertimeReview[0].status, "PENDING");
+  assert.equal(f.state.workHourRecord[0].actualHours, 8.5);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+});
+
+for (const actualHours of [7.5, 8, 8.5]) {
+  test(`justificativa antiga não aparece ou aceita resposta com ${actualHours}h atuais, mesmo com origem antiga de 6h`, async (t) => {
+    const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()],
+      workHourRecord: [{ id: "hours", employeeId: "agent", date, actualHours, effectiveHours: Math.min(actualHours, 8) }],
+      workHourAdherenceJustification: [adherence()] });
+    const before = clone(f.state);
+    const listed = await listWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day }, { limit: 1 });
+    assert.ok("data" in listed && listed.data.length === 0);
+    const exported = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day });
+    assert.ok("rows" in exported && exported.rows.length === 0);
+    const answer = await answerWorkHourAdherenceJustification(actor, { id: "adherence", justification: "Resposta de tela antiga" });
+    assert.ok("error" in answer);
+    assert.equal(mutations(f.calls).length, 0);
+    assert.deepEqual(f.state, before);
+  });
+}
+
 function adherence(id = "adherence", employeeId = "agent", patch: Row = {}): Row {
   return { id, employeeId, date, scheduleId: `slot-${employeeId}`, supervisorId: null,
     reconciliationKey: `${employeeId}:${day}:slot-${employeeId}`, wbLogin: `wb_${employeeId}`, lob: "ADS", classification: "ADS",
@@ -438,7 +480,7 @@ test("reimportar horas excluídas recria a pendência sem reutilizar a resposta 
 
 test("exporta XLSX válido com pendentes e justificadas, sem órfãos ou registros fora do período", async (t) => {
   const f = fixture(t, { employeeProfile: [employee(), employee("b"), employee("orphan")],
-    workHourRecord: [{ id: "hours", employeeId: "agent", date }, { id: "hours-b", employeeId: "b", date }],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date, actualHours: 6.5 }, { id: "hours-b", employeeId: "b", date, actualHours: 6.5 }],
     workHourAdherenceJustification: [adherence(), adherence("answered", "b", { status: "JUSTIFIED", justification: "=Motivo informado", answeredAt: new Date("2026-09-03T14:00:00Z"), answeredBy: { name: "Supervisor" } }),
       adherence("orphan", "orphan"), adherence("old", "agent", { date: new Date("2026-09-02T00:00:00Z") })] });
   const result = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day, lob: "ADS", shift: "Noite" });
@@ -473,7 +515,7 @@ test("filtros independentes combinam período/LOB/turno/parceiro/supervisor/stat
   const profiles = [employee(), employee("other"), employee("morning", { shift: { name: "Manhã" } }), employee("cec", { lob: { name: "CEC" } })];
   const f = fixture(t, {
     employeeProfile: profiles,
-    workHourRecord: profiles.map((p) => ({ id: `hours-${p.id}`, employeeId: p.id, date })),
+    workHourRecord: profiles.map((p) => ({ id: `hours-${p.id}`, employeeId: p.id, date, actualHours: 6.5 })),
     workHourAdherenceJustification: [
       adherence("pending", "agent", { supervisorId: "sup-a", supervisor: { fullName: "Supervisor" } }),
       adherence("answered", "agent", { supervisorId: "sup-a", status: "JUSTIFIED", justification: "Justificativa anterior" }),
@@ -503,7 +545,7 @@ test("filtros independentes combinam período/LOB/turno/parceiro/supervisor/stat
 
 test("exportação respeita escopo do supervisor e impede acesso de agente", async (t) => {
   const f = fixture(t, { employeeProfile: [employee(), employee("other")],
-    workHourRecord: [{ id: "hours", employeeId: "agent", date }, { id: "hours-other", employeeId: "other", date }],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date, actualHours: 6.5 }, { id: "hours-other", employeeId: "other", date, actualHours: 6.5 }],
     workHourAdherenceJustification: [adherence("mine", "agent", { supervisorId: "supervisor" }), adherence("other", "other", { supervisorId: "someone-else" })] });
   Object.assign(f.state.user[0], { role: { name: "SUPERVISOR" }, employeeProfile: { id: "supervisor" } });
   const result = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day });
@@ -519,7 +561,7 @@ test("exportação respeita escopo do supervisor e impede acesso de agente", asy
 test("paginação real aplica os mesmos filtros e elegibilidade do export sem mudar dados", async (t) => {
   const profiles = [employee(), employee("other"), employee("staff", { roleTitle: "Staff" }), employee("future", { goLiveDate: new Date("2026-09-04") })];
   const f=fixture(t, {employeeProfile: profiles,
-    workHourRecord: profiles.map(p=>({id:`h-${p.id}`,employeeId:p.id,date})),
+    workHourRecord: profiles.map(p=>({id:`h-${p.id}`,employeeId:p.id,date,actualHours:6.5})),
     workHourAdherenceJustification: Array.from({length: 120},(_,i)=>adherence(String(i).padStart(3,"0"),i%5===0?"staff":i%7===0?"future":"agent",{supervisorId:"sup",status:i%3===0?"JUSTIFIED":"PENDING"}))
   });
   const before=clone(f.state);
@@ -540,7 +582,7 @@ test("paginação real aplica os mesmos filtros e elegibilidade do export sem mu
 });
 
 test("página mantém escopo do supervisor mesmo com supervisorId forjado", async (t)=>{
-  const f=fixture(t,{employeeProfile:[employee()],workHourRecord:[{id:"h",employeeId:"agent",date}],
+  const f=fixture(t,{employeeProfile:[employee()],workHourRecord:[{id:"h",employeeId:"agent",date,actualHours:6.5}],
     workHourAdherenceJustification:[adherence("mine","agent",{supervisorId:"mine"}),adherence("theirs","agent",{supervisorId:"theirs"})]});
   Object.assign(f.state.user[0],{role:{name:"SUPERVISOR"},employeeProfile:{id:"mine"}});
   const valid=await listWorkHourAdherenceJustifications(actor,{startDate:day,endDate:day},{limit:1});
@@ -652,7 +694,7 @@ test("resumo usa permissão do banco e escopo registrado do supervisor, não fil
 
 test("resumo acompanha resposta real e exclusão de horas sem duplicar histórico", async (t) => {
   const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "new-owner" }), employee(summaryRoster[0].id, { roleTitle: "Supervisor" })],
-    workHourRecord: [{ id: "hours", employeeId: "agent", date }],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date, actualHours: 6.5 }],
     workHourAdherenceJustification: [adherence("first", "agent", { supervisorId: summaryRoster[0].id }),
       adherence("second", "agent", { supervisorId: summaryRoster[0].id }), adherence("cancelled", "agent", { status: "CANCELLED" })] });
   t.mock.method(prisma, "$queryRaw", (async () => {
@@ -809,7 +851,7 @@ test("Onboarding ativo em produção importa 8h fixas, inclusive no cadastro de 
   assert.equal(result.data?.imported, 2, result.error);
   assert.deepEqual(f.state.workHourRecord.map((r) => [r.effectiveHours, r.observation]), [[8, "RA/Onboarding: 8:00 fixas"], [8, "RA/Onboarding: 8:00 fixas"]]);
   assert.ok(f.state.schedule.every((r) => r.status === "PRESENTE"));
-  assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => [r.employeeId, r.sourceDurationMs]), [["legacy", 5 * hour]]);
+  assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => [r.employeeId, r.sourceDurationMs]), []);
   const repeated: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
   assert.equal(repeated.data?.unchanged, 2, repeated.error);
   assert.equal(f.state.workHourRecord.length, 2);
@@ -830,7 +872,7 @@ test("Onboarding sem captura ou com captura curta continua exigindo revisão ant
   assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
 });
 
-test("horas manuais abaixo de 7:25 geram justificativa e aviso, sem bônus, duplicação ou mudança de slot", async (t) => {
+test("horas manuais abaixo de 7:30 geram justificativa e aviso, sem bônus, duplicação ou mudança de slot", async (t) => {
   const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" }), employee("sup", { roleTitle: "Supervisor", userId: "sup-user" })], schedule: [slot()] });
   const input = { employeeId: "agent", date: day, actualHours: "6:30" };
   const result: any = await upsertManualWorkHourRecord(actor, input);
@@ -863,14 +905,14 @@ test("horas manuais abaixo de 7:25 geram justificativa e aviso, sem bônus, dupl
   assert.equal(f.state.notification.length, 2);
 });
 
-test("correção manual para 7:25 encerra a pendência e o aviso; reduzir novamente reabre só o mesmo dia", async (t) => {
+test("correção manual para 7:30 encerra a pendência e o aviso; reduzir novamente reabre só o mesmo dia", async (t) => {
   const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" }), employee("sup", { roleTitle: "Supervisor", userId: "sup-user" })], schedule: [slot()] });
   const input = { employeeId: "agent", date: day, actualHours: "7:24" };
   await upsertManualWorkHourRecord(actor, input);
   const id = f.state.workHourAdherenceJustification[0].id;
   await answerWorkHourAdherenceJustification(actor, { id, justification: "Justificativa anterior" });
   f.state.workHourAdherenceJustification.push(adherence("other-day", "agent", { date: new Date("2026-09-02T00:00:00Z") }));
-  const result: any = await upsertManualWorkHourRecord(actor, { ...input, actualHours: "7:25" });
+  const result: any = await upsertManualWorkHourRecord(actor, { ...input, actualHours: "7:30" });
   assert.equal(result.success, true, result.error);
   assert.equal(f.state.workHourAdherenceJustification[0].status, "CANCELLED");
   assert.equal(f.state.workHourAdherenceJustification[1].status, "PENDING");
@@ -885,12 +927,12 @@ test("correção manual para 7:25 encerra a pendência e o aviso; reduzir novame
 test("horas manuais respeitam limite exato e não aplicam regra de 8h da skill Onboarding", async (t) => {
   const ids = ["zero", "low", "threshold", "above"];
   const f = fixture(t, { employeeProfile: ids.map((id) => employee(id, { skill: "Onboarding" })), schedule: ids.map((id) => slot(id)) });
-  for (const [employeeId, actualHours] of [["zero", "0:00"], ["low", "7:24"], ["threshold", "7:25"], ["above", "8:00"]]) {
+  for (const [employeeId, actualHours] of [["zero", "0:00"], ["low", "7:29"], ["threshold", "7:30"], ["above", "8:00"]]) {
     const result: any = await upsertManualWorkHourRecord(actor, { employeeId, date: day, actualHours });
     assert.equal(result.success, true, result.error);
   }
   assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => r.employeeId), ["zero", "low"]);
-  assert.equal(f.state.workHourRecord.find((r) => r.employeeId === "low")!.effectiveHours, 7.4);
+  assert.equal(f.state.workHourRecord.find((r) => r.employeeId === "low")!.effectiveHours, 7.48);
 });
 
 test("lançamento manual em Nesting/Treinamento permanece bloqueado, inclusive se slot mudar durante salvamento", async (t) => {
