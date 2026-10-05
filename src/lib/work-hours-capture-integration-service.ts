@@ -4,6 +4,8 @@ import { createPermissionError, createServerError, createValidationError } from 
 import type { Actor } from "@/lib/mock-db";
 import { canImportWorkHours, canJustifyAbsence, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { captureOvertimeOutcome, type OvertimeSource } from "@/lib/work-hours-overtime";
+import { saveCaptureOvertimeReview, cancelOvertimeReviews } from "@/lib/work-hours-overtime-service";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
 import { getCaptureRegistrationIssue, isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
 import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
@@ -104,6 +106,7 @@ type ExistingWorkHour = {
   actualHours: number;
   scheduleId: string | null;
   status: WorkHourRecordStatus;
+  overtimeReview?: { sourceFingerprint: string; status: string } | null;
 };
 
 export async function previewCaptureWorkHoursImport(actor: Actor, filters: CaptureImportFilters) {
@@ -192,6 +195,8 @@ export async function commitCaptureWorkHoursImport(
       let imported = 0;
       let unchanged = 0;
       let divergences = 0;
+      let overtimeReviewsPending = 0;
+      let validationHours = 0;
 
       for (const proposal of built.proposals) {
         if (proposal.decision.decision === "AUTOMATIC" && proposal.schedule && proposal.calculation && proposal.capturedMs) {
@@ -204,6 +209,10 @@ export async function commitCaptureWorkHoursImport(
           });
           if (saved.changed) imported += 1;
           else unchanged += 1;
+          if (saved.review?.status === "PENDING") {
+            overtimeReviewsPending += 1;
+            validationHours += saved.review.excessHours;
+          }
 
           await tx.workHourCaptureDivergence.updateMany({
             where: { reconciliationKey: proposal.reconciliationKey, status: "PENDING" },
@@ -279,7 +288,7 @@ export async function commitCaptureWorkHoursImport(
         }
       });
 
-      return { runId: run.id, imported, unchanged, divergences, ignored: run.ignoredRecords };
+      return { runId: run.id, imported, unchanged, divergences, ignored: run.ignoredRecords, overtimeReviewsPending, validationHours };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 60_000 });
 
     return { data: { ...result, blocked: built.registrationWarnings.length, period: formatted.period, filters: sanitizeFilters(input) } };
@@ -418,6 +427,8 @@ export async function applyCaptureWorkHourDivergenceDecisions(
       }
 
       const results: Array<{ id: string; status: string; action: CaptureDivergenceAction; revision: string }> = [];
+      let overtimeReviewsPending = 0;
+      let validationHours = 0;
       for (const decision of input.decisions) {
         const divergence = byId.get(decision.id)!;
         const employee = divergence.employee as CaptureImportEmployee;
@@ -453,9 +464,10 @@ export async function applyCaptureWorkHourDivergenceDecisions(
           } else {
             const calculation = calculateOperationalHours(divergence.sourceDurationMs ?? 0, classificationInput(employee));
             const proposal = proposalFromDivergence(divergence, employee, schedule, calculation, "PRESENTE");
-            await saveValidatedAttendance(tx, { proposal, actorId: authorization.user.id, actionSource: "MANUAL", currentRecord: current });
+            const savedHours = await saveValidatedAttendance(tx, { proposal, actorId: authorization.user.id, actionSource: "MANUAL", currentRecord: current });
+            if (savedHours.review?.status === "PENDING") { overtimeReviewsPending += 1; validationHours += savedHours.review.excessHours; }
             await resolveAttendanceState(tx, authorization.user.id, employee.id, schedule, "PRESENTE");
-            newHours = calculation.operationalHours;
+            newHours = savedHours.record.effectiveHours;
             newStatus = "PRESENTE";
           }
         }
@@ -487,7 +499,7 @@ export async function applyCaptureWorkHourDivergenceDecisions(
         });
         results.push({ id: divergence.id, status: isPending ? "PENDING" : "RESOLVED", action: decision.action, revision: updated.updatedAt.toISOString() });
       }
-      return { data: { results, resolved: results.filter((item) => item.status === "RESOLVED").length, pending: results.filter((item) => item.status === "PENDING").length } };
+      return { data: { results, resolved: results.filter((item) => item.status === "RESOLVED").length, pending: results.filter((item) => item.status === "PENDING").length, overtimeReviewsPending, validationHours } };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 60_000 });
   } catch (error) {
     if (error instanceof CaptureDecisionError) return createValidationError({}, error.message);
@@ -799,7 +811,8 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
   // Check existing operational hours before crossing capture and schedule data.
   const existing = await prisma.workHourRecord.findMany({
     where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end } },
-    select: { id: true, employeeId: true, date: true, effectiveHours: true, actualHours: true, scheduleId: true, status: true }
+    select: { id: true, employeeId: true, date: true, effectiveHours: true, actualHours: true, scheduleId: true, status: true,
+      overtimeReview: { select: { sourceFingerprint: true, status: true } } }
   });
   const [schedules, timelines] = await Promise.all([
     prisma.schedule.findMany({
@@ -909,14 +922,30 @@ function buildProposal(
   };
 }
 
+function captureOvertimeSource(proposal: CaptureImportProposal): OvertimeSource {
+  if (!proposal.schedule || !proposal.calculation || proposal.capturedMs === null) throw new Error("Proposta validada incompleta.");
+  return {
+    reconciliationKey: proposal.reconciliationKey, scheduleId: proposal.schedule.id,
+    plannedStart: proposal.schedule.startsAt, plannedEnd: proposal.schedule.endsAt,
+    sourceDurationMs: proposal.capturedMs, operationalMs: proposal.calculation.operationalMs,
+    rule: proposal.calculation.rule, ruleLabel: proposal.calculation.ruleLabel,
+    classification: proposal.calculation.classificationLabel
+  };
+}
+
 function formatCaptureImportPlan(proposals: CaptureImportProposal[], period: { start: Date; end: Date }) {
   const automatic = proposals.filter((item) => item.decision.decision === "AUTOMATIC");
   const divergences = proposals.filter((item) => item.decision.decision === "DIVERGENCE");
   const ignored = proposals.filter((item) => item.decision.decision === "IGNORE");
   const overlapping = proposals.filter((item) => item.existingRecord);
+  const overtime = automatic.flatMap((item) => item.schedule && item.calculation && item.capturedMs !== null
+    ? [captureOvertimeOutcome(captureOvertimeSource(item), item.existingRecord?.overtimeReview)] : []);
   return {
     period: { startDate: formatDate(period.start), endDate: formatDate(period.end) },
     summary: { automatic: automatic.length, divergences: divergences.length, ignored: ignored.length },
+    overtime: { pendingReviews: overtime.filter((item) => item.status === "PENDING").length,
+      validationHours: roundHours(overtime.reduce((sum, item) => sum + item.validationHours, 0)),
+      effectiveHours: roundHours(overtime.reduce((sum, item) => sum + item.effectiveHours, 0)) },
     overlap: {
       count: overlapping.length,
       dates: Array.from(new Set(overlapping.map((item) => item.dateKey))),
@@ -954,13 +983,19 @@ async function saveValidatedAttendance(
     proposal.schedule.status = targetStatus;
   }
 
-  const hours = proposal.calculation.operationalHours;
+  const source = captureOvertimeSource(proposal);
+  const previousReview = input.currentRecord ? await tx.workHourOvertimeReview.findUnique({
+    where: { workHourRecordId: input.currentRecord.id }
+  }) : null;
+  const outcome = captureOvertimeOutcome(source, previousReview);
+  const hours = outcome.effectiveHours;
   const differenceMinutes = Math.round((hours - 8) * 60);
   const status: WorkHourRecordStatus = Math.abs(differenceMinutes) <= 5 ? "OK" : "DIVERGENT";
   const current = input.currentRecord;
   const unchanged = Boolean(current
     && current.scheduleId === proposal.schedule.id
     && Math.abs(current.effectiveHours - hours) < 0.000001
+    && current.actualHours === outcome.calculatedHours
     && current.status === status
     && previousSchedule.status === targetStatus);
   const saved = await tx.workHourRecord.upsert({
@@ -975,7 +1010,7 @@ async function saveValidatedAttendance(
       plannedEnd: proposal.schedule.endsAt,
       plannedHours: 8,
       breakMinutes: 0,
-      actualHours: hours,
+      actualHours: outcome.calculatedHours,
       effectiveBreakMinutes: 0,
       effectiveHours: hours,
       differenceMinutes,
@@ -993,7 +1028,7 @@ async function saveValidatedAttendance(
       actualStart: null,
       actualEnd: null,
       breakMinutes: 0,
-      actualHours: hours,
+      actualHours: outcome.calculatedHours,
       adjustedStart: null,
       adjustedEnd: null,
       adjustedBreakMinutes: null,
@@ -1009,6 +1044,9 @@ async function saveValidatedAttendance(
       importBatchId: null
     }
   });
+  const review = await saveCaptureOvertimeReview(tx, { recordId: saved.id,
+    employeeId: proposal.employee.id, supervisorId: proposal.employee.supervisorId,
+    date: proposal.date, actorId: input.actorId, source, previous: previousReview, outcome });
   if (current) {
     await tx.workHourAdjustmentRequest.updateMany({
       where: { workHourRecordId: saved.id, status: { in: ["ABERTO", "EM_ANALISE", "APROVADO"] } },
@@ -1069,7 +1107,7 @@ async function saveValidatedAttendance(
     });
   }
   await upsertLowAdherence(tx, proposal, input.actorId, Boolean(current));
-  return { record: saved, changed: !unchanged };
+  return { record: saved, changed: !unchanged, review };
 }
 
 async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: CaptureImportProposal, actorId: string, hadOperationalHours: boolean) {
@@ -1244,6 +1282,7 @@ async function removeOperationalHoursForOutcome(
   await cancelAdherenceForDeletedWorkHours(tx, { employeeId, date, actorId, reason });
   const record = await tx.workHourRecord.findUnique({ where: { employeeId_date: { employeeId, date } } });
   if (!record) return;
+  await cancelOvertimeReviews(tx, [record.id], actorId, reason);
   await tx.auditLog.create({
     data: {
       actorId,

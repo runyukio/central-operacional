@@ -37,7 +37,7 @@ export function decodeSpaceCursor(value: string | null, fingerprint: string): Pe
     if (value.length > 1500) throw new Error();
     const row = JSON.parse(Buffer.from(value, "base64url").toString());
     spaceDate(row.date);
-    if (!["absence", "hours"].includes(row.kind) || typeof row.id !== "string" || !row.id || row.id.length > 160 || row.fingerprint !== fingerprint) throw new Error();
+    if (!["absence", "hours", "overtime"].includes(row.kind) || typeof row.id !== "string" || !row.id || row.id.length > 160 || row.fingerprint !== fingerprint) throw new Error();
     return row;
   } catch { throw new MeuEspacoError("A paginação não corresponde aos filtros. Atualize a lista."); }
 }

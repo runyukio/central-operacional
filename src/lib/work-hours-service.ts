@@ -22,6 +22,8 @@ import {
 } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { prisma } from "@/lib/prisma";
+import { cancelOvertimeReviews } from "@/lib/work-hours-overtime-service";
+import { overtimeStatusLabel } from "@/lib/work-hours-overtime";
 import { getRealtimeHoursShiftActivityHours } from "@/lib/realtime-hours-service";
 import { loadWorkHourExportCapture } from "@/lib/work-hours-export-capture";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
@@ -66,6 +68,7 @@ const inactiveEmployeeStatusLabels = [
 const inactiveEmployeeStatusTokens = new Set(inactiveEmployeeStatusLabels.map((status) => normalizeStatusToken(status)));
 
 const workHourReadInclude = {
+  overtimeReview: true,
   employee: { select: {
     id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true,
     lob: { select: { name: true } }, shift: { select: { name: true } },
@@ -352,7 +355,8 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           NOW()
         )`;
       });
-      const saved = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      const saved = await prisma.$transaction(async (tx) => {
+        const records = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         INSERT INTO "WorkHourRecord" (
           "id", "employeeId", "scheduleId", "wbLogin", "date", "plannedStart", "plannedEnd", "plannedHours",
           "actualStart", "actualEnd", "breakMinutes", "actualHours", "adjustedStart", "adjustedEnd", "adjustedBreakMinutes", "adjustedHours",
@@ -386,6 +390,9 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           "updatedAt" = NOW()
         RETURNING "id"
       `);
+        await cancelOvertimeReviews(tx, records.map((record) => record.id), user.id, "Revisão cancelada pela importação de planilha");
+        return records;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 60_000 });
       importedRows += saved.length;
       if (saved.length) {
         await prisma.workHourHistory.createMany({
@@ -581,6 +588,7 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
       }
       const plannedHours = productivePlannedHoursForRecord(adjustment.record);
       const nextDifference = plannedHours === null ? null : calculateProductiveDifferenceMinutes(adjustment.requestedActualHours, plannedHours);
+      await cancelOvertimeReviews(tx, [adjustment.workHourRecordId], user.id, "Revisão cancelada pelo ajuste manual aprovado");
       const updatedRecord = await tx.workHourRecord.update({
         where: { id: adjustment.workHourRecordId },
         data: {
@@ -603,7 +611,7 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
       await writeReviewHistory(tx, user.id, updatedRecord.id, "ADJUSTMENT_APPROVED", adjustment.record, updatedRecord, "Ajuste de horas aprovado");
       await notifyReviewResult(tx, adjustment, "Ajuste de horas aprovado", "A correção solicitada foi aprovada pelo WFM/Admin.");
       return { adjustment: updatedAdjustment, record: updatedRecord };
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     return {
       success: true,
@@ -732,6 +740,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
         }
       });
 
+      await cancelOvertimeReviews(tx, [record.id], user.id, "Revisão cancelada pelo lançamento manual");
       await syncWorkHourAdherence(tx, {
         employee: currentEmployee, schedule: currentSchedule, date: date!, durationMs: Math.round(actualHours! * 3_600_000),
         actorId: user.id, hadOperationalHours: Boolean(existing), source: "MANUAL",
@@ -798,6 +807,7 @@ export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourIn
 
     const reason = input.reason?.trim() || "Exclusão manual de horas operacionais";
     await prisma.$transaction(async (tx) => {
+      await cancelOvertimeReviews(tx, [record.id], user.id, reason);
       await cancelAdherenceForDeletedWorkHours(tx, {
         employeeId: record.employeeId, date: record.date, actorId: user.id, reason
       });
@@ -875,7 +885,10 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     "status_ajuste",
     "motivo_ajuste",
     "solicitado_por",
-    "solicitado_em"
+    "solicitado_em",
+    "horas_em_validacao",
+    "situacao_excedente",
+    "motivo_recusa_excedente"
   ];
   const rows = data.map((row) => [
     row.date,
@@ -895,7 +908,10 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     row.adjustmentStatus === "Sem ajuste" ? "" : row.adjustmentStatus,
     row.adjustmentReason,
     row.adjustmentRequestedBy,
-    row.adjustmentRequestedAt
+    row.adjustmentRequestedAt,
+    formatWorkHours(row.validationHours),
+    row.overtimeReviewStatus,
+    row.overtimeRejectionReason
   ]);
 
   await prisma.auditLog.create({
@@ -1222,16 +1238,17 @@ function normalizeStatusToken(value: unknown) {
 }
 
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
-  const [groups, adjustments] = await Promise.all([
+  const [groups, adjustments, overtime] = await Promise.all([
     prisma.workHourRecord.groupBy({
       by: ["status", "differenceMinutes"],
       where,
       _count: { _all: true },
       _sum: { effectiveHours: true, adjustedHours: true }
     }),
-    prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => [])
+    prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => []),
+    prisma.workHourOvertimeReview.aggregate({ where: { status: "PENDING", record: { is: where } }, _sum: { excessHours: true }, _count: { _all: true } })
   ]);
-  return summarizeWorkHourGroups(groups, adjustments);
+  return { ...summarizeWorkHourGroups(groups, adjustments), validationHours: overtime._sum.excessHours ?? 0, overtimeReviewsPending: overtime._count._all };
 }
 
 export function summarizeWorkHourGroups(groups: Array<{
@@ -1308,6 +1325,7 @@ async function getRecordWithRelations(id: string) {
   return prisma.workHourRecord.findUniqueOrThrow({
     where: { id },
     include: {
+      overtimeReview: true,
       employee: { select: { id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
       adjustments: {
         orderBy: { createdAt: "desc" },
@@ -1358,6 +1376,9 @@ function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer, captur
     adjustedHours: record.adjustedHours ?? 0,
     effectiveHours: record.effectiveHours,
     capturedHours,
+    validationHours: record.overtimeReview?.status === "PENDING" ? record.overtimeReview.excessHours : 0,
+    overtimeReviewStatus: overtimeStatusLabel(record.overtimeReview?.status),
+    overtimeRejectionReason: record.overtimeReview?.status === "REJECTED" ? record.overtimeReview.rejectionReason ?? "" : "",
     differenceMinutes,
     status: recordStatusLabel(status),
     rawStatus: status,

@@ -1,5 +1,5 @@
 export type SpaceSortDirection = "asc" | "desc";
-export const spaceHoursSortKeys = ["employeeName", "plannedHours", "capturedHours", "effectiveHours", "futureHours", "projectedHours", "differenceMinutes", "status"] as const;
+export const spaceHoursSortKeys = ["employeeName", "plannedHours", "capturedHours", "effectiveHours", "validationHours", "futureHours", "projectedHours", "differenceMinutes", "status"] as const;
 export type SpaceHoursSortKey = typeof spaceHoursSortKeys[number];
 export function compareSpaceValues(a: string | number | null | undefined, b: string | number | null | undefined, direction: SpaceSortDirection) {
   const missing = (value: typeof a) => value == null || (typeof value === "number" && !Number.isFinite(value));

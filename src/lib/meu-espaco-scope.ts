@@ -25,7 +25,7 @@ export async function getMeuEspacoScope(actor: Actor, requestedSupervisor?: stri
   const broad = role !== "SUPERVISOR";
   // Includes transferred partners only when they have hours still assigned to the selected owner.
   const profiles = (await prisma.employeeProfile.findMany({
-    where: { deletedAt: null, ...(supervisorId ? { OR: [{ supervisorId }, { id: supervisorId }, { adherenceJustifications: { some: { supervisorId } } }] } : {}) },
+    where: { deletedAt: null, ...(supervisorId ? { OR: [{ supervisorId }, { id: supervisorId }, { adherenceJustifications: { some: { supervisorId } } }, { overtimeReviews: { some: { supervisorId } } }] } : {}) },
     select: profileSelect
   })).filter(isCurrentSpacePartner);
   const activeSupervisorIds = profiles.filter(isActiveSpaceSupervisor).map((profile) => profile.id);

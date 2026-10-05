@@ -1,6 +1,6 @@
 import { resolveCapturePeriod, type CapturePeriod } from "@/lib/work-hours-capture-period";
 
-export type CaptureDayResult = { imported: number; unchanged: number; divergences: number; ignored: number; blocked?: number };
+export type CaptureDayResult = { imported: number; unchanged: number; divergences: number; ignored: number; blocked?: number; overtimeReviewsPending?: number; validationHours?: number };
 export type CaptureBatchResult = CaptureDayResult & { completedDates: string[]; blocked: number };
 
 export function captureImportNeedsReview(result: CaptureDayResult) {
@@ -20,7 +20,7 @@ export class CaptureBatchError extends Error {
 export async function processCaptureImportDays(period: CapturePeriod, commitDay: (date: string) => Promise<CaptureDayResult>, onProgress: (date: string, index: number, total: number) => void) {
   const resolved = resolveCapturePeriod(period);
   if ("error" in resolved) throw new Error(resolved.error);
-  const result: CaptureBatchResult = { imported: 0, unchanged: 0, divergences: 0, ignored: 0, blocked: 0, completedDates: [] };
+  const result: CaptureBatchResult = { imported: 0, unchanged: 0, divergences: 0, ignored: 0, blocked: 0, overtimeReviewsPending: 0, validationHours: 0, completedDates: [] };
   for (const [index, date] of resolved.dates.entries()) {
     onProgress(date, index + 1, resolved.dates.length);
     try {
@@ -30,6 +30,8 @@ export async function processCaptureImportDays(period: CapturePeriod, commitDay:
       result.divergences += day.divergences;
       result.ignored += day.ignored;
       result.blocked += day.blocked ?? 0;
+      result.overtimeReviewsPending! += day.overtimeReviewsPending ?? 0;
+      result.validationHours! += day.validationHours ?? 0;
       result.completedDates.push(date);
     } catch (error) {
       throw new CaptureBatchError(date, result, error);

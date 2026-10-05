@@ -30,7 +30,7 @@ export async function getSpaceHoursSummary(scope: MeuEspacoScope, query: URLSear
   if (!ids.length) return summarizeSpaceHours(period, today, { hours: null, records: 0 }, []);
   const through = period.endDate < today ? period.endDate : today;
   const yesterday = new Date(+spaceDate(today) - 86_400_000);
-  const [realized, schedules] = await Promise.all([
+  const [realized, schedules, overtime] = await Promise.all([
     prisma.workHourRecord.aggregate({ where: { employeeId: { in: ids }, date: { gte: spaceDate(period.startDate), lte: spaceDate(through) } }, _sum: { effectiveHours: true }, _count: { _all: true } }),
     // Aggregate before transfer: no per-day schedule download and no per-partner query loop.
     prisma.$queryRaw<SpaceScheduleGroup[]>(Prisma.sql`SELECT s.status::text, s."startsAt", s."endsAt", sh.name AS "shiftName",
@@ -40,9 +40,10 @@ export async function getSpaceHoursSummary(scope: MeuEspacoScope, query: URLSear
       WHERE s."employeeId" IN (${Prisma.join(ids)}) AND s."deletedAt" IS NULL
         AND s.date >= ${spaceDate(period.startDate)} AND s.date <= ${spaceDate(period.endDate)}
         AND (s.date > ${spaceDate(today)} OR w.id IS NULL OR s.date >= ${yesterday})
-      GROUP BY 1, 2, 3, 4, 5, 6, 7`)
+      GROUP BY 1, 2, 3, 4, 5, 6, 7`),
+    prisma.workHourOvertimeReview.aggregate({ where: { status: "PENDING", employeeId: { in: ids }, date: { gte: spaceDate(period.startDate), lte: spaceDate(through) }, workHourRecordId: { not: null } }, _sum: { excessHours: true } })
   ]);
-  return summarizeSpaceHours(period, today, { hours: realized._sum.effectiveHours, records: realized._count._all }, schedules, minuteOfDay);
+  return { ...summarizeSpaceHours(period, today, { hours: realized._sum.effectiveHours, records: realized._count._all }, schedules, minuteOfDay), validationHours: overtime._sum.excessHours ?? 0 };
 }
 
 export async function getSpaceMonthlyHours(scope: MeuEspacoScope, query: URLSearchParams, now = new Date()): Promise<SpaceHours> {
@@ -60,6 +61,7 @@ export async function getSpaceMonthlyHours(scope: MeuEspacoScope, query: URLSear
   const [records, schedules, summary] = await Promise.all([
     ids.length ? prisma.workHourRecord.findMany({ where: { employeeId: { in: ids }, date: { gte: spaceDate(period.startDate), lte: spaceDate(through) } },
       select: { id: true, employeeId: true, wbLogin: true, date: true, actualHours: true, adjustedHours: true, effectiveHours: true, differenceMinutes: true, status: true,
+        overtimeReview: { select: { status: true, excessHours: true } },
         schedule: { select: { status: true, startsAt: true, endsAt: true, deletedAt: true, shift: { select: { name: true } } } } } }) : [],
     ids.length ? prisma.schedule.findMany({ where: { employeeId: { in: ids }, deletedAt: null, date: { gte: spaceDate(period.startDate), lte: spaceDate(period.endDate) } },
       select: { employeeId: true, date: true, status: true, startsAt: true, endsAt: true, shift: { select: { name: true } } } }) : [],

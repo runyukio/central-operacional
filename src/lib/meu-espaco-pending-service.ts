@@ -11,6 +11,7 @@ import { decodeSpaceCursor, encodeSpaceCursor, pendingFingerprint, spaceDate, sp
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import type { ManagementCounts, SpacePending, SpaceSummary } from "@/lib/meu-espaco-contract";
 import { getSpaceCoverage } from "@/lib/meu-espaco-coverage-service";
+import { reviewWorkHourOvertime } from "@/lib/work-hours-overtime-service";
 
 const absenceStatuses: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ERRO_ESCALA"];
 const protectedStatuses = Object.values(ScheduleStatus).filter(isProtectedCaptureScheduleStatus);
@@ -33,7 +34,8 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
       (s.status NOT IN ('FALTA_JUSTIFICADA', 'FALTA_INJUSTIFICADA') AND NOT COALESCE(a."isJustified" AND ${validReasonSql}, FALSE)) AS pending,
       s.status::text AS status, COALESCE(a."absenceReason", '') AS reason, COALESCE(a."reasonCategory", '') AS "reasonCategory", COALESCE(a."supervisorJustification", '') AS justification,
       COALESCE(a."evidenceUrl", '') AS "evidenceUrl", a."justifiedAt" AS "answeredAt", COALESCE(u.name, '') AS "answeredBy",
-      COALESCE(s."startsAt", '') AS "plannedStart", COALESCE(s."endsAt", '') AS "plannedEnd", NULL::double precision AS "capturedMinutes"
+      COALESCE(s."startsAt", '') AS "plannedStart", COALESCE(s."endsAt", '') AS "plannedEnd", NULL::double precision AS "capturedMinutes",
+      NULL::integer AS version, NULL::double precision AS "calculatedHours", NULL::double precision AS "effectiveHours", NULL::double precision AS "excessHours", NULL::text AS "ruleLabel"
     FROM "Schedule" s JOIN "EmployeeProfile" e ON e.id=s."employeeId" JOIN "Lob" l ON l.id=e."lobId"
     LEFT JOIN "EmployeeProfile" sup ON sup.id=e."supervisorId"
     LEFT JOIN LATERAL (SELECT r.* FROM "AttendanceRecord" r WHERE r."scheduleId"=s.id AND r."employeeId"=e.id ORDER BY r."updatedAt" DESC, r.id DESC LIMIT 1) a ON TRUE
@@ -43,7 +45,8 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
     UNION ALL
     SELECT j.id, 'hours'::text, j.date, e.id, e."fullName", e."wbLogin", j.lob, j."supervisorId", COALESCE(sup."fullName", 'Sem supervisor'),
       j.status='PENDING', j.status, j.classification, ''::text, COALESCE(j.justification, ''), ''::text, j."answeredAt", COALESCE(u.name, ''),
-      COALESCE(j."plannedStart", ''), COALESCE(j."plannedEnd", ''), j."sourceDurationMs"::double precision / 60000
+      COALESCE(j."plannedStart", ''), COALESCE(j."plannedEnd", ''), j."sourceDurationMs"::double precision / 60000,
+      NULL::integer, NULL::double precision, NULL::double precision, NULL::double precision, NULL::text
     FROM "WorkHourAdherenceJustification" j JOIN "EmployeeProfile" e ON e.id=j."employeeId"
     LEFT JOIN "Schedule" s ON s.id=j."scheduleId" LEFT JOIN "EmployeeProfile" sup ON sup.id=j."supervisorId"
     LEFT JOIN "User" u ON u.id=j."answeredById"
@@ -52,6 +55,17 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
       AND (s.id IS NULL OR (s."deletedAt" IS NULL AND s.status::text NOT IN (${Prisma.join(protectedStatuses)})))
       AND EXISTS (SELECT 1 FROM "WorkHourRecord" w WHERE w."employeeId"=j."employeeId" AND w.date=j.date)
       ${scope.supervisorId ? Prisma.sql`AND j."supervisorId"=${scope.supervisorId}` : Prisma.empty}
+    UNION ALL
+    SELECT r.id, 'overtime'::text, r.date, e.id, e."fullName", e."wbLogin", l.name, r."supervisorId", COALESCE(sup."fullName", 'Sem supervisor'),
+      r.status='PENDING', r.status::text, r."ruleLabel", ''::text, COALESCE(r."rejectionReason", ''), ''::text, r."answeredAt", COALESCE(u.name, ''),
+      COALESCE(w."plannedStart", ''), COALESCE(w."plannedEnd", ''), r."sourceDurationMs"::double precision / 60000,
+      r.version, r."calculatedHours", w."effectiveHours", r."excessHours", r."ruleLabel"
+    FROM "WorkHourOvertimeReview" r JOIN "WorkHourRecord" w ON w.id=r."workHourRecordId"
+    JOIN "EmployeeProfile" e ON e.id=r."employeeId" JOIN "Lob" l ON l.id=e."lobId"
+    LEFT JOIN "EmployeeProfile" sup ON sup.id=r."supervisorId" LEFT JOIN "User" u ON u.id=r."answeredById"
+    WHERE r.status IN ('PENDING', 'APPROVED', 'REJECTED') AND e."deletedAt" IS NULL
+      AND w.source='captura-horas' AND r.date <= ${spaceDate(spaceToday())}
+      ${scope.supervisorId ? Prisma.sql`AND r."supervisorId"=${scope.supervisorId}` : Prisma.empty}
   )`;
 }
 
@@ -61,7 +75,7 @@ export async function getSpaceSummary(scope: MeuEspacoScope, query: URLSearchPar
   const counts = await prisma.$queryRaw<Array<ManagementCounts & { supervisorId: string | null; supervisor: string }>>(Prisma.sql`${source}
     SELECT "supervisorId", MAX(supervisor) AS supervisor,
       COUNT(*) FILTER (WHERE pending AND kind='absence')::integer AS absences,
-      COUNT(*) FILTER (WHERE pending AND kind='hours')::integer AS hours,
+      COUNT(*) FILTER (WHERE pending AND kind IN ('hours', 'overtime'))::integer AS hours,
       COUNT(*) FILTER (WHERE NOT pending AND ("answeredAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo') >= ${spaceDate(period.startDate)} AND ("answeredAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo') < ${endExclusive})::integer AS answered,
       TO_CHAR(MIN(date) FILTER (WHERE pending), 'YYYY-MM-DD') AS oldest
     FROM items GROUP BY "supervisorId"`);
@@ -78,7 +92,7 @@ export async function getSpaceSummary(scope: MeuEspacoScope, query: URLSearchPar
   }
   const management: ManagementCounts = { absences: 0, hours: 0, answered: 0, oldest: null };
   for (const count of counts) {
-    if (!count.supervisorId || !scope.activeSupervisorIds.includes(count.supervisorId)) continue;
+    if (count.supervisorId && !scope.activeSupervisorIds.includes(count.supervisorId) && !scope.broad) continue;
     management.absences += count.absences; management.hours += count.hours; management.answered += count.answered;
     if (count.oldest && (!management.oldest || count.oldest < management.oldest)) management.oldest = count.oldest;
     if (count.supervisorId) rows.set(count.supervisorId, { id: count.supervisorId, name: count.supervisor,
@@ -100,7 +114,7 @@ export async function listSpacePending(scope: MeuEspacoScope, query: URLSearchPa
   const source = await spacePendingSource(scope);
   const rows = await prisma.$queryRaw<DbPending[]>(Prisma.sql`${source}, filtered AS (SELECT *, TO_CHAR(MIN(date) OVER (), 'YYYY-MM-DD') AS "oldestDate" FROM items
     WHERE pending=${filters.state === "pending"} AND date >= ${spaceDate(filters.startDate)} AND date <= ${spaceDate(filters.endDate)}
-      ${filters.kind === "all" ? Prisma.empty : Prisma.sql`AND kind=${filters.kind}`}
+      ${filters.kind === "all" ? Prisma.empty : filters.kind === "hours" ? Prisma.sql`AND kind IN ('hours', 'overtime')` : Prisma.sql`AND kind=${filters.kind}`}
       ${filters.lob ? Prisma.sql`AND lob=${filters.lob}` : Prisma.empty}
       ${filters.search ? Prisma.sql`AND (POSITION(LOWER(${filters.search}) IN LOWER("employeeName"))>0 OR POSITION(LOWER(${filters.search}) IN LOWER("wbLogin"))>0)` : Prisma.empty}
     ) SELECT * FROM filtered WHERE TRUE
@@ -111,7 +125,7 @@ export async function listSpacePending(scope: MeuEspacoScope, query: URLSearchPa
 }
 
 export async function getSpacePendingItem(scope: MeuEspacoScope, kind: string, id: string) {
-  if (!["absence", "hours"].includes(kind) || !id || id.length > 160) throw new MeuEspacoError("Ocorrência inválida.");
+  if (!["absence", "hours", "overtime"].includes(kind) || !id || id.length > 160) throw new MeuEspacoError("Ocorrência inválida.");
   const source = await spacePendingSource(scope);
   const rows = await prisma.$queryRaw<DbPending[]>(Prisma.sql`${source} SELECT * FROM items WHERE kind=${kind} AND id=${id} LIMIT 1`);
   if (!rows[0]) throw new MeuEspacoError("Ocorrência indisponível ou fora da sua responsabilidade. Atualize a lista.", 404);
@@ -125,19 +139,26 @@ export async function getSpacePendingHistory(scope: MeuEspacoScope, kind: string
       orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30, select: { id: true, createdAt: true, previousReason: true, newReason: true, comment: true, changedBy: { select: { name: true } } } });
     return { item, history: history.map((row) => ({ id: row.id, date: row.createdAt.toISOString(), actor: row.changedBy?.name || "Sistema", text: [row.previousReason, row.newReason, row.comment].filter(Boolean).join(" → ") })) };
   }
-  const audit = await prisma.auditLog.findMany({ where: { entity: "WorkHourAdherenceJustification", entityId: id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30,
+  const audit = await prisma.auditLog.findMany({ where: { entity: kind === "overtime" ? "WorkHourOvertimeReview" : "WorkHourAdherenceJustification", entityId: id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30,
     select: { id: true, createdAt: true, reason: true, newValue: true, actor: { select: { name: true } } } });
   const history = audit.map((row) => { const value = row.newValue && typeof row.newValue === "object" && !Array.isArray(row.newValue) ? row.newValue : {};
     return { id: row.id, date: row.createdAt.toISOString(), actor: row.actor?.name || "Sistema", text: typeof value.justification === "string" ? value.justification : row.reason || "Registro atualizado." }; });
   return { item, history: history.length ? history : item.answeredAt ? [{ id: item.id, date: item.answeredAt, actor: item.answeredBy, text: item.justification }] : [] };
 }
 
-export async function respondSpacePending(scope: MeuEspacoScope, kind: string, id: string, input: { justification: string; reason?: string; reasonCategory?: string; evidenceUrl?: string }) {
+export async function respondSpacePending(scope: MeuEspacoScope, kind: string, id: string, input: { justification?: string; reason?: string; reasonCategory?: string; evidenceUrl?: string; action?: "approve" | "reject"; version?: number; rejectionReason?: string }) {
   if (!scope.canRespond) throw new MeuEspacoError("Seu perfil tem acesso somente à consulta neste espaço.", 403);
+  if (kind === "overtime") {
+    if (!input.action || input.version == null) throw new MeuEspacoError("Informe a decisão e a versão da revisão.");
+    // Check the persisted revision even when a replacement removed it from the feed.
+    // The decision service enforces the current role, assignment and version.
+    await reviewWorkHourOvertime(scope.actor, { id, action: input.action, version: input.version, rejectionReason: input.rejectionReason });
+    return { data: await getSpacePendingItem(scope, kind, id) };
+  }
   const item = await getSpacePendingItem(scope, kind, id);
   if (!item.pending) throw new MeuEspacoError("Esta ocorrência já foi respondida. Atualize a lista.", 409);
   if (kind === "hours") {
-    const result = await answerWorkHourAdherenceJustification(scope.actor, { id, justification: input.justification });
+    const result = await answerWorkHourAdherenceJustification(scope.actor, { id, justification: input.justification ?? "" });
     if ("error" in result) throw new MeuEspacoError(result.error || "Não foi possível responder.");
   } else {
     const schedule = await prisma.schedule.findFirst({ where: { id, deletedAt: null, employeeId: { in: scope.employeeIds } }, include: { shift: true, employee: { select: { shift: true } } } });

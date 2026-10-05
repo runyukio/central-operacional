@@ -251,6 +251,13 @@ enum WorkHourImportStatus {
   FAILED
 }
 
+enum WorkHourOvertimeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 model Role {
   id          String   @id @default(cuid())
   name        String   @unique
@@ -338,6 +345,7 @@ model User {
   workHourCaptureImports            WorkHourCaptureImportRun[]       @relation("WorkHourCaptureImportStartedBy")
   resolvedWorkHourDivergences       WorkHourCaptureDivergence[]      @relation("WorkHourCaptureDivergenceResolvedBy")
   answeredAdherenceJustifications   WorkHourAdherenceJustification[] @relation("WorkHourAdherenceAnsweredBy")
+  answeredOvertimeReviews           WorkHourOvertimeReview[] @relation("WorkHourOvertimeAnsweredBy")
   monthlyAdvanceUpdates             MonthlyAdvanceRecord[]           @relation("MonthlyAdvanceUpdatedBy")
   billingCyclesFinalized            BillingCycle[]                   @relation("BillingCycleFinalizedBy")
   billingCyclesClosed               BillingCycle[]                   @relation("BillingCycleClosedBy")
@@ -477,6 +485,8 @@ model EmployeeProfile {
   workHourCaptureDivergences        WorkHourCaptureDivergence[]
   adherenceJustifications           WorkHourAdherenceJustification[]
   supervisedAdherenceJustifications WorkHourAdherenceJustification[] @relation("WorkHourAdherenceSupervisor")
+  overtimeReviews                  WorkHourOvertimeReview[] @relation("WorkHourOvertimeEmployee")
+  supervisedOvertimeReviews        WorkHourOvertimeReview[] @relation("WorkHourOvertimeSupervisor")
   monthlyAdvanceRecords             MonthlyAdvanceRecord[]
   billingInvoices                   BillingEmployeeInvoice[]
   billingAdjustments                BillingAdjustment[]
@@ -2428,6 +2438,7 @@ model WorkHourRecord {
   importBatch           WorkHourImportBatch?        @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   adjustments           WorkHourAdjustmentRequest[]
   histories             WorkHourHistory[]
+  overtimeReview        WorkHourOvertimeReview?
   createdAt             DateTime                    @default(now())
   updatedAt             DateTime                    @updatedAt
 
@@ -2440,6 +2451,35 @@ model WorkHourRecord {
   @@index([date, status])
   @@index([status])
   @@index([importBatchId])
+}
+
+model WorkHourOvertimeReview {
+  id                  String @id @default(cuid())
+  workHourRecordId    String? @unique
+  employeeId          String
+  supervisorId        String?
+  date                DateTime
+  version             Int @default(1)
+  sourceFingerprint   String
+  sourceSnapshot      Json
+  sourceDurationMs    Int
+  calculatedHours     Float
+  excessHours         Float
+  ruleLabel           String
+  status              WorkHourOvertimeStatus @default(PENDING)
+  answeredById        String?
+  answeredAt          DateTime?
+  rejectionReason     String?
+  record              WorkHourRecord? @relation(fields: [workHourRecordId], references: [id], onDelete: SetNull)
+  employee            EmployeeProfile @relation("WorkHourOvertimeEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  supervisor          EmployeeProfile? @relation("WorkHourOvertimeSupervisor", fields: [supervisorId], references: [id], onDelete: SetNull)
+  answeredBy          User? @relation("WorkHourOvertimeAnsweredBy", fields: [answeredById], references: [id], onDelete: SetNull)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([supervisorId, status, date])
+  @@index([employeeId, date])
+  @@index([status, date])
 }
 
 model WorkHourAdjustmentRequest {
