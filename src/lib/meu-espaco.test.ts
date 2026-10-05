@@ -278,6 +278,30 @@ test("feed de horas inclui excedentes e mantém o responsável original; sem sup
   assert.deepEqual(decodeSpaceCursor(encodeSpaceCursor(cursor), "scope"), cursor);
 });
 
+for (const state of ["pending", "answered"]) {
+  test(`filtro exclusivo de excedentes: ${state}, com parceiro, LOB, período e responsabilidade`, async (t) => {
+    t.mock.method(prisma.attendanceRecord, "groupBy", async () => []);
+    t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+      assert.match(sql.text, /AND kind=\$/);
+      assert.ok(sql.values.includes("overtime"));
+      assert.ok(!sql.text.includes("kind IN ('hours', 'overtime')"));
+      assert.match(sql.text, /r\."supervisorId"=\$/);
+      assert.ok(sql.values.includes("sup"));
+      assert.match(sql.text, /AND lob=\$/);
+      assert.ok(sql.values.includes("VIDEO"));
+      assert.ok(sql.values.includes("wb_bruno29"));
+      assert.match(sql.text, /WHERE pending=\$/);
+      assert.ok(sql.values.includes(state === "pending"));
+      const dates = sql.values.filter((value: unknown) => value instanceof Date).map((value: Date) => value.toISOString().slice(0, 10));
+      assert.ok(dates.includes("2026-09-01")); assert.ok(dates.includes("2026-09-04"));
+      return [{ id: "review", kind: "overtime", date: new Date("2026-09-04"), answeredAt: null, pending: state === "pending", version: 1 }];
+    });
+    const result = await listSpacePending(scope(), new URLSearchParams(`kind=overtime&state=${state}&lob=VIDEO&search=wb_bruno29&startDate=2026-09-01&endDate=2026-09-04`));
+    assert.equal(result.data[0].kind, "overtime");
+    assert.equal(result.data[0].pending, state === "pending");
+  });
+}
+
 test("latency uses sum/submits, separates Comments, excludes other video SLAs, preserves no data", () => {
   const value = emptySpaceMetric();
   Object.assign(value, { latencyMinutesSum: 900 * 10 + 100 * 100, latencySubmits: 1000, commentsLatencyMinutesSum: 80000, commentsLatencySubmits: 200 });
