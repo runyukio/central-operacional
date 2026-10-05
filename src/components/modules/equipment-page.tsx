@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { equipmentUsageLabels, type EquipmentUsageValue } from "@/lib/equipment-classification";
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Laptop, Plus, RefreshCw, Search, Upload, Wrench } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
 import { DonutLegend, EmptyState, PageHeader, Panel, SimpleTable, StatCard, StatusBadge } from "@/components/ui/primitives";
@@ -11,6 +12,10 @@ type EquipmentItem = {
   serial?: string;
   type: string;
   model?: string;
+  lobId?: string;
+  lob?: string;
+  usage?: string;
+  usageLabel?: string;
   employeeId?: string;
   employee: string;
   employeeWbLogin?: string;
@@ -49,6 +54,8 @@ type EquipmentImportPreview = {
     numeroSerie: string;
     type: string;
     model: string;
+    lob: string;
+    usage: string;
     status: string;
     responsible: string;
     deliveredAt: string;
@@ -65,8 +72,9 @@ export function EquipmentPage() {
   const [rows, setRows] = useState<EquipmentItem[]>([]);
   const [summary, setSummary] = useState<EquipmentSummary>({ total: 0, inUse: 0, available: 0, maintenance: 0, returned: 0, pending: 0 });
   const [canManage, setCanManage] = useState(false);
+  const [lobs, setLobs] = useState<Array<{ id: string; name: string }>>([]);
   const [equipmentMessage, setEquipmentMessage] = useState("");
-  const emptyEquipmentFilters = { search: "", serialNumber: "", status: "Todos", type: "Todos", responsible: "", responsibleId: "", model: "", deliveredFrom: "", deliveredTo: "" };
+  const emptyEquipmentFilters = { search: "", serialNumber: "", status: "Todos", type: "Todos", lobId: "Todos", usage: "Todos", responsible: "", responsibleId: "", model: "", deliveredFrom: "", deliveredTo: "" };
   const initialEquipmentFilters = { ...emptyEquipmentFilters, responsibleId: queryParam("responsibleId") };
   const [equipmentFilters, setEquipmentFilters] = useState(initialEquipmentFilters);
   const [appliedEquipmentFilters, setAppliedEquipmentFilters] = useState(initialEquipmentFilters);
@@ -75,6 +83,8 @@ export function EquipmentPage() {
     numeroSerie: "",
     tipoEquipamento: "Notebook",
     modelo: "",
+    lobId: "",
+    usage: "",
     responsavel: "",
     dataEntrega: new Date().toISOString().slice(0, 10),
     status: "Disponível",
@@ -97,7 +107,7 @@ export function EquipmentPage() {
     Object.entries(filters).forEach(([key, value]) => {
       if (value && value !== "Todos") params.set(key, value);
     });
-    const payload = await apiJson<{ data: EquipmentItem[]; summary: EquipmentSummary; canManage: boolean; pagination?: typeof equipmentPagination }>(`/api/equipment?${params.toString()}`);
+    const payload = await apiJson<{ data: EquipmentItem[]; summary: EquipmentSummary; canManage: boolean; lobs: Array<{ id: string; name: string }>; pagination?: typeof equipmentPagination }>(`/api/equipment?${params.toString()}`);
     if (!payload.data.length && (payload.pagination?.total ?? 0) > 0 && page > 1) {
       await refreshEquipment(filters, 1);
       return;
@@ -105,6 +115,7 @@ export function EquipmentPage() {
     setRows(payload.data);
     setSummary(payload.summary);
     setCanManage(payload.canManage);
+    setLobs(payload.lobs);
     setEquipmentPagination(payload.pagination ?? { page, limit: equipmentPagination.limit, total: payload.data.length, totalPages: 1 });
     setAppliedEquipmentFilters(filters);
   }
@@ -119,6 +130,8 @@ export function EquipmentPage() {
           numeroSerie: equipmentForm.numeroSerie,
           tipoEquipamento: equipmentForm.tipoEquipamento,
           modelo: equipmentForm.modelo,
+          lobId: equipmentForm.lobId,
+          usage: equipmentForm.usage,
           responsavelWbLogin: equipmentForm.responsavel,
           responsavelEmail: equipmentForm.responsavel,
           responsavelNome: equipmentForm.responsavel,
@@ -128,7 +141,7 @@ export function EquipmentPage() {
         })
       });
       setEquipmentMessage(payload.message);
-      setEquipmentForm({ id: "", numeroSerie: "", tipoEquipamento: "Notebook", modelo: "", responsavel: "", dataEntrega: new Date().toISOString().slice(0, 10), status: "Disponível", observacao: "" });
+      setEquipmentForm({ id: "", numeroSerie: "", tipoEquipamento: "Notebook", modelo: "", lobId: "", usage: "", responsavel: "", dataEntrega: new Date().toISOString().slice(0, 10), status: "Disponível", observacao: "" });
       await refreshEquipment(equipmentFilters, equipmentPagination.page);
     } catch (error) {
       setEquipmentMessage(error instanceof Error ? error.message : "Não foi possível salvar o equipamento.");
@@ -143,6 +156,8 @@ export function EquipmentPage() {
       numeroSerie: item.serial ?? item.code,
       tipoEquipamento: item.type,
       modelo: item.model ?? "",
+      lobId: item.lobId ?? "",
+      usage: item.usage ?? "",
       responsavel: item.employeeWbLogin || item.employeeEmail || item.employee,
       dataEntrega: item.deliveredAt || new Date().toISOString().slice(0, 10),
       status: item.status,
@@ -213,6 +228,8 @@ export function EquipmentPage() {
     appliedEquipmentFilters.serialNumber.trim() ? `Série: ${appliedEquipmentFilters.serialNumber.trim()}` : "",
     appliedEquipmentFilters.status !== "Todos" ? `Status: ${appliedEquipmentFilters.status}` : "",
     appliedEquipmentFilters.type !== "Todos" ? `Tipo: ${appliedEquipmentFilters.type}` : "",
+    appliedEquipmentFilters.lobId !== "Todos" ? `LOB: ${appliedEquipmentFilters.lobId === "unclassified" ? "Não classificado" : lobs.find((lob) => lob.id === appliedEquipmentFilters.lobId)?.name ?? appliedEquipmentFilters.lobId}` : "",
+    appliedEquipmentFilters.usage !== "Todos" ? `Destinação: ${appliedEquipmentFilters.usage === "unclassified" ? "Não classificado" : equipmentUsageLabels[appliedEquipmentFilters.usage as EquipmentUsageValue]}` : "",
     appliedEquipmentFilters.responsible.trim() ? `Responsável: ${appliedEquipmentFilters.responsible.trim()}` : "",
     appliedEquipmentFilters.model.trim() ? `Modelo: ${appliedEquipmentFilters.model.trim()}` : "",
     appliedEquipmentFilters.deliveredFrom ? `Entrega inicial: ${appliedEquipmentFilters.deliveredFrom}` : "",
@@ -264,6 +281,16 @@ export function EquipmentPage() {
             </select>
             <input value={equipmentFilters.responsible} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, responsible: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Responsável ou WB/Login" />
             <input value={equipmentFilters.model} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, model: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Modelo" />
+            <select aria-label="Filtrar por LOB" value={equipmentFilters.lobId} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, lobId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+              <option value="Todos">Todas as LOBs</option>
+              <option value="unclassified">Não classificado</option>
+              {lobs.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}
+            </select>
+            <select aria-label="Filtrar por destinação" value={equipmentFilters.usage} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, usage: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+              <option value="Todos">Todas as destinações</option>
+              <option value="unclassified">Não classificado</option>
+              {Object.entries(equipmentUsageLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
             <label className="block">
               <span className="sr-only">Entrega inicial</span>
               <input type="date" value={equipmentFilters.deliveredFrom} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, deliveredFrom: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
@@ -295,11 +322,13 @@ export function EquipmentPage() {
           {rows.length ? (
             <>
               <SimpleTable
-                columns={["Nº série", "Tipo", "Modelo", "Responsável", "WB/Login", "Entrega", "Status", "Ações"]}
+                columns={["Nº série", "Tipo", "Modelo", "LOB", "Destinação", "Responsável", "WB/Login", "Entrega", "Status", "Ações"]}
                 rows={rows.map((item) => [
                   <button key={`${item.code}-history`} type="button" onClick={() => void openEquipmentHistory(item.id)} className="font-extrabold text-blue-700 hover:underline">{item.serial ?? item.code}</button>,
                   item.type,
                   item.model ?? "",
+                  item.lob ?? "Não classificado",
+                  item.usageLabel ?? "Não classificado",
                   item.employee,
                   item.employeeWbLogin ?? "",
                   item.delivered,
@@ -341,6 +370,8 @@ export function EquipmentPage() {
                 <FormInput label="Número de série" value={equipmentForm.numeroSerie} onChange={(value) => setEquipmentForm({ ...equipmentForm, numeroSerie: value })} />
                 <FormSelect label="Tipo" value={equipmentForm.tipoEquipamento} options={equipmentTypes.filter((type) => type !== "Todos")} onChange={(value) => setEquipmentForm({ ...equipmentForm, tipoEquipamento: value })} />
                 <FormInput label="Modelo" value={equipmentForm.modelo} onChange={(value) => setEquipmentForm({ ...equipmentForm, modelo: value })} />
+                <FormSelect label="LOB" value={equipmentForm.lobId} options={["", ...lobs.map((lob) => lob.id)]} emptyLabel="Não classificado" optionLabel={(value) => lobs.find((lob) => lob.id === value)?.name ?? value} onChange={(value) => setEquipmentForm({ ...equipmentForm, lobId: value })} />
+                <FormSelect label="Destinação" value={equipmentForm.usage} options={["", ...Object.keys(equipmentUsageLabels)]} emptyLabel="Não classificado" optionLabel={(value) => equipmentUsageLabels[value as EquipmentUsageValue] ?? value} onChange={(value) => setEquipmentForm({ ...equipmentForm, usage: value })} />
                 <FormInput label="Responsável (WB/Login, e-mail ou nome)" value={equipmentForm.responsavel} onChange={(value) => setEquipmentForm({ ...equipmentForm, responsavel: value })} />
                 <FormInput label="Data de entrega" type="date" value={equipmentForm.dataEntrega} onChange={(value) => setEquipmentForm({ ...equipmentForm, dataEntrega: value })} />
                 <FormSelect label="Status" value={equipmentForm.status} options={equipmentStatuses.filter((status) => status !== "Todos")} onChange={(value) => setEquipmentForm({ ...equipmentForm, status: value })} />
@@ -383,12 +414,14 @@ export function EquipmentPage() {
               <ImportIssueSummary rows={equipmentPreview.rows} title="Corrija estas linhas do arquivo de equipamentos" />
               <div className="max-h-[56vh] overflow-y-auto">
                 <SimpleTable
-                  columns={["Linha", "Série", "Tipo", "Modelo", "Responsável", "Status", "Ação", "Erros/alertas"]}
+                  columns={["Linha", "Série", "Tipo", "Modelo", "LOB", "Destinação", "Responsável", "Status", "Ação", "Erros/alertas"]}
                   rows={equipmentPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                     row.rowNumber,
                     row.numeroSerie,
                     row.type,
                     row.model,
+                    row.lob,
+                    row.usage,
                     row.responsible,
                     <StatusBadge key={`${row.rowNumber}-status`} status={row.errors.length ? "Erro" : row.status} />,
                     row.action === "update" ? "Atualizar" : row.action === "create" ? "Criar" : "Ignorar",
@@ -419,6 +452,8 @@ export function EquipmentPage() {
             </div>
             <div className="mb-4 grid gap-2 md:grid-cols-2">
               <InfoLine label="Modelo" value={equipmentHistory.equipment.model ?? "-"} />
+              <InfoLine label="LOB" value={equipmentHistory.equipment.lob ?? "Não classificado"} />
+              <InfoLine label="Destinação" value={equipmentHistory.equipment.usageLabel ?? "Não classificado"} />
               <InfoLine label="Responsável atual" value={equipmentHistory.equipment.employee} />
               <InfoLine label="WB/Login" value={equipmentHistory.equipment.employeeWbLogin ?? "-"} />
               <InfoLine label="Data de entrega" value={equipmentHistory.equipment.delivered} />
