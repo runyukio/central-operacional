@@ -6,6 +6,7 @@ export type SpacePending = {
   lob: string; supervisorId: string | null; supervisor: string; pending: boolean; status: string;
   reason: string; reasonCategory: string; justification: string; evidenceUrl: string; answeredAt: string | null; answeredBy: string;
   plannedStart: string; plannedEnd: string; capturedMinutes: number | null;
+  notifiedWithin48h?: boolean | null;
   version?: number | null; calculatedHours?: number | null; effectiveHours?: number | null; excessHours?: number | null; ruleLabel?: string | null;
 };
 export type ManagementCounts = { absences: number; hours: number; answered: number; oldest: string | null; required?: number };

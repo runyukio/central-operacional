@@ -1,5 +1,7 @@
 "use client";
 
+import { AbsenceNoticeField } from "@/components/absence-notice-field";
+import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { useEffect, useState } from "react";
 import { SpaceCoveragePanel } from "./requerido";
@@ -19,6 +21,8 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
   const [reason, setReason] = useState("");
   const [reasonCategory, setReasonCategory] = useState("Operacional");
   const [justification, setJustification] = useState("");
+  const [notifiedWithin48h, setNotifiedWithin48h] = useState<boolean | null>(row.notifiedWithin48h ?? null);
+  const noticeRequired = row.kind === "absence" && requiresAbsenceNotice(row.status);
   const [saving, setSaving] = useState(false), [error, setError] = useState("");
   async function decideOvertime(action: "approve" | "reject") {
     if (saving) return;
@@ -34,9 +38,10 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
   }
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (saving) return;
+    if (noticeRequired && typeof notifiedWithin48h !== "boolean") { setError(ABSENCE_NOTICE_REQUIRED); return; }
     setSaving(true); setError("");
     try {
-      const result = await apiJson<{ data: SpacePending }>(endpoint, { method: "POST", body: JSON.stringify({ justification, ...(row.kind === "absence" ? { reason, reasonCategory } : {}) }) });
+      const result = await apiJson<{ data: SpacePending }>(endpoint, { method: "POST", body: JSON.stringify({ justification, ...(row.kind === "absence" ? { reason, reasonCategory, notifiedWithin48h } : {}) }) });
       onAnswered(result.data);
     } catch (error) { setError(error instanceof Error ? error.message : "Não foi possível salvar. Sua resposta foi mantida."); }
     finally { setSaving(false); }
@@ -48,6 +53,7 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
       <p>Horas contabilizadas: {formatMinutesToHHMM((row.effectiveHours ?? 0) * 60)} · Excedente: {formatMinutesToHHMM((row.excessHours ?? 0) * 60)}</p>
       {row.pending ? <p className="font-bold text-amber-700">Horas em validação: {formatMinutesToHHMM((row.excessHours ?? 0) * 60)}. O excedente só entra no total após aprovação.</p> : <p className="font-bold">{row.status === "APPROVED" ? "Excedente aprovado" : "Excedente recusado"}{row.answeredBy ? ` por ${row.answeredBy}` : ""}{row.answeredAt ? ` em ${new Date(row.answeredAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}` : ""}</p>}
     </div> : null}
+    {noticeRequired && (!row.pending || !canRespond) ? <p className="mb-3 text-sm font-bold">Aviso dentro de 48h: {absenceNoticeLabel(row.notifiedWithin48h)}</p> : null}
     {row.kind === "hours" ? <p className="mb-3 text-sm text-muted">Classificação: {row.reason} · Previsto: {row.plannedStart || "—"}–{row.plannedEnd || "—"} · Captura na ocorrência: {row.capturedMinutes == null ? "Sem dados" : formatMinutesToHHMM(row.capturedMinutes).padStart(5, "0")}</p> : null}
     {canRespond && row.pending && row.kind === "overtime" ? <div className="space-y-3">
       <label className="block text-sm font-bold">Motivo da recusa (obrigatório ao recusar)<textarea maxLength={10000} value={justification} onChange={(event) => setJustification(event.target.value)} className="premium-control mt-2 min-h-24 w-full p-3 font-normal" /></label>
@@ -56,6 +62,7 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
     </div> : canRespond && row.pending ? <form onSubmit={submit} className="space-y-3">
       {row.kind === "absence" ? <label className="block text-sm font-bold">Motivo<select required value={reason} onChange={(e) => setReason(e.target.value)} className="premium-control mt-2 w-full p-2"><option value="">Selecione o motivo</option>{officialAbsenceReasons.map((value) => <option key={value} value={value}>{scheduleDisplayLabel(value)}</option>)}</select></label> : null}
       {row.kind === "absence" ? <label className="block text-sm font-bold">Categoria<select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value)} className="premium-control mt-2 w-full p-2">{["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"].map((value) => <option key={value} value={value}>{scheduleDisplayLabel(value)}</option>)}</select></label> : null}
+      {noticeRequired ? <AbsenceNoticeField value={notifiedWithin48h} onChange={setNotifiedWithin48h} /> : null}
       <label className="block text-sm font-bold">{row.kind === "absence" ? "Descrição da ocorrência" : "Justificativa de aderência"}<textarea required minLength={row.kind === "hours" ? 5 : 1} maxLength={10000} value={justification} onChange={(e) => setJustification(e.target.value)} className="premium-control mt-2 min-h-24 w-full p-3 font-normal" /></label>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
       <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Check className="h-4 w-4" />{saving ? "Salvando…" : "Enviar justificativa"}</button>
@@ -106,7 +113,8 @@ export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, in
           <div><p className="font-bold text-navy-950">{row.employeeName} <span className="text-xs font-medium text-muted">{row.wbLogin}</span></p><p className="mt-1 text-xs text-muted">{dateLabel(row.date)} · {row.lob} · Responsável: {row.supervisor}</p></div>
           <div className="flex flex-wrap items-center gap-3"><span className={styles.ageBadge} data-priority={spaceAgePriority(row.date, today, row.oldestDate === row.date, row.pending)} title="Prioridade visual pela antiguidade; não indica atraso de SLA">{spaceAge(row.date, today)}{row.pending && row.oldestDate === row.date ? " · Mais antiga" : ""}</span><span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold">{row.kind === "overtime" ? "Excedente de horas" : row.kind === "hours" ? "Aderência de horas" : "Falta / ocorrência"}</span><span className="text-xs text-muted">{row.kind === "overtime" ? row.pending ? "Horas em validação" : row.status === "APPROVED" ? "Aprovado" : "Recusado" : row.pending ? "Pendente" : row.status === "FALTA_INJUSTIFICADA" ? "Classificada como injustificada" : "Respondida"}</span><ChevronDown className="h-4 w-4" /></div>
         </button>
-        {opened === key ? <PendingDetail row={row} supervisorId={supervisorId} canRespond={canRespond} onAnswered={(updated) => { feed.answer(updated); setOpened(""); setMessage(row.kind === "overtime" ? "Decisão registrada e horas contabilizadas atualizadas." : "Justificativa salva no fluxo original."); onAnswered(); }} /> : null}
+        {row.kind === "absence" && requiresAbsenceNotice(row.status) ? <p className="mt-2 text-xs font-semibold">Aviso dentro de 48h: {absenceNoticeLabel(row.notifiedWithin48h)}</p> : null}
+        {opened === key ? <PendingDetail key={key} row={row} supervisorId={supervisorId} canRespond={canRespond} onAnswered={(updated) => { feed.answer(updated); setOpened(""); setMessage(row.kind === "overtime" ? "Decisão registrada e horas contabilizadas atualizadas." : "Justificativa salva no fluxo original."); onAnswered(); }} /> : null}
       </article>; })}
       {state.hasMore ? <button type="button" onClick={() => void feed.more()} disabled={state.loadingMore || Boolean(state.error)} className="premium-control w-full p-3 text-sm font-bold disabled:opacity-50">{state.loadingMore ? "Carregando…" : "Carregar mais 50"}</button> : null}
       {state.initialized ? <p className="text-center text-xs text-muted">{state.rows.length} ocorrências carregadas{state.hasMore ? " · Há mais resultados" : " · Fim da lista"}</p> : null}

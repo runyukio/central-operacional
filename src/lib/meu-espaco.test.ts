@@ -429,9 +429,10 @@ test("absence answer reuses attendance classification and its original histories
   t.mock.method(prisma.auditLog, "create", async ({ data }: any) => { audits.push(data); return data; });
   t.mock.method(prisma, "$transaction", (async (fn: any) => fn(prisma)) as any);
   t.mock.method(prisma, "$queryRaw", async () => [{ ...record, id: schedule.id, status: schedule.status, kind: "absence", pending: !record.isJustified, answeredAt: record.justifiedAt }]);
-  const result = await respondSpacePending(scope(), "absence", "absence", { justification: "Motivo informado pelo parceiro", reason: "Não informado", reasonCategory: "Operacional" });
+  const result = await respondSpacePending(scope(), "absence", "absence", { justification: "Motivo informado pelo parceiro", reason: "Não informado", reasonCategory: "Operacional", notifiedWithin48h: false });
   assert.equal(result.data.pending, false); assert.equal(schedule.status, "FALTA_INJUSTIFICADA");
   assert.equal(record.isJustified, true); assert.equal(history.length, 1); assert.equal(scheduleHistory.length, 1); assert.equal(audits.length, 1);
   assert.equal(history[0].attendanceRecordId, "attendance"); assert.equal(audits[0].entity, "AttendanceRecord");
   assert.equal(record.evidenceUrl, "https://example.test/prior-evidence"); assert.equal(record.hasEvidence, true);
+  assert.equal(record.notifiedWithin48h, false); assert.equal(result.data.notifiedWithin48h, false);
 });

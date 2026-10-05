@@ -6,6 +6,7 @@ import { spaceApiError, spaceJson } from "@/lib/meu-espaco-api";
 import { MeuEspacoError } from "@/lib/meu-espaco-access";
 
 const answer = z.object({ justification: z.string().trim().min(1).max(10000), reason: z.string().trim().max(160).optional(),
+  notifiedWithin48h: z.boolean().nullable().optional(),
   reasonCategory: z.enum(["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"]).optional(),
   evidenceUrl: z.union([z.literal(""), z.string().url().max(2000).refine((value) => /^https?:\/\//i.test(value))]).optional() }).strict();
 type Context = { params: Promise<{ kind: string; id: string }> };

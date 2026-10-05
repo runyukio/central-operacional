@@ -35,7 +35,7 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
       s.status::text AS status, COALESCE(a."absenceReason", '') AS reason, COALESCE(a."reasonCategory", '') AS "reasonCategory", COALESCE(a."supervisorJustification", '') AS justification,
       COALESCE(a."evidenceUrl", '') AS "evidenceUrl", a."justifiedAt" AS "answeredAt", COALESCE(u.name, '') AS "answeredBy",
       COALESCE(s."startsAt", '') AS "plannedStart", COALESCE(s."endsAt", '') AS "plannedEnd", NULL::double precision AS "capturedMinutes",
-      NULL::integer AS version, NULL::double precision AS "calculatedHours", NULL::double precision AS "effectiveHours", NULL::double precision AS "excessHours", NULL::text AS "ruleLabel"
+      NULL::integer AS version, NULL::double precision AS "calculatedHours", NULL::double precision AS "effectiveHours", NULL::double precision AS "excessHours", NULL::text AS "ruleLabel", a."notifiedWithin48h" AS "notifiedWithin48h"
     FROM "Schedule" s JOIN "EmployeeProfile" e ON e.id=s."employeeId" JOIN "Lob" l ON l.id=e."lobId"
     LEFT JOIN "EmployeeProfile" sup ON sup.id=e."supervisorId"
     LEFT JOIN LATERAL (SELECT r.* FROM "AttendanceRecord" r WHERE r."scheduleId"=s.id AND r."employeeId"=e.id ORDER BY r."updatedAt" DESC, r.id DESC LIMIT 1) a ON TRUE
@@ -46,7 +46,7 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
     SELECT j.id, 'hours'::text, j.date, e.id, e."fullName", e."wbLogin", j.lob, j."supervisorId", COALESCE(sup."fullName", 'Sem supervisor'),
       j.status='PENDING', j.status, j.classification, ''::text, COALESCE(j.justification, ''), ''::text, j."answeredAt", COALESCE(u.name, ''),
       COALESCE(j."plannedStart", ''), COALESCE(j."plannedEnd", ''), j."sourceDurationMs"::double precision / 60000,
-      NULL::integer, NULL::double precision, NULL::double precision, NULL::double precision, NULL::text
+      NULL::integer, NULL::double precision, NULL::double precision, NULL::double precision, NULL::text, NULL::boolean
     FROM "WorkHourAdherenceJustification" j JOIN "EmployeeProfile" e ON e.id=j."employeeId"
     LEFT JOIN "Schedule" s ON s.id=j."scheduleId" LEFT JOIN "EmployeeProfile" sup ON sup.id=j."supervisorId"
     LEFT JOIN "User" u ON u.id=j."answeredById"
@@ -59,7 +59,7 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
     SELECT r.id, 'overtime'::text, r.date, e.id, e."fullName", e."wbLogin", l.name, r."supervisorId", COALESCE(sup."fullName", 'Sem supervisor'),
       r.status='PENDING', r.status::text, r."ruleLabel", ''::text, COALESCE(r."rejectionReason", ''), ''::text, r."answeredAt", COALESCE(u.name, ''),
       COALESCE(w."plannedStart", ''), COALESCE(w."plannedEnd", ''), r."sourceDurationMs"::double precision / 60000,
-      r.version, r."calculatedHours", w."effectiveHours", r."excessHours", r."ruleLabel"
+      r.version, r."calculatedHours", w."effectiveHours", r."excessHours", r."ruleLabel", NULL::boolean
     FROM "WorkHourOvertimeReview" r JOIN "WorkHourRecord" w ON w.id=r."workHourRecordId"
     JOIN "EmployeeProfile" e ON e.id=r."employeeId" JOIN "Lob" l ON l.id=e."lobId"
     LEFT JOIN "EmployeeProfile" sup ON sup.id=r."supervisorId" LEFT JOIN "User" u ON u.id=r."answeredById"
@@ -146,7 +146,7 @@ export async function getSpacePendingHistory(scope: MeuEspacoScope, kind: string
   return { item, history: history.length ? history : item.answeredAt ? [{ id: item.id, date: item.answeredAt, actor: item.answeredBy, text: item.justification }] : [] };
 }
 
-export async function respondSpacePending(scope: MeuEspacoScope, kind: string, id: string, input: { justification?: string; reason?: string; reasonCategory?: string; evidenceUrl?: string; action?: "approve" | "reject"; version?: number; rejectionReason?: string }) {
+export async function respondSpacePending(scope: MeuEspacoScope, kind: string, id: string, input: { notifiedWithin48h?: boolean | null; justification?: string; reason?: string; reasonCategory?: string; evidenceUrl?: string; action?: "approve" | "reject"; version?: number; rejectionReason?: string }) {
   if (!scope.canRespond) throw new MeuEspacoError("Seu perfil tem acesso somente à consulta neste espaço.", 403);
   if (kind === "overtime") {
     if (!input.action || input.version == null) throw new MeuEspacoError("Informe a decisão e a versão da revisão.");
@@ -166,7 +166,7 @@ export async function respondSpacePending(scope: MeuEspacoScope, kind: string, i
     const attendance = await prisma.attendanceRecord.findFirst({ where: { scheduleId: id, employeeId: item.employeeId }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { id: true } });
     const result = await updateOperationalAttendance(scope.actor, { employeeId: item.employeeId, scheduleId: id, attendanceRecordId: attendance?.id,
       date: item.date, shift: schedule.shift?.name || schedule.employee.shift.name, status: schedule.status === "ERRO_ESCALA" ? "Erro de cronograma" : "Falta",
-      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl });
+      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, notifiedWithin48h: input.notifiedWithin48h, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl });
     if ("error" in result) throw new MeuEspacoError(result.error || "Não foi possível responder.");
   }
   return { data: await getSpacePendingItem(scope, kind, id) };

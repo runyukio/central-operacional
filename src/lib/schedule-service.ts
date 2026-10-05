@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
 import { scheduleDisplayLabel, scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import { resolveScheduleStatusFilter, validScheduleSlotCountFilter } from "@/lib/schedule-slot-filter";
 import { editedScheduleSlotLobId, resolveScheduleSlotLob } from "@/lib/schedule-slot-lob";
@@ -190,6 +191,7 @@ export type ScheduleEditInput = {
   absenceReason?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
+  notifiedWithin48h?: boolean | null;
   lob?: string;
   supervisor?: string;
   observation?: string;
@@ -266,6 +268,7 @@ type AttendanceExportRow = {
   reasonClassification?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
+  notifiedWithin48h?: boolean | null;
   isJustified?: boolean;
   registeredBy: string;
   registeredAt: string;
@@ -336,6 +339,7 @@ export type AttendanceInput = {
   absenceReason?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
+  notifiedWithin48h?: boolean | null;
   hasEvidence?: boolean;
   evidenceUrl?: string;
   impactsAbs?: boolean;
@@ -561,6 +565,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
             reasonClassification: true,
             reasonCategory: true,
             supervisorJustification: true,
+            notifiedWithin48h: true,
             isJustified: true,
             impactsAbs: true,
             impactsCoverage: true,
@@ -1025,6 +1030,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
     absenceReason: normalizedInput.absenceReason,
     reasonCategory: normalizedInput.reasonCategory,
     supervisorJustification: normalizedInput.supervisorJustification,
+    notifiedWithin48h: normalizedInput.notifiedWithin48h,
     startsAt: needsTime(normalizedInput.status) ? defaultTimes.startsAt : "",
     endsAt: needsTime(normalizedInput.status) ? defaultTimes.endsAt : "",
     impactsAbs: normalizedInput.impactsAbs,
@@ -1041,7 +1047,8 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
       shift: cleanShiftName(normalizedInput.shift) || normalizedInput.shift,
       status: "data" in scheduleResult ? scheduleToUiStatus[String(scheduleResult.data.status)] ?? normalizedInput.status : normalizedInput.status,
       absenceReason: normalizedInput.absenceReason,
-      supervisorJustification: normalizedInput.supervisorJustification
+      supervisorJustification: normalizedInput.supervisorJustification,
+      notifiedWithin48h: normalizedInput.notifiedWithin48h ?? null
     },
     summary: scheduleResult.summary
   };
@@ -1153,6 +1160,9 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     if (!supervisorJustificationStatuses.includes(scheduleStatus) && !supervisorJustificationStatuses.includes(existingStatus)) {
       return { error: "Esta ocorrência não é justificável pelo Supervisor." };
     }
+    if ((requiresAbsenceNotice(scheduleStatus) || requiresAbsenceNotice(existingStatus)) && typeof input.notifiedWithin48h !== "boolean") {
+      return { error: ABSENCE_NOTICE_REQUIRED };
+    }
     const normalizedReason = normalizeAttendanceReason(input.absenceReason);
     const reasonClassification = getAbsenceReasonClassification(normalizedReason);
     if (!normalizedReason || !reasonClassification) return { error: "Motivo inválido." };
@@ -1177,6 +1187,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       reasonClassification: record.reasonClassification ?? undefined,
       reasonCategory: record.reasonCategory ?? undefined,
       supervisorJustification: record.supervisorJustification ?? undefined,
+      notifiedWithin48h: record.notifiedWithin48h ?? null,
       isJustified: record.isJustified,
       impactsAbs: record.impactsAbs,
       impactsCoverage: record.impactsCoverage,
@@ -1194,6 +1205,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       (existing.reasonClassification ?? "") === reasonClassification &&
       (existing.reasonCategory ?? "") === (input.reasonCategory ?? "") &&
       (existing.supervisorJustification ?? "") === (input.supervisorJustification ?? "") &&
+      (existing.notifiedWithin48h ?? null) === (requiresAbsenceNotice(existingStatus) ? input.notifiedWithin48h : null) &&
       schedule.status === nextScheduleStatus &&
       existing.hasEvidence === nextHasEvidence &&
       (existing.evidenceUrl ?? "") === (input.evidenceUrl ?? "") &&
@@ -1231,6 +1243,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
               reasonCategory: input.reasonCategory,
               reasonClassification,
               supervisorJustification: input.supervisorJustification,
+              notifiedWithin48h: requiresAbsenceNotice(existingStatus) ? input.notifiedWithin48h : null,
               hasEvidence: nextHasEvidence,
               evidenceUrl: input.evidenceUrl,
               isJustified: true,
@@ -1251,6 +1264,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
               reasonCategory: input.reasonCategory,
               reasonClassification,
               supervisorJustification: input.supervisorJustification,
+              notifiedWithin48h: requiresAbsenceNotice(existingStatus) ? input.notifiedWithin48h : null,
               hasEvidence: nextHasEvidence,
               evidenceUrl: input.evidenceUrl,
               isJustified: true,
@@ -1270,7 +1284,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           newStatus: savedStatus,
           previousReason: existing?.absenceReason ?? null,
           newReason: normalizedReason,
-          comment: input.supervisorJustification || normalizedReason
+          comment: [input.supervisorJustification || normalizedReason, requiresAbsenceNotice(existingStatus) ? `Aviso dentro de 48h: ${absenceNoticeLabel(input.notifiedWithin48h)}` : ""].filter(Boolean).join(" · ")
         }
       });
 
@@ -1726,7 +1740,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
       }
     }).catch(() => undefined);
 
-    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "skill", "entrada", "saida", "lob", "supervisor", "horas_realizadas", "status_justificativa", "motivo_justificativa", "classificacao_motivo", "descricao_ocorrencia", "justificado_por", "justificado_em", "observacao", "atualizado_em"];
+    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "skill", "entrada", "saida", "lob", "supervisor", "horas_realizadas", "status_justificativa", "motivo_justificativa", "classificacao_motivo", "descricao_ocorrencia", "justificado_por", "justificado_em", "observacao", "atualizado_em", "Aviso dentro de 48h"];
     const rows = schedules.map((schedule) => {
       const workHour = schedule.workHourRecords[0] ?? fallbackWorkHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`);
       const attendance = schedule.attendanceRecords[0];
@@ -1751,7 +1765,8 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
         attendance?.justifiedBy?.name ?? "",
         attendance?.justifiedAt ? formatDateTime(attendance.justifiedAt) : "",
         schedule.observation ?? "",
-        formatDateTime(schedule.updatedAt)
+        formatDateTime(schedule.updatedAt),
+        requiresAbsenceNotice(schedule.status) ? absenceNoticeLabel(attendance?.notifiedWithin48h) : ""
       ];
     });
 
@@ -1989,6 +2004,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           reasonClassification: validJustification ? record?.reasonClassification ?? getAbsenceReasonClassification(record?.absenceReason) ?? undefined : undefined,
           reasonCategory: validJustification ? record?.reasonCategory ?? undefined : undefined,
           supervisorJustification: validJustification ? record?.supervisorJustification ?? undefined : undefined,
+          notifiedWithin48h: record?.notifiedWithin48h ?? null,
           isJustified: validJustification,
           impactsAbs: isAbsenceStatus(schedule.status),
           impactsCoverage: impactsCoverage(status),
@@ -2068,7 +2084,8 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
       "observacao_justificativa",
       "justificado_por",
       "justificado_em",
-      "atualizado_em"
+      "atualizado_em",
+      "Aviso dentro de 48h"
     ];
     const body = rows.map((record) => [
       record.dateIso ?? record.date,
@@ -2087,7 +2104,8 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
       record.supervisorJustification ?? "",
       record.justifiedBy ?? record.registeredBy ?? "Sistema",
       record.justifiedAt ?? "",
-      record.updatedAt ?? record.justifiedAt ?? record.registeredAt
+      record.updatedAt ?? record.justifiedAt ?? record.registeredAt,
+      absenceNoticeLabel(record.notifiedWithin48h)
     ]);
 
     const start = query.startDate ?? query.date ?? new Date().toISOString().slice(0, 10);
@@ -2152,7 +2170,8 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
       "observacao_justificativa",
       "registrado_por",
       "registrado_em",
-      "atualizado_em"
+      "atualizado_em",
+      "Aviso dentro de 48h"
     ];
     const body = rows.map((record) => [
       record.dateIso ?? record.date,
@@ -2171,7 +2190,8 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
       record.supervisorJustification ?? "",
       record.registeredBy ?? "Sistema",
       record.registeredAt ?? "",
-      record.updatedAt ?? record.registeredAt
+      record.updatedAt ?? record.registeredAt,
+      absenceNoticeLabel(record.notifiedWithin48h)
     ]);
 
     const start = query.startDate ?? query.date ?? new Date().toISOString().slice(0, 10);
@@ -2236,7 +2256,8 @@ export async function exportClassifiedUnjustifiedAbsencesXlsxData(actor: Actor, 
       "observacao_justificativa",
       "justificado_por",
       "justificado_em",
-      "atualizado_em"
+      "atualizado_em",
+      "Aviso dentro de 48h"
     ];
     const body = rows.map((record) => [
       record.dateIso ?? record.date,
@@ -2255,7 +2276,8 @@ export async function exportClassifiedUnjustifiedAbsencesXlsxData(actor: Actor, 
       record.supervisorJustification ?? "",
       record.justifiedBy ?? record.registeredBy ?? "Sistema",
       record.justifiedAt ?? "",
-      record.updatedAt ?? record.justifiedAt ?? record.registeredAt
+      record.updatedAt ?? record.justifiedAt ?? record.registeredAt,
+      absenceNoticeLabel(record.notifiedWithin48h)
     ]);
 
     const start = query.startDate ?? query.date ?? new Date().toISOString().slice(0, 10);
@@ -2301,7 +2323,8 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
       "motivo_justificativa",
       "classificacao_motivo",
       "observacao",
-      "atualizado_em"
+      "atualizado_em",
+      "Aviso dentro de 48h"
     ],
     rows: data.map((item) => [
       item.date,
@@ -2318,7 +2341,8 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
       scheduleDisplayLabel(item.absenceReason ?? ""),
       absenceReasonClassificationLabel(item.reasonClassification),
       item.supervisorJustification ?? "",
-      item.updatedAt ?? item.registeredAt
+      item.updatedAt ?? item.registeredAt,
+      requiresAbsenceNotice(item.status) ? absenceNoticeLabel(item.notifiedWithin48h) : ""
     ]),
     sheetName: detailType === "present" ? "Presentes" : "Faltas",
     fileName: `${label}_${query.startDate ?? "inicio"}_${query.endDate ?? "fim"}.xlsx`
@@ -2488,7 +2512,8 @@ function editMockSchedule(actor: Actor, input: ScheduleEditInput) {
     status: input.status,
     absenceReason: input.observation,
     reasonCategory: "Cronograma",
-    supervisorJustification: input.observation
+    supervisorJustification: input.observation,
+    notifiedWithin48h: input.notifiedWithin48h
   });
   if ("error" in attendance) return attendance;
   return { data: attendance.data, summary: attendance.summary, schedules: getMockSchedulesForActor(actor) };
@@ -2503,6 +2528,7 @@ function validateScheduleEdit(input: ScheduleEditInput) {
     if (!input.absenceReason?.trim()) return "Motivo da ocorrência é obrigatório.";
     if (!normalizeAttendanceReason(input.absenceReason)) return "Motivo inválido.";
     if (!input.observation?.trim() && !input.supervisorJustification?.trim()) return "Descrição da ocorrência é obrigatória.";
+    if (requiresAbsenceNotice(input.status) && typeof input.notifiedWithin48h !== "boolean") return ABSENCE_NOTICE_REQUIRED;
   }
   return "";
 }
@@ -2533,6 +2559,7 @@ type AttendanceJustificationRecord = {
   reasonClassification: string | null;
   reasonCategory: string | null;
   supervisorJustification: string | null;
+  notifiedWithin48h?: boolean | null;
   isJustified: boolean;
   impactsAbs: boolean;
   impactsCoverage: boolean;
@@ -2578,6 +2605,7 @@ function formatScheduleJustification(status: ScheduleStatus | AttendanceStatus |
     reasonClassificationLabel: absenceReasonClassificationLabel(effectiveClassification) || undefined,
     reasonCategory: latest.reasonCategory ?? undefined,
     supervisorJustification: latest.supervisorJustification ?? undefined,
+    notifiedWithin48h: latest.notifiedWithin48h ?? null,
     isJustified: latest.isJustified,
     impactsAbs: latest.impactsAbs,
     impactsCoverage: latest.impactsCoverage,
@@ -2807,6 +2835,7 @@ function validateAttendance(input: AttendanceInput) {
     if (!input.absenceReason?.trim()) return "Motivo da ocorrência é obrigatório.";
     if (!normalizeAttendanceReason(input.absenceReason)) return "Motivo inválido.";
     if (!input.supervisorJustification?.trim()) return "Descrição da ocorrência é obrigatória.";
+    if (requiresAbsenceNotice(input.status) && typeof input.notifiedWithin48h !== "boolean") return ABSENCE_NOTICE_REQUIRED;
   }
   return "";
 }
@@ -2896,6 +2925,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           reasonCategory: requiresJustification ? explicitCategory || "Cronograma" : null,
           reasonClassification,
           supervisorJustification: savedJustification,
+          notifiedWithin48h: !pendingJustification && requiresAbsenceNotice(input.status) ? input.notifiedWithin48h : null,
           isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
           impactsCoverage: coverageImpact,
@@ -2916,6 +2946,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           reasonCategory: requiresJustification ? explicitCategory || "Cronograma" : undefined,
           reasonClassification,
           supervisorJustification: savedJustification,
+          notifiedWithin48h: !pendingJustification && requiresAbsenceNotice(input.status) ? input.notifiedWithin48h : null,
           isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
           impactsCoverage: coverageImpact,
@@ -2935,7 +2966,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
       newStatus: status,
       previousReason: existing?.absenceReason,
       newReason: savedReason,
-      comment: pendingJustification ? "Ocorrência marcada sem justificativa; pendente de supervisor." : savedJustification
+      comment: pendingJustification ? "Ocorrência marcada sem justificativa; pendente de supervisor." : [savedJustification, requiresAbsenceNotice(input.status) ? `Aviso dentro de 48h: ${absenceNoticeLabel(input.notifiedWithin48h)}` : ""].filter(Boolean).join(" · ")
     }
   });
 
@@ -2974,6 +3005,7 @@ async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, 
         reasonCategory: null,
         reasonClassification: null,
         supervisorJustification: null,
+        notifiedWithin48h: null,
         isJustified: true,
         impactsAbs: false,
         impactsCoverage: false,

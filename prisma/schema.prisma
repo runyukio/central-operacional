@@ -2341,6 +2341,7 @@ model AttendanceRecord {
   reasonCategory          String?
   reasonClassification    String?
   supervisorJustification String?
+  notifiedWithin48h        Boolean?
   hasEvidence             Boolean             @default(false)
   evidenceUrl             String?
   isJustified             Boolean             @default(false)
