@@ -17,6 +17,7 @@ const editSchema = z.object({
   absenceReason: z.string().optional(),
   reasonCategory: z.string().optional(),
   supervisorJustification: z.string().optional(),
+  notifiedWithin48h: z.boolean().nullable().optional(),
   lob: z.string().optional(),
   supervisor: z.string().optional(),
   observation: z.string().optional(),

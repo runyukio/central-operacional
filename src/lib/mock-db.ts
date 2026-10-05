@@ -281,6 +281,7 @@ export type AttendanceRecord = {
   absenceReason?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
+  notifiedWithin48h?: boolean | null;
   hasEvidence: boolean;
   evidenceUrl?: string;
   isJustified: boolean;
@@ -918,7 +919,7 @@ export function listAttendanceRecords(actor: Actor) {
   return db.attendanceRecords;
 }
 
-export function updateAttendance(actor: Actor, input: { employeeId: string; date: string; shift: string; status: string; absenceReason?: string; reasonCategory?: string; supervisorJustification?: string; hasEvidence?: boolean; evidenceUrl?: string }) {
+export function updateAttendance(actor: Actor, input: { employeeId: string; date: string; shift: string; status: string; absenceReason?: string; reasonCategory?: string; supervisorJustification?: string; notifiedWithin48h?: boolean | null; hasEvidence?: boolean; evidenceUrl?: string }) {
   const db = getMockDb();
   const employee = db.employees.find((item) => item.id === input.employeeId);
   if (!employee) return { error: "Parceiro não encontrado." };
@@ -954,6 +955,7 @@ export function updateAttendance(actor: Actor, input: { employeeId: string; date
   record.absenceReason = input.absenceReason;
   record.reasonCategory = input.reasonCategory;
   record.supervisorJustification = input.supervisorJustification;
+  record.notifiedWithin48h = input.notifiedWithin48h ?? null;
   record.hasEvidence = Boolean(input.hasEvidence);
   record.evidenceUrl = input.evidenceUrl;
   record.isJustified = Boolean(input.supervisorJustification) || ["Presente", "Folga", "Férias", "Treinamento", "Erro de cronograma"].includes(input.status);

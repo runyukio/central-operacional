@@ -324,6 +324,7 @@ export type AttendanceItem = {
   reasonClassification?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
+  notifiedWithin48h?: boolean | null;
   isJustified?: boolean;
   impactsAbs: boolean;
   impactsCoverage: boolean;

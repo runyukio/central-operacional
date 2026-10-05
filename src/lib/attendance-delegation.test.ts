@@ -11,7 +11,7 @@ const actor = { email: "manager@example.test", name: "Authorized manager", role:
 const date = new Date("2026-09-08T00:00:00Z");
 type Row = Record<string, any>;
 const input = { attendanceRecordId: "absence", scheduleId: "slot", employeeId: "partner", date: "2026-09-08", shift: "Tarde", status: "Falta",
-  absenceReason: "Problema de saúde", supervisorJustification: "Descrição de teste", reasonCategory: "Cronograma" };
+  absenceReason: "Problema de saúde", supervisorJustification: "Descrição de teste", reasonCategory: "Cronograma", notifiedWithin48h: true };
 
 function fixture(t: TestContext) {
   const user: Row = { id: "manager-user", email: actor.email, name: actor.name, role: { name: "GESTOR" }, status: "ACTIVE", deletedAt: null,
@@ -135,4 +135,56 @@ test("resubmitting the same delegated justification does not duplicate its histo
   const result = await updateOperationalAttendance(actor, { ...input, status: "Falta Justificada" });
   assert.ok("data" in result);
   assert.equal(f.writes.length, count);
+});
+
+for (const notifiedWithin48h of [true, false]) {
+  test(`supervisor saves explicit notice ${notifiedWithin48h} with response and audit`, async (t) => {
+    const f = fixture(t); f.user.role.name = "SUPERVISOR";
+    const result = await updateOperationalAttendance({ ...actor, role: "SUPERVISOR" }, { ...input, notifiedWithin48h });
+    assert.ok("data" in result, JSON.stringify(result));
+    assert.ok(result.data && "notifiedWithin48h" in result.data);
+    assert.equal(result.data.notifiedWithin48h, notifiedWithin48h);
+    assert.equal(f.writes.find(w => w.model === "attendanceRecord")!.data.notifiedWithin48h, notifiedWithin48h);
+    assert.equal(f.writes.find(w => w.model === "auditLog")!.data.newValue.notifiedWithin48h, notifiedWithin48h);
+    assert.match(f.writes.find(w => w.model === "attendanceHistory")!.data.comment, new RegExp(`Aviso dentro de 48h: ${notifiedWithin48h ? "Sim" : "Não"}`));
+  });
+}
+
+for (const value of [undefined, null, "false", 0]) {
+  test(`supervisor cannot omit or forge notice (${JSON.stringify(value)})`, async (t) => {
+    const f = fixture(t); f.user.role.name = "SUPERVISOR";
+    const result = await updateOperationalAttendance({ ...actor, role: "SUPERVISOR" }, { ...input, notifiedWithin48h: value as any });
+    assert.ok("error" in result && /48h/.test(result.error ?? ""));
+    assert.deepEqual(f.writes, []);
+  });
+}
+
+test("a forged non-absence input cannot bypass the notice required by the saved absence", async (t) => {
+  const f = fixture(t); f.user.role.name = "SUPERVISOR";
+  const result = await updateOperationalAttendance({ ...actor, role: "SUPERVISOR" }, { ...input, status: "Erro de cronograma", notifiedWithin48h: undefined });
+  assert.ok("error" in result && /48h/.test(result.error ?? ""));
+  assert.deepEqual(f.writes, []);
+});
+
+test("changing only the notice saves a new history, and repeats remain idempotent", async (t) => {
+  const f = fixture(t);
+  assert.ok("data" in await updateOperationalAttendance(actor, input));
+  Object.assign(f.record, f.writes.find(w => w.model === "attendanceRecord")!.data);
+  Object.assign(f.schedule, f.writes.find(w => w.model === "schedule")!.data);
+  const result = await updateOperationalAttendance(actor, { ...input, status: "Falta Justificada", notifiedWithin48h: false });
+  assert.ok("data" in result, JSON.stringify(result));
+  assert.ok(result.data && "notifiedWithin48h" in result.data);
+  assert.equal(result.data.notifiedWithin48h, false);
+  assert.equal(f.writes.filter(w => w.model === "attendanceHistory").length, 2);
+  Object.assign(f.record, f.writes.filter(w => w.model === "attendanceRecord").at(-1)!.data);
+  const count = f.writes.length;
+  assert.ok("data" in await updateOperationalAttendance(actor, { ...input, status: "Falta Justificada", notifiedWithin48h: false }));
+  assert.equal(f.writes.length, count);
+});
+
+test("schedule edit requires the assessment only when justifying an absence", async (t) => {
+  const f = fixture(t);
+  const result = await editOperationalSchedule({ ...actor, role: "WFM" }, { ...input, notifiedWithin48h: undefined });
+  assert.ok("error" in result && /48h/.test(result.error ?? ""));
+  assert.deepEqual(f.writes, []);
 });

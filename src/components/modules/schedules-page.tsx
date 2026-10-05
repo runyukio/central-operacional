@@ -1,5 +1,7 @@
 "use client";
 
+import { AbsenceNoticeField } from "@/components/absence-notice-field";
+import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { useEffect, useRef, useState } from "react";
 import { CalendarCheck, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
@@ -91,6 +93,7 @@ type ScheduleJustificationCell = {
   reasonClassificationLabel?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
+  notifiedWithin48h?: boolean | null;
   isJustified?: boolean;
   impactsAbs?: boolean;
   impactsCoverage?: boolean;
@@ -376,6 +379,7 @@ export function SchedulesPage() {
     absenceReason: "",
     reasonCategory: "Cronograma",
     supervisorJustification: "",
+    notifiedWithin48h: null as boolean | null,
     hasEvidence: false,
     evidenceUrl: ""
   });
@@ -412,6 +416,7 @@ export function SchedulesPage() {
     absenceReason: "",
     reasonCategory: "Cronograma",
     supervisorJustification: "",
+    notifiedWithin48h: null as boolean | null,
     hasEvidence: false,
     evidenceUrl: "",
     impactsAbs: true,
@@ -710,6 +715,7 @@ export function SchedulesPage() {
       absenceReason: justification?.absenceReason && justification.absenceReason !== "Sem justificativa" ? justification.absenceReason : "",
       reasonCategory: justification?.reasonCategory ?? "Cronograma",
       supervisorJustification: justification?.supervisorJustification ?? "",
+      notifiedWithin48h: justification?.notifiedWithin48h ?? null,
       hasEvidence: false,
       evidenceUrl: ""
     });
@@ -744,6 +750,7 @@ export function SchedulesPage() {
       absenceReason: "",
       reasonCategory: "Cronograma",
       supervisorJustification: "",
+    notifiedWithin48h: null as boolean | null,
       hasEvidence: false,
       evidenceUrl: ""
     });
@@ -764,6 +771,7 @@ export function SchedulesPage() {
       absenceReason: record.absenceReason && record.absenceReason !== "Sem justificativa" ? record.absenceReason : "",
       reasonCategory: record.reasonCategory ?? "Cronograma",
       supervisorJustification: record.supervisorJustification ?? "",
+      notifiedWithin48h: record.notifiedWithin48h ?? null,
       hasEvidence: false,
       evidenceUrl: "",
       impactsAbs: record.impactsAbs,
@@ -793,6 +801,7 @@ export function SchedulesPage() {
       absenceReason: "",
       reasonCategory: attendanceForm.reasonCategory || "Cronograma",
       supervisorJustification: "",
+    notifiedWithin48h: null as boolean | null,
       hasEvidence: false,
       evidenceUrl: "",
       impactsAbs: safeStatus === "Falta",
@@ -828,6 +837,7 @@ export function SchedulesPage() {
       return;
     }
 
+    if (requiresAbsenceNotice(scheduleEditForm.status) && !scheduleEditForm.pendingJustification && typeof justificationDraft.notifiedWithin48h !== "boolean") { setAttendanceMessage(ABSENCE_NOTICE_REQUIRED); return; }
     setSavingSchedule(true);
     try {
       const payload = await apiJson<{ data: unknown; summary: AttendanceSummary; schedules: { scheduleGridRows: typeof scheduleGridRows; attendanceSummary?: AttendanceSummary } }>("/api/schedules", {
@@ -837,6 +847,7 @@ export function SchedulesPage() {
           absenceReason: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.absenceReason : undefined,
           reasonCategory: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.reasonCategory || "Cronograma" : undefined,
           supervisorJustification: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.supervisorJustification || scheduleEditForm.observation : undefined,
+          notifiedWithin48h: !scheduleEditForm.pendingJustification ? justificationDraft.notifiedWithin48h : null,
           hasEvidence: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.hasEvidence : undefined,
           evidenceUrl: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.evidenceUrl : undefined
         })
@@ -1035,6 +1046,7 @@ export function SchedulesPage() {
       }
     }
 
+    if (requiresAbsenceNotice(attendanceForm.status) && typeof attendanceForm.notifiedWithin48h !== "boolean") { setAttendanceMessage(ABSENCE_NOTICE_REQUIRED); return; }
     setSavingJustification(true);
     try {
       const payload = await apiJson<{ data: Partial<AttendanceItem>; summary?: AttendanceSummary; message?: string }>("/api/attendance", {
@@ -1077,6 +1089,7 @@ export function SchedulesPage() {
       return;
     }
 
+    if (requiresAbsenceNotice(scheduleEditForm.status) && typeof justificationDraft.notifiedWithin48h !== "boolean") { setAttendanceMessage(ABSENCE_NOTICE_REQUIRED); return; }
     setSavingJustification(true);
     try {
       const payload = await apiJson<{ data: Partial<AttendanceItem>; summary?: AttendanceSummary; message?: string }>("/api/attendance", {
@@ -1091,6 +1104,7 @@ export function SchedulesPage() {
           absenceReason: justificationDraft.absenceReason,
           reasonCategory: justificationDraft.reasonCategory || "Cronograma",
           supervisorJustification: justificationDraft.supervisorJustification,
+          notifiedWithin48h: justificationDraft.notifiedWithin48h,
           hasEvidence: justificationDraft.hasEvidence,
           evidenceUrl: justificationDraft.evidenceUrl,
           impactsAbs: scheduleEditForm.status === "Falta",
@@ -1107,6 +1121,7 @@ export function SchedulesPage() {
         reasonClassificationLabel: payload.data.reasonClassification === "JUSTIFIED" ? "Justificado" : payload.data.reasonClassification === "UNJUSTIFIED" ? "Injustificado" : undefined,
         reasonCategory: payload.data.reasonCategory,
         supervisorJustification: payload.data.supervisorJustification,
+        notifiedWithin48h: payload.data.notifiedWithin48h ?? null,
         isJustified: payload.data.isJustified,
         impactsAbs: payload.data.impactsAbs,
         impactsCoverage: payload.data.impactsCoverage,
@@ -1770,6 +1785,7 @@ export function SchedulesPage() {
                         </p>
                         <p className="mt-1 text-xs text-muted">Supervisor: {record.supervisor || "Sem supervisor"} • WB/Login: {record.wbLogin || "Não informado"}</p>
                         <p className="mt-1 text-xs text-muted">Motivo: {scheduleDisplayLabel(record.absenceReason || "Sem justificativa")} • Registrado por {record.registeredBy}</p>
+                        {requiresAbsenceNotice(record.status) ? <p className="mt-1 text-xs text-muted">Aviso dentro de 48h: {absenceNoticeLabel(record.notifiedWithin48h)}</p> : null}
                         <p className="mt-1 text-xs text-muted">Ação recomendada: justificar ocorrência ou corrigir o status do cronograma.</p>
                       </div>
                       <button
@@ -1985,6 +2001,7 @@ export function SchedulesPage() {
                       </span>
                     </label>
                   ) : null}
+                  {canManageSchedules && requiresAbsenceNotice(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? <div className="md:col-span-2"><AbsenceNoticeField value={justificationDraft.notifiedWithin48h} onChange={(value) => setJustificationDraft({ ...justificationDraft, notifiedWithin48h: value })} /></div> : null}
                 </div>
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
                   {selectedScheduleStatusIsWorkflowLocked
@@ -2029,6 +2046,7 @@ export function SchedulesPage() {
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Categoria</span>
                           <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.reasonCategory ?? "Não informada"}</span>
                         </div>
+                        {requiresAbsenceNotice(scheduleEditForm.status) ? <div className="rounded-lg border border-border bg-white p-3 md:col-span-2"><span className="block text-xs font-bold uppercase tracking-wide text-muted">Aviso dentro de 48h</span><span className="mt-1 block font-extrabold">{absenceNoticeLabel(selectedScheduleJustification?.notifiedWithin48h)}</span></div> : null}
                         <div className="rounded-lg border border-border bg-white p-3 md:col-span-2">
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Observação/descrição</span>
                           <span className="mt-1 block whitespace-pre-wrap text-sm font-semibold text-navy-950">{selectedScheduleJustification?.supervisorJustification ?? "Justificativa pendente."}</span>
@@ -2069,6 +2087,7 @@ export function SchedulesPage() {
                           <div className="grid gap-4 md:grid-cols-2">
                             <FormSelect label="Motivo da justificativa" value={justificationDraft.absenceReason} options={["", ...absenceReasonOptions]} emptyLabel="Selecione um motivo" onChange={(value) => setJustificationDraft({ ...justificationDraft, absenceReason: value })} />
                             <FormSelect label="Categoria" value={justificationDraft.reasonCategory} options={["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"]} onChange={(value) => setJustificationDraft({ ...justificationDraft, reasonCategory: value })} />
+                            {requiresAbsenceNotice(scheduleEditForm.status) ? <div className="md:col-span-2"><AbsenceNoticeField value={justificationDraft.notifiedWithin48h} onChange={(value) => setJustificationDraft({ ...justificationDraft, notifiedWithin48h: value })} /></div> : null}
                             <label className="md:col-span-2">
                               <span className="mb-1.5 block text-sm font-bold text-muted">Observação</span>
                               <textarea value={justificationDraft.supervisorJustification} onChange={(event) => setJustificationDraft({ ...justificationDraft, supervisorJustification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border bg-white p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" placeholder="Descreva o motivo informado pelo Supervisor/WFM" />
@@ -2237,6 +2256,7 @@ export function SchedulesPage() {
               />
               <FormSelect label={attendanceRequiresReason ? "Motivo obrigatório" : "Motivo (opcional)"} value={attendanceForm.absenceReason} options={["", ...absenceReasonOptions]} emptyLabel="Selecione um motivo" onChange={(value) => setAttendanceForm({ ...attendanceForm, absenceReason: value })} />
               <FormSelect label="Categoria" value={attendanceForm.reasonCategory} options={["Pessoas", "Sistema", "Ferramenta", "Equipamento", "Cronograma", "Treinamento", "Outros"]} onChange={(value) => setAttendanceForm({ ...attendanceForm, reasonCategory: value })} />
+              {requiresAbsenceNotice(attendanceForm.status) ? <div className="md:col-span-2"><AbsenceNoticeField value={attendanceForm.notifiedWithin48h} onChange={(value) => setAttendanceForm({ ...attendanceForm, notifiedWithin48h: value })} /></div> : null}
               <label className="md:col-span-2">
                 <span className="mb-1.5 block text-sm font-bold text-muted">{attendanceRequiresReason ? "Descrição da ocorrência obrigatória" : "Descrição da ocorrência (opcional)"}</span>
                 <textarea value={attendanceForm.supervisorJustification} onChange={(event) => setAttendanceForm({ ...attendanceForm, supervisorJustification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" />
