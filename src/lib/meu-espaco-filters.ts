@@ -23,7 +23,7 @@ export function spacePendingFilters(query: URLSearchParams) {
   const kind = query.get("kind") || "all", state = query.get("state") || "pending";
   const order = query.get("order") || "asc";
   if (!["asc", "desc"].includes(order)) throw new MeuEspacoError("Ordenação inválida.");
-  if (!["all", "absence", "hours"].includes(kind) || !["pending", "answered"].includes(state)) throw new MeuEspacoError("Filtro de pendências inválido.");
+  if (!["all", "absence", "hours", "overtime"].includes(kind) || !["pending", "answered"].includes(state)) throw new MeuEspacoError("Filtro de pendências inválido.");
   return { ...spacePeriod(query, true), kind, state, order, search: (query.get("search") || "").trim().slice(0, 120), lob: (query.get("lob") || "").trim().slice(0, 80) };
 }
 export type PendingCursor = { date: string; kind: PendingKind; id: string; fingerprint: string };
