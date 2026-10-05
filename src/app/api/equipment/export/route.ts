@@ -6,6 +6,8 @@ export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
   const payload = await exportEquipmentXlsxData(actor, {
+    lobId: url.searchParams.get("lobId") ?? undefined,
+    usage: url.searchParams.get("usage") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     type: url.searchParams.get("type") ?? undefined,
     search: url.searchParams.get("search") ?? undefined,

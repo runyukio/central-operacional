@@ -1,6 +1,7 @@
 import { EquipmentStatus, Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
+import { equipmentUsageLabels, normalizeEquipmentUsage } from "@/lib/equipment-classification";
 import { canAccessEquipment, canManageEquipment } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -43,11 +44,15 @@ const responsibleEmployeeSelect = {
 } satisfies Prisma.EmployeeProfileSelect;
 
 const equipmentListInclude = {
+  lob: { select: { id: true, name: true } },
   employee: { select: responsibleEmployeeSelect },
   histories: { orderBy: { createdAt: "desc" as const }, take: 1 }
 } satisfies Prisma.EquipmentInclude;
 
 export type EquipmentInput = {
+  lobId?: string | null;
+  lob?: string;
+  usage?: string | null;
   id?: string;
   numeroSerie?: string;
   code?: string;
@@ -69,6 +74,8 @@ export type EquipmentInput = {
 };
 
 export type EquipmentQuery = {
+  lobId?: string;
+  usage?: string;
   status?: string;
   type?: string;
   search?: string;
@@ -87,6 +94,8 @@ export type EquipmentQuery = {
 };
 
 export type EquipmentPreviewRow = {
+  lob: string;
+  usage: string;
   rowNumber: number;
   numeroSerie: string;
   type: string;
@@ -208,6 +217,10 @@ function formatEquipment(equipment: Prisma.EquipmentGetPayload<{ include: typeof
     serial: equipment.serial ?? equipment.code,
     type: equipment.type,
     model: equipment.model ?? "",
+    lobId: equipment.lobId ?? "",
+    lob: equipment.lob?.name ?? "Não classificado",
+    usage: equipment.usage ?? "",
+    usageLabel: equipment.usage ? equipmentUsageLabels[equipment.usage] : "Não classificado",
     employeeId: equipment.employeeId ?? "",
     employee: equipment.employee?.fullName ?? "Sem responsável",
     employeeWbLogin: equipment.employee?.wbLogin ?? "",
@@ -224,7 +237,7 @@ function formatEquipment(equipment: Prisma.EquipmentGetPayload<{ include: typeof
 
 export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   const user = await getActorUser(actor);
-  if (!user || !canViewEquipmentRole(user.role.name)) return { data: [], summary: emptyEquipmentSummary(), canManage: false };
+  if (!user || !canViewEquipmentRole(user.role.name)) return { data: [], summary: emptyEquipmentSummary(), canManage: false, lobs: [] };
 
   const search = query.search?.trim();
   const serialNumber = query.serialNumber?.trim();
@@ -238,6 +251,12 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   const rawDeliveredTo = parseDate(query.deliveredTo ?? query.deliveryDateTo);
   const deliveredTo = rawDeliveredTo ? new Date(Date.UTC(rawDeliveredTo.getUTCFullYear(), rawDeliveredTo.getUTCMonth(), rawDeliveredTo.getUTCDate(), 23, 59, 59, 999)) : null;
   const filters: Prisma.EquipmentWhereInput[] = [];
+  if (query.lobId && query.lobId !== "Todos") filters.push({ lobId: query.lobId === "unclassified" ? null : query.lobId });
+  if (query.usage && query.usage !== "Todos") {
+    const usage = normalizeEquipmentUsage(query.usage);
+    // Invalid filter values must never broaden the query to the full inventory.
+    filters.push(query.usage === "unclassified" ? { usage: null } : usage ? { usage } : { id: { in: [] } });
+  }
   if (status) filters.push({ status });
   if (type) filters.push({ type });
   if (model) filters.push({ model: { contains: model, mode: "insensitive" } });
@@ -272,7 +291,7 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   const limit = Math.min(100, Math.max(25, Number(query.limit) || 50));
   const includeAllPages = query.includeAllPages === true;
   const where: Prisma.EquipmentWhereInput = { deletedAt: null, ...(filters.length ? { AND: filters } : {}) };
-  const [rows, total, statusGroups, pending] = await Promise.all([
+  const [rows, total, statusGroups, pending, lobs] = await Promise.all([
     prisma.equipment.findMany({
       where,
       include: equipmentListInclude,
@@ -281,7 +300,8 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
     }),
     prisma.equipment.count({ where }),
     prisma.equipment.groupBy({ by: ["status"], where, _count: { _all: true } }),
-    prisma.equipment.count({ where: { AND: [where, { OR: [{ employeeId: null }, { status: { in: ["PERDIDO", "BLOQUEADO"] } }] }] } })
+    prisma.equipment.count({ where: { AND: [where, { OR: [{ employeeId: null }, { status: { in: ["PERDIDO", "BLOQUEADO"] } }] }] } }),
+    prisma.lob.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } })
   ]);
   const statusCount = (statuses: EquipmentStatus[]) => statusGroups
     .filter((item) => statuses.includes(item.status))
@@ -289,6 +309,7 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
 
   return {
     data: rows.map(formatEquipment),
+    lobs,
     summary: {
       total,
       inUse: statusCount(["ENTREGUE", "FUNCIONANDO"]),
@@ -325,6 +346,9 @@ export async function saveEquipment(actor: Actor, input: EquipmentInput) {
   const responsible = await findResponsible(input);
   if (!responsible) return { error: "Responsável não encontrado." };
 
+  const classification = await resolveEquipmentClassification(input);
+  if ("error" in classification) return classification;
+
   const existing = input.id
     ? await prisma.equipment.findFirst({ where: { id: input.id, deletedAt: null }, include: { employee: true } })
     : input.importMode
@@ -345,6 +369,7 @@ export async function saveEquipment(actor: Actor, input: EquipmentInput) {
       serial: code,
       type,
       model,
+      ...classification.data,
       status,
       deliveredAt,
       employeeId: responsible.id
@@ -442,6 +467,7 @@ export async function getEquipmentHistory(actor: Actor, id: string) {
     where: { id, deletedAt: null },
     include: {
       employee: { select: responsibleEmployeeSelect },
+      lob: { select: { id: true, name: true } },
       histories: { orderBy: { createdAt: "desc" }, include: { actor: { select: { name: true, email: true } } } }
     }
   });
@@ -469,6 +495,7 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
   const codes = rows.map((row) => text(row.numero_serie)).filter(Boolean);
   const existing = await prisma.equipment.findMany({ where: { code: { in: codes }, deletedAt: null }, select: { code: true } });
   const existingCodes = new Set(existing.map((item) => item.code.toLowerCase()));
+  const lobs = await prisma.lob.findMany({ select: { id: true, name: true } });
   const normalizedRows = rows.map((row) => {
     const status = normalizeStatus(text(row.status));
     const deliveredAt = parseDate(text(row.data_entrega));
@@ -479,6 +506,8 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
       status,
       deliveredAt,
       normalized: {
+        ...(text(row.lob) ? { lob: text(row.lob) } : {}),
+        ...(text(row.destinacao) ? { usage: text(row.destinacao) } : {}),
         numeroSerie: text(row.numero_serie),
         tipoEquipamento: normalizeType(text(row.tipo_equipamento)),
         modelo: text(row.modelo),
@@ -505,7 +534,13 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
     if (!status) errors.push("Status inválido.");
     if (!deliveredAt) errors.push("Data de entrega inválida.");
     if (!responsible) errors.push("Responsável não encontrado.");
+    const classification = await resolveEquipmentClassification(row.normalized, lobs);
+    if ("error" in classification) errors.push(classification.error);
+    const classifiedLob = "data" in classification ? lobs.find((lob) => lob.id === classification.data.lobId)?.name : undefined;
+    const classifiedUsage = "data" in classification ? classification.data.usage : undefined;
     previewRows.push({
+      lob: classifiedLob ?? row.normalized.lob ?? "Não classificado / manter atual",
+      usage: classifiedUsage ? equipmentUsageLabels[classifiedUsage] : row.normalized.usage ?? "Não classificado / manter atual",
       rowNumber: index + 2,
       numeroSerie,
       type,
@@ -516,7 +551,7 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
       action: errors.length ? "ignore" : existingCodes.has(numeroSerie.toLowerCase()) ? "update" : "create",
       errors,
       warnings,
-      normalized: { ...row.normalized, responsibleEmployeeId: responsible?.id }
+      normalized: { ...row.normalized, ...("data" in classification ? classification.data : {}), responsibleEmployeeId: responsible?.id }
     });
   }
 
@@ -540,24 +575,25 @@ export async function commitEquipmentImport(actor: Actor, rows: EquipmentPreview
   const validRows = rows.filter((row) => !row.errors.length && row.normalized);
   let createdRows = 0;
   let updatedRows = 0;
+  let failedRows = 0;
   for (const row of validRows) {
     const result = await saveEquipment(actor, row.normalized!);
     if (!("error" in result)) {
       if (row.action === "update") updatedRows += 1;
       else createdRows += 1;
-    }
+    } else failedRows += 1;
   }
   return {
     success: true,
-    message: "Importação de equipamentos concluída.",
-    summary: { createdRows, updatedRows, skippedRows: rows.length - validRows.length, errorRows: rows.filter((row) => row.errors.length).length }
+    message: failedRows ? "Importação concluída com linhas não importadas." : "Importação de equipamentos concluída.",
+    summary: { createdRows, updatedRows, skippedRows: rows.length - createdRows - updatedRows, errorRows: rows.filter((row) => row.errors.length).length + failedRows }
   };
 }
 
 export async function exportEquipmentXlsxData(actor: Actor, query: EquipmentQuery = {}) {
   const payload = await listEquipment(actor, { ...query, includeAllPages: true });
-  const headers = ["numero_serie", "tipo_equipamento", "modelo", "responsavel", "responsavel_wb_login", "data_entrega", "status", "observacao"];
-  const rows = payload.data.map((item) => [item.serial, item.type, item.model, item.employee, item.employeeWbLogin, item.delivered, item.status, item.observation]);
+  const headers = ["numero_serie", "tipo_equipamento", "modelo", "lob", "destinacao", "responsavel", "responsavel_wb_login", "data_entrega", "status", "observacao"];
+  const rows = payload.data.map((item) => [item.serial, item.type, item.model, item.lobId ? item.lob : "", item.usage ? item.usageLabel : "", item.employee, item.employeeWbLogin, item.delivered, item.status, item.observation]);
   return {
     headers,
     rows,
@@ -576,4 +612,29 @@ function emptyPreviewSummary() {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+async function resolveEquipmentClassification(input: EquipmentInput, lobs?: Array<{ id: string; name: string }>): Promise<
+  { error: string } | { data: Pick<Prisma.EquipmentUncheckedCreateInput, "lobId" | "usage"> }
+> {
+  const data: Pick<Prisma.EquipmentUncheckedCreateInput, "lobId" | "usage"> = {};
+  if (input.lobId !== undefined || input.lob !== undefined) {
+    const value = String(input.lobId !== undefined ? input.lobId ?? "" : input.lob ?? "").trim();
+    if (!value) data.lobId = null;
+    else {
+      const availableLobs = lobs ?? await prisma.lob.findMany({ select: { id: true, name: true } });
+      const lob = input.lobId !== undefined
+        ? availableLobs.find((lob) => lob.id === value)
+        : availableLobs.find((lob) => lob.name.toLowerCase() === value.toLowerCase());
+      if (!lob) return { error: "Selecione uma LOB cadastrada na Central." };
+      data.lobId = lob.id;
+    }
+  }
+  if (input.usage !== undefined) {
+    const value = String(input.usage ?? "").trim();
+    const usage = value ? normalizeEquipmentUsage(value) : null;
+    if (value && !usage) return { error: "Destinação inválida. Use Agente, Staff ou Treinamento." };
+    data.usage = usage;
+  }
+  return { data };
 }

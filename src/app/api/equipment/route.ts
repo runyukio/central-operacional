@@ -5,6 +5,8 @@ import { getApiActor } from "@/lib/api-actor";
 import { deleteEquipment, getEquipmentHistory, inactivateEquipment, listEquipment, saveEquipment } from "@/lib/equipment-service";
 
 const schema = z.object({
+  lobId: z.string().nullable().optional(),
+  usage: z.string().nullable().optional(),
   id: z.string().optional(),
   numeroSerie: z.string().optional(),
   code: z.string().optional(),
@@ -34,6 +36,8 @@ export async function GET(request: Request) {
     return NextResponse.json(result);
   }
   return NextResponse.json(await listEquipment(actor, {
+    lobId: url.searchParams.get("lobId") ?? undefined,
+    usage: url.searchParams.get("usage") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     type: url.searchParams.get("type") ?? undefined,
     search: url.searchParams.get("search") ?? undefined,

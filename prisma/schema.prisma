@@ -84,6 +84,12 @@ enum EquipmentStatus {
   SUBSTITUIDO
 }
 
+enum EquipmentUsage {
+  AGENTE
+  STAFF
+  TREINAMENTO
+}
+
 enum EquipmentImpact {
   BAIXO
   MEDIO
@@ -379,6 +385,7 @@ model Lob {
   cecQualityRecords  CecQualityRecord[]
   productionRecords  ProductionRecord[]
   billingAdjustments BillingAdjustment[]
+  equipments         Equipment[]
   createdAt          DateTime            @default(now())
 }
 
@@ -1879,10 +1886,13 @@ model Equipment {
   model       String?
   serial      String?
   employeeId  String?
+  lobId       String?
+  usage       EquipmentUsage?
   status      EquipmentStatus
   deliveredAt DateTime?
   impact      EquipmentImpact    @default(BAIXO)
   employee    EmployeeProfile?   @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  lob         Lob?               @relation(fields: [lobId], references: [id], onDelete: SetNull)
   histories   EquipmentHistory[]
   tickets     EquipmentTicket[]
   createdAt   DateTime           @default(now())
@@ -1890,6 +1900,8 @@ model Equipment {
   deletedAt   DateTime?
 
   @@index([employeeId])
+  @@index([lobId])
+  @@index([usage])
   @@index([status])
   @@index([deletedAt])
   @@index([status, updatedAt])
