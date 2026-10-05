@@ -6,6 +6,28 @@ import { mockPrismaDelegate } from "./prisma-test-delegate";
 
 const actor = { role: "ADMIN" as const, name: "Audit admin", email: "audit@example.test" };
 
+test("export mantém realizado separado do excedente pendente, aprovado e recusado", async (t) => {
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "admin", name: actor.name, role: { name: "ADMIN" }, status: "ACTIVE" }) });
+  const records = ["PENDING", "APPROVED", "REJECTED"].map((status, index) => ({
+    id: String(index), employeeId: "agent", wbLogin: "wb", date: new Date("2026-10-01"), status: "OK",
+    actualHours: 9, effectiveHours: status === "APPROVED" ? 9 : 8, differenceMinutes: status === "APPROVED" ? 60 : 0,
+    employee: { fullName: status, operationalStatus: "Ativo", lob: { name: "ADS" }, shift: { name: "Manhã" } }, adjustments: [],
+    overtimeReview: { status, excessHours: 1, rejectionReason: status === "REJECTED" ? "Sessão indevida" : null }
+  }));
+  mockPrismaDelegate(t, "workHourRecord", { count: async () => records.length, findMany: async () => records });
+  mockPrismaDelegate(t, "auditLog", { create: async () => ({}) });
+  t.mock.method(workHourReadData, "capturedHours", async () => new Map());
+  const result = await exportOperationalWorkHoursXlsxData(actor, { startDate: "2026-10-01", endDate: "2026-10-01" });
+  assert.ok("rows" in result && result.rows);
+  const realizedIndex = result.headers.indexOf("horas_realizadas"), pendingIndex = result.headers.indexOf("horas_em_validacao");
+  const stateIndex = result.headers.indexOf("situacao_excedente"), reasonIndex = result.headers.indexOf("motivo_recusa_excedente");
+  const byEmployee = new Map(result.rows.map((row) => [row[1], row]));
+  assert.equal(byEmployee.get("PENDING")![realizedIndex], "8:00"); assert.equal(byEmployee.get("PENDING")![pendingIndex], "1:00");
+  assert.equal(byEmployee.get("APPROVED")![realizedIndex], "9:00"); assert.equal(byEmployee.get("APPROVED")![pendingIndex], "0:00");
+  assert.equal(byEmployee.get("REJECTED")![realizedIndex], "8:00"); assert.equal(byEmployee.get("REJECTED")![pendingIndex], "0:00");
+  assert.equal(byEmployee.get("REJECTED")![stateIndex], "Excedente recusado"); assert.equal(byEmployee.get("REJECTED")![reasonIndex], "Sessão indevida");
+});
+
 test("hours export includes all 10001 rows in bounded pages and never computes dashboard summaries", async (t) => {
   mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "admin", name: actor.name, role: { name: "ADMIN" }, status: "ACTIVE", employeeProfile: null }) });
   const date = new Date("2026-07-15T00:00:00Z");

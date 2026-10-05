@@ -42,6 +42,7 @@ type CaptureWorkHourImportPreview = {
   period: { startDate: string; endDate: string };
   registrationWarnings: CaptureRegistrationWarning[];
   summary: { automatic: number; divergences: number; ignored: number };
+  overtime?: { pendingReviews: number; validationHours: number; effectiveHours: number };
   overlap: {
     count: number;
     dates: string[];
@@ -270,7 +271,7 @@ export function WorkHoursPage() {
         return;
       }
       await Promise.all([loadWorkHours(1), canViewAdherence ? loadAdherence() : Promise.resolve()]);
-      setMessage(`${result.completedDates.length} dia(s) concluído(s). ${result.imported} registro(s) atualizado(s) pela Captura de Horas. ${result.unchanged} já estavam corretos.`);
+      setMessage(`${result.completedDates.length} dia(s) concluído(s). ${result.imported} registro(s) atualizado(s) pela Captura de Horas. ${result.unchanged} já estavam corretos.${result.overtimeReviewsPending ? ` ${result.overtimeReviewsPending} revisão(ões) de excedente no Meu Espaço: ${formatWorkHourValue(result.validationHours ?? 0)} em validação.` : ""}`);
     } catch (error) {
       // A new attempt must regenerate the preview, including completed days.
       setCaptureImportPreview(null);
@@ -533,6 +534,7 @@ export function WorkHoursPage() {
                 <InfoLine label="Agentes afetados" value={captureImportPreview.overlap.agents.map((agent) => `${agent.name} (${agent.wbLogin})`).join(", ")} />
                 <InfoLine label="Horas atuais" value={formatWorkHourValue(captureImportPreview.overlap.currentHours, "0:00")} />
                 <InfoLine label="Horas propostas" value={formatWorkHourValue(captureImportPreview.overlap.proposedHours, "0:00")} />
+                {captureImportPreview.overtime ? <><InfoLine label="Horas contabilizáveis na importação" value={formatWorkHourValue(captureImportPreview.overtime.effectiveHours, "0:00")} /><InfoLine label="Excedente em validação" value={formatWorkHourValue(captureImportPreview.overtime.validationHours, "0:00")} /></> : null}
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button disabled={importingCapture} onClick={() => commitCaptureImport(true)} className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">{importingCapture ? "Reprocessando..." : "Confirmar reprocessamento"}</button>
@@ -552,6 +554,7 @@ export function WorkHoursPage() {
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricPill value={formatWorkHourValue(summary?.overtimeHours ?? 0, "0:00")} label="Horas extras" />
         <MetricPill value={formatWorkHourValue(summary?.pendingHours ?? 0, "0:00")} label="Horas pendentes" />
+        <MetricPill value={formatWorkHourValue(summary?.validationHours ?? 0, "0:00")} label="Horas em validação" />
         <MetricPill value={formatWorkHourValue(summary?.adjustedHours ?? 0, "0:00")} label="Horas ajustadas" />
         <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
       </div>
@@ -618,7 +621,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")}</td>
-                    <td className="px-4 py-3">{formatWorkHourValue(row.effectiveHours, "0:00")}</td>
+                    <td className="px-4 py-3">{formatWorkHourValue(row.effectiveHours, "0:00")}{(row.validationHours ?? 0) > 0 ? <p className="mt-1 text-xs font-bold text-amber-700">+{formatWorkHourValue(row.validationHours ?? 0)} em validação</p> : row.overtimeReviewStatus === "Excedente recusado" ? <p className="mt-1 text-xs text-red-700" title={row.overtimeRejectionReason}>Excedente recusado: {row.overtimeRejectionReason}</p> : row.overtimeReviewStatus === "Excedente aprovado" ? <p className="mt-1 text-xs text-emerald-700">Excedente aprovado</p> : null}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.capturedHours, "0:00")}</td>
                     <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{formatHourDifference(row.differenceMinutes)}</td>
                     <td className="px-4 py-3"><WorkHourBalanceBadge plannedHours={row.plannedHours} differenceMinutes={row.differenceMinutes} /></td>

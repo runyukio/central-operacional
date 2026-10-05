@@ -18,11 +18,12 @@ import { getSpaceHoursSummary, getSpaceMonthlyHours, spaceHoursPeriod } from "./
 // Prisma model delegates are proxies without method descriptors. Replace only
 // this process's delegates, keeping all test IO in memory and failing closed.
 beforeEach((t) => {
-  for (const model of ["user", "employeeProfile", "attendanceRecord", "schedule", "workHourRecord", "workHourAdjustmentRequest", "workHourAdherenceJustification", "auditLog", "notification", "attendanceHistory", "scheduleChangeHistory"] as const) {
+  for (const model of ["user", "employeeProfile", "attendanceRecord", "schedule", "workHourRecord", "workHourAdjustmentRequest", "workHourAdherenceJustification", "workHourOvertimeReview", "auditLog", "notification", "attendanceHistory", "scheduleChangeHistory"] as const) {
     const original = prisma[model];
     (prisma as any)[model] = Object.fromEntries(["findUnique", "findFirst", "findMany", "groupBy", "aggregate", "count", "update", "updateMany", "create"].map((method) => [method, async () => { throw new Error(`Unmocked ${model}.${method}`); }]));
     (t as TestContext).after(() => { (prisma as any)[model] = original; });
   }
+  (t as TestContext).mock.method(prisma.workHourOvertimeReview, "aggregate", async () => ({ _sum: { excessHours: 0 }, _count: { _all: 0 } }));
 });
 
 const user = (role: string) => ({ role, status: "ACTIVE" });
@@ -242,6 +243,39 @@ test("monthly hours paginate partners, sum all days and keep full-team cards ind
   assert.equal(result.data[0].effectiveHours, 16); assert.equal(result.data[0].futureHours, 8); assert.equal(result.data[0].projectedHours, 24);
   assert.equal(result.data[1].projectedHours, null); assert.equal(result.summary.projectedHours, 808); assert.equal(captureCalls, 1);
   await assert.rejects(() => getSpaceMonthlyHours(all, new URLSearchParams("month=2026-09&page=0")), /Página inválida/);
+});
+
+test("consolidado mensal separa excedente em validação do realizado e da projeção", async (t) => {
+  const day = new Date("2026-09-01");
+  t.mock.method(prisma.workHourRecord, "findMany", async () => [{ id: "hour", employeeId: "agent", wbLogin: "wb_agent", date: day,
+    actualHours: 9, adjustedHours: null, effectiveHours: 8, differenceMinutes: 0, status: "OK",
+    overtimeReview: { status: "PENDING", excessHours: 1 }, schedule: { status: "PRESENTE", startsAt: "08:00", endsAt: "17:00" } }]);
+  t.mock.method(prisma.schedule, "findMany", async () => [{ employeeId: "agent", date: day, status: "PRESENTE", startsAt: "08:00", endsAt: "17:00" }]);
+  t.mock.method(prisma.workHourRecord, "aggregate", async () => ({ _sum: { effectiveHours: 8 }, _count: { _all: 1 } }));
+  t.mock.method(prisma.workHourOvertimeReview, "aggregate", async (args: any) => {
+    assert.equal(args.where.status, "PENDING"); assert.deepEqual(args.where.employeeId.in, ["agent"]);
+    return { _sum: { excessHours: 1 } };
+  });
+  t.mock.method(prisma, "$queryRaw", async () => []);
+  t.mock.method(workHourReadData, "capturedHours", async () => new Map([["hour", 8.5]]));
+  const result = await getSpaceMonthlyHours(scope(), new URLSearchParams("month=2026-09"), new Date("2026-09-07T15:00:00Z"));
+  assert.equal(result.summary.realizedHours, 8); assert.equal(result.summary.validationHours, 1); assert.equal(result.summary.projectedHours, 8);
+  assert.equal(result.data[0].effectiveHours, 8); assert.equal(result.data[0].validationHours, 1); assert.equal(result.data[0].projectedHours, 8);
+  assert.equal(result.data[0].differenceMinutes, 0);
+});
+
+test("feed de horas inclui excedentes e mantém o responsável original; sem supervisor é visível à gestão", async (t) => {
+  t.mock.method(prisma.attendanceRecord, "groupBy", async () => []);
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    assert.match(sql.text, /kind IN \('hours', 'overtime'\)/); assert.match(sql.text, /r\."supervisorId"=\$/);
+    return [{ id: "review", kind: "overtime", date: new Date("2026-09-01"), answeredAt: null, pending: true, version: 1 }];
+  });
+  const result = await listSpacePending(scope(), new URLSearchParams("kind=hours"));
+  assert.equal(result.data[0].kind, "overtime");
+  const broadSource = await spacePendingSource(scope({ broad: true, role: "WFM", supervisorId: null }));
+  assert.ok(!/AND r\."supervisorId"=/.test(broadSource.text));
+  const cursor = { date: "2026-09-01", kind: "overtime" as const, id: "review", fingerprint: "scope" };
+  assert.deepEqual(decodeSpaceCursor(encodeSpaceCursor(cursor), "scope"), cursor);
 });
 
 test("latency uses sum/submits, separates Comments, excludes other video SLAs, preserves no data", () => {

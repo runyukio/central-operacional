@@ -9,6 +9,8 @@ const answer = z.object({ justification: z.string().trim().min(1).max(10000), re
   reasonCategory: z.enum(["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"]).optional(),
   evidenceUrl: z.union([z.literal(""), z.string().url().max(2000).refine((value) => /^https?:\/\//i.test(value))]).optional() }).strict();
 type Context = { params: Promise<{ kind: string; id: string }> };
+const overtimeAnswer = z.object({ action: z.enum(["approve", "reject"]), version: z.number().int().positive(),
+  rejectionReason: z.string().trim().max(10000).optional() }).strict().refine((value) => value.action !== "reject" || Boolean(value.rejectionReason), { message: "Informe o motivo da recusa." });
 export const dynamic = "force-dynamic";
 export async function GET(request: Request, context: Context) {
   const actor = await getApiActor();
@@ -23,8 +25,8 @@ export async function POST(request: Request, context: Context) {
   try {
     const { kind, id } = await context.params;
     const scope = await getMeuEspacoScope(actor, new URL(request.url).searchParams.get("supervisorId") || undefined);
-    const parsed = answer.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) throw new MeuEspacoError("Preencha a descrição e revise o motivo e o link da evidência.");
+    const parsed = (kind === "overtime" ? overtimeAnswer : answer).safeParse(await request.json().catch(() => null));
+    if (!parsed.success) throw new MeuEspacoError(kind === "overtime" ? "Revise a decisão e preencha o motivo ao recusar." : "Preencha a descrição e revise o motivo e o link da evidência.");
     return spaceJson(await respondSpacePending(scope, kind, id, parsed.data));
   } catch (error) { return spaceApiError(error); }
 }

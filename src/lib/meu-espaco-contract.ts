@@ -1,11 +1,12 @@
 export type SpacePeriod = { startDate: string; endDate: string };
-export type PendingKind = "absence" | "hours";
+export type PendingKind = "absence" | "hours" | "overtime";
 export type SpacePending = {
   oldestDate?: string | null;
   id: string; kind: PendingKind; date: string; employeeId: string; employeeName: string; wbLogin: string;
   lob: string; supervisorId: string | null; supervisor: string; pending: boolean; status: string;
   reason: string; reasonCategory: string; justification: string; evidenceUrl: string; answeredAt: string | null; answeredBy: string;
   plannedStart: string; plannedEnd: string; capturedMinutes: number | null;
+  version?: number | null; calculatedHours?: number | null; effectiveHours?: number | null; excessHours?: number | null; ruleLabel?: string | null;
 };
 export type ManagementCounts = { absences: number; hours: number; answered: number; oldest: string | null; required?: number };
 export type SpaceSummary = {
@@ -42,9 +43,11 @@ export type SpaceMonthlyHoursRow = {
   plannedHours: number; actualHours: number; capturedHours: number; effectiveHours: number; adjustedHours: number;
   differenceMinutes: number; status: string; realizedRecords: number; futureHours: number; inProgressHours: number;
   projectedHours: number | null; missingPastSlots: number;
+  validationHours?: number;
 };
 export type SpaceHoursSummary = {
   actualThrough: string; projectionFrom: string; projectionUntil: string;
   realizedHours: number | null; futureHours: number; inProgressHours: number; projectedHours: number | null;
   realizedRecords: number; futureSlots: number; missingPastSlots: number;
+  validationHours?: number;
 };

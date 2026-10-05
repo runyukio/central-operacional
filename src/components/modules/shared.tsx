@@ -90,6 +90,9 @@ export type CoverageWarningDialogState = {
 
 
 export type WorkHourRow = {
+  validationHours?: number;
+  overtimeReviewStatus?: string;
+  overtimeRejectionReason?: string;
   id: string;
   employeeName: string;
   wbLogin: string;
@@ -204,6 +207,8 @@ export function employeeStatusKey(value: string) {
 
 
 export type WorkHourSummary = {
+  validationHours?: number;
+  overtimeReviewsPending?: number;
   plannedHours: number;
   actualHours: number;
   differenceHours: number;

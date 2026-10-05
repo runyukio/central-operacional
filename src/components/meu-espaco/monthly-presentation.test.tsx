@@ -124,7 +124,7 @@ test("hours keeps the no-record and future-only notices without the KPI cards", 
 test("hours identifies the in-progress complement without presenting it as realized hours", () => {
   const html = hoursHtml({ ...hours, data: [{ ...hours.data[0], effectiveHours: 2, inProgressHours: 6, futureHours: 8, projectedHours: 16 }] });
   assert.match(html, /Inclui \+6:00 para completar o turno em andamento/);
-  assert.match(html, /<td>2:00<\/td><td>8:00<\/td><td>16:00/);
+  assert.match(html, /<td>2:00<\/td><td>0:00<\/td><td>8:00<\/td><td>16:00/);
   assert.match(html, /A projeção não altera ou aprova horas/);
   assert.doesNotMatch(html, /hoje não é projetado novamente/);
   const noRecord = hoursHtml({ ...hours, data: [], summary: { ...hours.summary, realizedRecords: 0, realizedHours: null, inProgressHours: 8, futureSlots: 0 } });

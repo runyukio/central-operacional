@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, RefreshCw } from "lucide-react"
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { formatWorkHours } from "@/lib/work-hours-rules";
 import { resolveCapturePeriod, type CapturePeriod } from "@/lib/work-hours-capture-period";
 import { CAPTURE_DIVERGENCE_ACTIONS, captureDivergenceActionLabel } from "@/lib/work-hours-capture-integration-core";
 import {
@@ -92,7 +93,7 @@ export function WorkHoursDivergencesPage() {
       const revisions = new Map<string, string>(payload.data.results.map((item: { id: string; revision: string }) => [item.id, item.revision]));
       setRows((current) => current.filter((row) => !resolved.has(row.id)).map((row) => ({ ...row, revision: revisions.get(row.id) ?? row.revision })));
       setChoices({});
-      setMessage(`${payload.data.resolved} divergência(s) encerrada(s); ${payload.data.pending} mantida(s) pendente(s). Todas as decisões foram registradas.`);
+      setMessage(`${payload.data.resolved} divergência(s) encerrada(s); ${payload.data.pending} mantida(s) pendente(s). Todas as decisões foram registradas.${payload.data.overtimeReviewsPending ? ` ${payload.data.overtimeReviewsPending} revisão(ões) de excedente no Meu Espaço: ${formatWorkHours(payload.data.validationHours)} em validação.` : ""}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível aplicar as decisões.");
     } finally {

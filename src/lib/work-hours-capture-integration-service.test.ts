@@ -4,7 +4,8 @@ import { prisma } from "./prisma";
 import { getWorkHourAdherenceSummary } from "./work-hours-capture-integration-service";
 import { ADHERENCE_SUMMARY_SUPERVISORS as summaryRoster } from "./work-hour-adherence-summary";
 import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, getWorkHourAdherenceFilterOptions, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
-import { deleteWorkHourRecord, upsertManualWorkHourRecord } from "./work-hours-service";
+import { deleteWorkHourRecord, reviewWorkHourAdjustment, upsertManualWorkHourRecord } from "./work-hours-service";
+import { respondSpacePending } from "./meu-espaco-pending-service";
 import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
 import { buildXlsxResponse } from "./xlsx-export";
 import * as XLSX from "xlsx";
@@ -12,6 +13,7 @@ import { z } from "zod";
 import { resolveCapturePeriod } from "./work-hours-capture-period";
 import { capturePeriodShape, validateCapturePeriod } from "./work-hours-capture-period-schema";
 import { CaptureBatchError, captureImportNeedsReview, processCaptureImportDays } from "./work-hours-capture-batch";
+import { reviewWorkHourOvertime } from "./work-hours-overtime-service";
 
 const day = "2026-09-03";
 const date = new Date(`${day}T00:00:00.000Z`);
@@ -41,7 +43,7 @@ function divergence(employeeId = "agent", captured = hour, patch: Row = {}): Row
 function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
   const names = ["employeeProfile", "schedule", "workHourRecord", "workHourCaptureDivergence", "workHourCaptureImportRun",
     "workHourAdherenceJustification", "attendanceRecord", "attendanceHistory", "scheduleChangeHistory", "workHourHistory",
-    "workHourAdjustmentRequest", "notification", "auditLog", "user"];
+    "workHourAdjustmentRequest", "workHourOvertimeReview", "notification", "auditLog", "user"];
   let state: Record<string, Row[]> = Object.fromEntries(names.map((name) => [name, clone(seed[name] ?? [])]));
   state.user = [{ id: "wfm", email: actor.email, role: { name: "WFM" }, status: "ACTIVE", deletedAt: null }];
   const calls: Array<{ model: string; op: string; args: any }> = [];
@@ -51,6 +53,16 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
     if (["workHourRecord", "workHourCaptureDivergence", "workHourAdherenceJustification"].includes(model)) {
       result.employee = clone(state.employeeProfile.find((item) => item.id === row.employeeId));
       result.schedule = clone(state.schedule.find((item) => item.id === row.scheduleId) ?? null);
+      if (model === "workHourRecord") result.overtimeReview = clone(state.workHourOvertimeReview.find((review) => review.workHourRecordId === row.id) ?? null);
+    }
+    if (model === "workHourOvertimeReview") {
+      const record = state.workHourRecord.find((item) => item.id === row.workHourRecordId);
+      result.record = record ? hydrate("workHourRecord", record) : null;
+    }
+    if (model === "workHourAdjustmentRequest") {
+      const record = state.workHourRecord.find((item) => item.id === row.workHourRecordId);
+      result.record = record ? hydrate("workHourRecord", record) : null;
+      result.employee = clone(state.employeeProfile.find((item) => item.id === row.employeeId));
     }
     return result;
   };
@@ -88,12 +100,17 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
         }
         if (op === "findUnique" || op === "findFirst") return found[0] ? hydrate(model, found[0]) : null;
         if (op === "findUniqueOrThrow") { if (!found[0]) throw new Error(`Missing ${model}`); return hydrate(model, found[0]); }
-        if (op === "delete") { state[model] = state[model].filter((row) => row !== found[0]); return found[0]; }
+        if (op === "delete") {
+          state[model] = state[model].filter((row) => row !== found[0]);
+          if (model === "workHourRecord") state.workHourOvertimeReview.filter((review) => review.workHourRecordId === found[0]?.id).forEach((review) => { review.workHourRecordId = null; });
+          return found[0];
+        }
         if (op === "updateMany") { found.forEach((row) => Object.assign(row, clone(args.data))); return { count: found.length }; }
         if (op === "update" && !found.length) throw new Error(`Missing ${model}`);
         const existing = op !== "create" ? found[0] : null;
         const data = op === "upsert" ? existing ? args.update : args.create : args.data;
         const saved = existing ?? { id: `${model}-${++serial}`, status: "PENDING", createdAt: new Date(),
+          ...(model === "workHourRecord" ? { adjustedHours: null } : {}),
           ...(model === "notification" ? { isRead: false, readAt: null } : {}) };
         Object.assign(saved, clone(data), { updatedAt: new Date(Date.now() + ++serial) });
         if (!existing) state[model].push(saved);
@@ -123,6 +140,142 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
   };
 }
 const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "findUniqueOrThrow", "timeline"].includes(call.op));
+
+for (const [captured, calculated, pending] of [[7, 7.5, false], [7.5, 8, false], [8, 8.5, true]] as const) {
+  test(`importação de ${captured}h capturadas contabiliza ${Math.min(calculated, 8)}h e ${pending ? "valida" : "dispensa revisão do"} excedente`, async (t) => {
+    const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", captured);
+    const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+    assert.equal(f.state.workHourRecord[0].actualHours, calculated);
+    assert.equal(f.state.workHourRecord[0].effectiveHours, Math.min(calculated, 8));
+    assert.equal(result.data.overtimeReviewsPending, pending ? 1 : 0);
+    assert.equal(result.data.validationHours, pending ? 0.5 : 0);
+    assert.equal(f.state.workHourOvertimeReview.length, pending ? 1 : 0);
+  });
+}
+
+test("Captura contabiliza 8h, preserva 9h calculadas e cria uma revisão na data do turno noturno", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
+  f.capture("agent", 8.5);
+  const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(result.data.overtimeReviewsPending, 1); assert.equal(result.data.validationHours, 1);
+  assert.equal(f.state.schedule[0].status, "PRESENTE");
+  assert.equal(f.state.workHourRecord[0].actualHours, 9); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  const review = f.state.workHourOvertimeReview[0];
+  assert.equal(review.excessHours, 1); assert.equal(review.date.toISOString().slice(0, 10), day); assert.equal(review.supervisorId, null);
+  const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.deepEqual(preview.data.overtime, { pendingReviews: 1, validationHours: 1, effectiveHours: 8 });
+  const auditCount = f.state.auditLog.length;
+  const repeated: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(repeated.data.unchanged, 1); assert.equal(f.state.workHourOvertimeReview.length, 1);
+  assert.equal(f.state.workHourOvertimeReview[0].version, review.version); assert.equal(f.state.auditLog.filter((r) => r.entity === "WorkHourOvertimeReview").length, 1);
+  assert.ok(f.state.auditLog.length >= auditCount);
+});
+
+test("aprovação libera 9h e reimportação igual preserva a decisão, sem novo histórico da revisão", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  const review = f.state.workHourOvertimeReview[0];
+  await reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve" });
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 9); assert.equal(f.state.workHourRecord[0].differenceMinutes, 60);
+  assert.equal(f.state.workHourOvertimeReview[0].status, "APPROVED");
+  const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.deepEqual(preview.data.overtime, { pendingReviews: 0, validationHours: 0, effectiveHours: 9 });
+  const version = review.version, audits = f.state.auditLog.filter((r) => r.entity === "WorkHourOvertimeReview").length;
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 9); assert.equal(review.version, version);
+  assert.equal(f.state.auditLog.filter((r) => r.entity === "WorkHourOvertimeReview").length, audits);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version, action: "approve" }), (error: any) => error.status === 409);
+});
+
+test("recusa exige motivo, mantém 8h e continua recusada após reimportar os mesmos dados", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
+  const before = clone(f.state);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "reject", rejectionReason: "  " }), /motivo/);
+  assert.deepEqual(f.state, before);
+  await reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "reject", rejectionReason: "  Captura indevida  " });
+  assert.equal(review.status, "REJECTED"); assert.equal(review.rejectionReason, "Captura indevida");
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8); assert.equal(f.state.workHourRecord[0].actualHours, 9);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(review.status, "REJECTED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+});
+
+test("captura ou turno alterados reabrem validação e bloqueiam a versão anterior; até 8h cancela", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); let review = f.state.workHourOvertimeReview[0];
+  await reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" });
+  f.timeline.rows[0].activeMs = 9 * hour;
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(review.status, "PENDING"); assert.equal(review.calculatedHours, 9.5); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
+  await assert.rejects(() => respondSpacePending({ canRespond: true, actor } as any, "overtime", review.id,
+    { version: 1, action: "approve" }), (error: any) => error.status === 409);
+  review = f.state.workHourOvertimeReview[0];
+  await reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve" });
+  f.state.schedule[0].startsAt = "22:00";
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(review.status, "PENDING"); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  f.timeline.rows[0].activeMs = 7.5 * hour;
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(review.status, "CANCELLED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve" }), (error: any) => error.status === 409);
+});
+
+test("resolver divergência de presença também valida excedente e registra 8h efetivas na auditoria", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot("agent", "FOLGA")],
+    workHourCaptureDivergence: [divergence("agent", 8.5 * hour, { scheduleStatus: "FOLGA" })] });
+  const result: any = await applyCaptureWorkHourDivergenceDecisions(actor, { shiftDate: day, confirmed: true, decisions: [f.decision("div-agent", "CONFIRM_PRESENCE")] });
+  assert.equal(result.data.resolved, 1); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  assert.equal(f.state.workHourOvertimeReview[0].status, "PENDING");
+  assert.equal(f.state.auditLog.find((r) => r.entity === "WorkHourCaptureDivergence")?.newValue.effectiveHours, 8);
+});
+
+test("permissão usa o papel do banco, supervisor atribuído e perfil ativo; gestor não decide", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" })], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
+  f.state.user[0].role.name = "SUPERVISOR"; f.state.user[0].employeeProfile = { id: "other", deletedAt: null };
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 403);
+  f.state.user[0].role.name = "GESTOR";
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 403);
+  f.state.user[0].role.name = "SUPERVISOR"; f.state.user[0].employeeProfile.id = "sup";
+  await reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" });
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 9);
+});
+
+test("conflito no compare-and-set reverte a transação e não libera horas ou grava decisão", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
+  const before = clone(f.state);
+  t.mock.method(prisma.workHourOvertimeReview, "updateMany", async () => ({ count: 0 }));
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
+  assert.deepEqual(f.state, before);
+});
+
+test("lançamento manual cancela revisão; exclusão conserva revisão cancelada e auditoria", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); let review = f.state.workHourOvertimeReview[0];
+  const manual: any = await upsertManualWorkHourRecord(actor, { employeeId: "agent", date: day, actualHours: "9:30", confirmOverwrite: true });
+  assert.equal(manual.success, true, manual.error); assert.equal(review.status, "CANCELLED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 9.5);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true }); review = f.state.workHourOvertimeReview[0];
+  assert.equal(review.status, "PENDING");
+  const deleted: any = await deleteWorkHourRecord(actor, { workHourRecordId: f.state.workHourRecord[0].id });
+  assert.equal(deleted.success, true, deleted.error); assert.equal(review.status, "CANCELLED"); assert.equal(review.workHourRecordId, null);
+  assert.ok(f.state.auditLog.some((row) => row.entity === "WorkHourOvertimeReview" && row.newValue.status === "CANCELLED"));
+});
+
+test("ajuste manual aprovado substitui as horas e cancela a revisão na mesma transação", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
+  f.state.workHourAdjustmentRequest.push({ id: "adjust", employeeId: "agent", workHourRecordId: f.state.workHourRecord[0].id,
+    status: "ABERTO", requestedActualHours: 10, currentActualHours: 8, reason: "Correção manual", createdAt: new Date() });
+  const result: any = await reviewWorkHourAdjustment(actor, { id: "adjust", action: "approve" });
+  assert.equal(result.success, true, result.error);
+  assert.equal(review.status, "CANCELLED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 10);
+  assert.equal(f.state.workHourRecord[0].adjustedHours, 10);
+  await assert.rejects(() => respondSpacePending({ canRespond: true, actor } as any, "overtime", review.id,
+    { version: 1, action: "approve" }), (error: any) => error.status === 409);
+});
 
 test("Go Live ausente não fica invisível na prévia nem na tela de divergências, mesmo sem elegíveis", async (t) => {
   const f = fixture(t, { employeeProfile: [employee("otavioc", { goLiveDate: null })], schedule: [slot("otavioc")] });
@@ -196,7 +349,9 @@ test("corrigir Go Live remove o bloqueio sem importar sozinho; nova importação
   const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
   assert.equal(result.data.blocked, 0);
   assert.equal(result.data.imported, 1);
-  assert.equal(f.state.workHourRecord[0].effectiveHours, 8.75);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  assert.equal(f.state.workHourRecord[0].actualHours, 8.75);
+  assert.equal(f.state.workHourOvertimeReview[0].status, "PENDING");
 });
 
 test("bloqueios coexistem com divergências reais e continuam protegidos pela autorização", async (t) => {
@@ -912,7 +1067,7 @@ test("processamento diário acumula todos os dias antes de abrir as divergência
   const result = await processCaptureImportDays({ startDate: day, endDate: "2026-09-05" }, async (d) => {
     calls.push(d); return { imported: 1, unchanged: 2, divergences: 1, ignored: 0 };
   }, (d, index, total) => progress.push(`${d}:${index}/${total}`));
-  assert.deepEqual(result, { imported: 3, unchanged: 6, divergences: 3, ignored: 0, blocked: 0, completedDates: [day, "2026-09-04", "2026-09-05"] });
+  assert.deepEqual(result, { imported: 3, unchanged: 6, divergences: 3, ignored: 0, blocked: 0, overtimeReviewsPending: 0, validationHours: 0, completedDates: [day, "2026-09-04", "2026-09-05"] });
   assert.equal(calls.length, 3);
   assert.equal(progress[2], "2026-09-05:3/3");
 });
