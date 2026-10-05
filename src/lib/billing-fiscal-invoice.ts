@@ -16,10 +16,11 @@ const BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS = new Set([
   "guilhereme.ramos"
 ]);
 
-// Exceção pontual autorizada para o fechamento manual de agosto/2026.
+// Exceções pontuais autorizadas para fechamento manual, vinculadas ao ciclo.
 // Não libera o fluxo automático nem os demais ciclos destes parceiros.
 const BILLING_MANUAL_CLOSURE_MONTH_EXCEPTIONS = new Map<string, ReadonlySet<string>>([
-  ["2026-08", new Set(["wb_diorgenes", "wb_stephaniet"])]
+  ["2026-08", new Set(["wb_diorgenes", "wb_stephaniet"])],
+  ["2026-09", new Set(["wb_anapaula", "mcelia"])]
 ]);
 
 export type BillingManualClosureWithoutFiscalInvoiceReason =
