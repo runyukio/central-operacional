@@ -5,13 +5,13 @@ import { calculateOperationalHours, isProtectedCaptureScheduleStatus, shouldCrea
 
 type AdherenceEmployee = CaptureEligibilityProfile & { id: string; wbLogin: string; fullName: string; supervisorId: string | null };
 
-// Capture and manual entry share one threshold/lifecycle. The duration is always
-// the source duration, never the result of the operational-hours bonus/fixed rule.
+// Use calculated hours for the threshold; retain the source duration as evidence.
 export async function syncWorkHourAdherence(tx: Prisma.TransactionClient, input: {
   employee: AdherenceEmployee;
   schedule: { id: string; status: string; startsAt: string | null; endsAt: string | null; deletedAt?: Date | null };
   date: Date;
   durationMs: number;
+  calculatedDurationMs: number;
   actorId: string;
   hadOperationalHours: boolean;
   source: "CAPTURE" | "MANUAL";
@@ -24,9 +24,9 @@ export async function syncWorkHourAdherence(tx: Prisma.TransactionClient, input:
   if (!input.hadOperationalHours) {
     await cancelAdherenceForDeletedWorkHours(tx, { employeeId: employee.id, date, actorId, reason: "Novo lançamento após ausência do registro de horas" });
   }
-  if (!shouldCreateLowAdherence(durationMs)) {
+  if (!shouldCreateLowAdherence(input.calculatedDurationMs)) {
     await cancelWorkHourAdherenceForDay(tx, { employeeId: employee.id, date, actorId,
-      reason: "Aderência cancelada: duração atual igual ou superior a 7:25." });
+      reason: "Aderência cancelada: horas calculadas atuais iguais ou superiores a 7:30." });
     return;
   }
   const existing = await tx.workHourAdherenceJustification.findUnique({ where: { reconciliationKey } });
@@ -61,7 +61,7 @@ export async function syncWorkHourAdherence(tx: Prisma.TransactionClient, input:
   if (!sameValidatedDuration) {
     await tx.auditLog.create({ data: {
       actorId, action: existing ? "EDICAO" : "CRIACAO", entity: "WorkHourAdherenceJustification", entityId: saved.id,
-      reason: input.source === "MANUAL" ? "Horas manuais inferiores a 7:25." : "Captura original inferior a 7:25 após comparecimento validado.",
+      reason: input.source === "MANUAL" ? "Horas manuais inferiores a 7:30." : "Horas calculadas da Captura inferiores a 7:30 após comparecimento validado.",
       previousValue: existing ? { capturedMs: existing.sourceDurationMs, status: existing.status, justification: existing.justification,
         answeredById: existing.answeredById, answeredAt: existing.answeredAt?.toISOString() ?? null } : Prisma.JsonNull,
       newValue: { reconciliationKey, capturedMs: durationMs, durationSource: input.source, status: saved.status }

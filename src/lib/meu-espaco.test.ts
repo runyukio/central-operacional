@@ -111,6 +111,7 @@ test("pending SQL keeps original hour owner and excludes canceled, deleted, prot
   const data = await spacePendingSource(scope({ profiles: [employee(), employee("transferred", "other"), employee("training", "sup", { operationalStatus: "Em treinamento" })] }));
   assert.match(data.text, /j\."supervisorId"=\$/);
   assert.match(data.text, /EXISTS \(SELECT 1 FROM "WorkHourRecord"/);
+  assert.match(data.text, /w\."actualHours">=0 AND w\."actualHours"<7\.5/);
   assert.match(data.text, /j\.date >= e\."goLiveDate"/);
   assert.match(data.text, /s\."deletedAt" IS NULL/);
   assert.match(data.text, /'FALTA_JUSTIFICADA', 'FALTA_INJUSTIFICADA'/);
@@ -396,7 +397,7 @@ test("answering transferred hours writes the original record and exactly one ori
   t.mock.method(prisma, "$queryRaw", async () => [{ ...record, kind: "hours", pending: record.status === "PENDING" }]);
   t.mock.method(prisma.workHourAdherenceJustification, "findUnique", async () => record);
   t.mock.method(prisma.workHourAdherenceJustification, "update", async ({ data }: any) => Object.assign(record, data));
-  t.mock.method(prisma.workHourRecord, "findUnique", async () => ({ id: "original-hours" }));
+  t.mock.method(prisma.workHourRecord, "findUnique", async () => ({ id: "original-hours", actualHours: 6.5 }));
   t.mock.method(prisma.notification, "updateMany", async () => ({ count: 1 }));
   t.mock.method(prisma.auditLog, "create", async ({ data }: any) => { audits.push(data); return data; });
   t.mock.method(prisma, "$transaction", (async (fn: any) => fn(prisma)) as any);

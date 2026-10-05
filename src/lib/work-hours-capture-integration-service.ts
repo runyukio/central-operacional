@@ -24,6 +24,7 @@ import {
   evaluateCaptureImport,
   isProtectedCaptureScheduleStatus,
   reuseCaptureResolution,
+  shouldCreateLowAdherence,
   type CaptureDivergenceAction,
   type CaptureDivergenceReason,
   type OperationalHourCalculation
@@ -577,11 +578,12 @@ async function visibleAdherenceRows(records: Prisma.WorkHourAdherenceJustificati
   // to justify a removed record; preserve the old entry for audit/reprocessing.
   const hours = records.length ? await prisma.workHourRecord.findMany({
     where: { OR: records.map((record) => ({ employeeId: record.employeeId, date: record.date })) },
-    select: { employeeId: true, date: true, source: true }
+    select: { employeeId: true, date: true, source: true, actualHours: true }
   }) : [];
   const existingDays = new Map(hours.map((record) => [`${record.employeeId}:${record.date.toISOString()}`, record]));
   return filterWorkHourAdherenceRows(records.filter((record) => (
       existingDays.has(`${record.employeeId}:${record.date.toISOString()}`)
+      && shouldCreateLowAdherence((existingDays.get(`${record.employeeId}:${record.date.toISOString()}`)?.actualHours ?? NaN) * 3_600_000)
       && isCaptureImportEligible(record.employee, formatDate(record.date))
       && !isProtectedCaptureScheduleStatus(record.schedule?.status)
       && (!filters.shift || filters.shift === "Todos" || shiftCategoryName(record.employee.shift.name) === shiftCategoryName(filters.shift))
@@ -629,7 +631,7 @@ export async function getWorkHourAdherenceFilterOptions(actor: Actor, filters: C
     WHERE j.date >= ${period.start} AND j.date <= ${period.end}
       AND j.status <> 'CANCELLED'
       ${supervisorScope ? Prisma.sql`AND j."supervisorId" = ${supervisorScope}` : Prisma.empty}
-      AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date)
+      AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date AND h."actualHours">=0 AND h."actualHours"<7.5)
     GROUP BY j."employeeId", j.lob, j."supervisorId", sup."fullName", s.status
   `);
   const employees = groups.length ? await prisma.employeeProfile.findMany({
@@ -691,7 +693,7 @@ export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<Ca
       AND j.status = 'PENDING'
       AND j."supervisorId" IN (${Prisma.join(ADHERENCE_SUMMARY_SUPERVISORS.map((supervisor) => supervisor.id))})
       ${supervisorScope ? Prisma.sql`AND j."supervisorId" = ${supervisorScope}` : Prisma.empty}
-      AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date)
+      AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date AND h."actualHours">=0 AND h."actualHours"<7.5)
     GROUP BY j.date, j."employeeId", j."supervisorId", sup."fullName", s.status
   `);
   const employees = groups.length ? await prisma.employeeProfile.findMany({
@@ -745,9 +747,10 @@ export async function answerWorkHourAdherenceJustification(actor: Actor, input: 
         return createPermissionError("Supervisores só podem justificar pendências de seus próprios agentes.");
       }
       const hours = await tx.workHourRecord.findUnique({
-        where: { employeeId_date: { employeeId: record.employeeId, date: record.date } }, select: { id: true }
+        where: { employeeId_date: { employeeId: record.employeeId, date: record.date } }, select: { id: true, actualHours: true }
       });
       if (!hours) return createValidationError({}, "As horas deste dia foram excluídas. Atualize a tela; não há mais justificativa a enviar.");
+      if (!shouldCreateLowAdherence(hours.actualHours * 3_600_000)) return createValidationError({}, "Este dia não exige justificativa: apenas horas calculadas abaixo de 7:30. Para excedente acima de 8h, use aprovação ou recusa no Meu Espaço.");
       const updated = await tx.workHourAdherenceJustification.update({
         where: { id: record.id },
         data: { status: "JUSTIFIED", justification, answeredById: user.id, answeredAt: new Date() }
@@ -1114,7 +1117,7 @@ async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: Captur
   if (!proposal.schedule || proposal.capturedMs === null || !proposal.calculation) return;
   await syncWorkHourAdherence(tx, {
     employee: proposal.employee, schedule: proposal.schedule, date: proposal.date,
-    durationMs: proposal.capturedMs, actorId, hadOperationalHours, source: "CAPTURE"
+    durationMs: proposal.capturedMs, calculatedDurationMs: proposal.calculation.operationalMs, actorId, hadOperationalHours, source: "CAPTURE"
   });
 }
 

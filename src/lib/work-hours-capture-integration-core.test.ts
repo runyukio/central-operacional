@@ -127,19 +127,21 @@ test("16. venda de folga sem captura oferece as cinco decisões fixas", () => {
   assert.deepEqual(result.actions, CAPTURE_DIVERGENCE_ACTIONS);
 });
 
-test("17. captura abaixo de 7:25 gera pendência", () => {
+test("17. horas calculadas abaixo de 7:30 geram pendência", () => {
+  assert.equal(LOW_ADHERENCE_THRESHOLD_MS, 7.5 * hour);
   assert.equal(shouldCreateLowAdherence(LOW_ADHERENCE_THRESHOLD_MS - 1000), true);
 });
 
-test("18. captura exatamente 7:25 não gera pendência", () => {
+test("18. horas calculadas exatamente 7:30 não geram pendência", () => {
   assert.equal(shouldCreateLowAdherence(LOW_ADHERENCE_THRESHOLD_MS), false);
 });
 
-test("19. CEC e RA continuam com pendência pela captura original, mesmo ajustados para oito", () => {
+test("19. CEC e RA calculadas em oito não pedem justificativa pela captura curta", () => {
   const captured = 5 * hour;
   assert.equal(calculateOperationalHours(captured, { lob: "CEC" }).operationalHours, 8);
   assert.equal(calculateOperationalHours(captured, { skillNames: ["RA"] }).operationalHours, 8);
-  assert.equal(shouldCreateLowAdherence(captured), true);
+  assert.equal(shouldCreateLowAdherence(calculateOperationalHours(captured, { lob: "CEC" }).operationalMs), false);
+  assert.equal(shouldCreateLowAdherence(calculateOperationalHours(captured, { skillNames: ["RA"] }).operationalMs), false);
 });
 
 test("20. jornada atravessando meia-noite preserva a data informada pela Captura", () => {

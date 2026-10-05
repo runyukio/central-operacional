@@ -1,5 +1,5 @@
 export const CAPTURE_AUTO_PRESENCE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-export const LOW_ADHERENCE_THRESHOLD_MS = (7 * 60 + 25) * 60 * 1000;
+export const LOW_ADHERENCE_THRESHOLD_MS = (7 * 60 + 30) * 60 * 1000;
 export const STANDARD_CAPTURE_BONUS_MS = 30 * 60 * 1000;
 export const STANDARD_OPERATIONAL_DAY_MS = 8 * 60 * 60 * 1000;
 
@@ -187,8 +187,8 @@ export function evaluateCaptureImport(input: Parameters<typeof evaluateCaptureIm
   return result.decision === "DIVERGENCE" ? { ...result, actions: [...CAPTURE_DIVERGENCE_ACTIONS] } : result;
 }
 
-export function shouldCreateLowAdherence(capturedMs?: number | null) {
-  return Boolean(capturedMs !== null && capturedMs !== undefined && capturedMs >= 0 && capturedMs < LOW_ADHERENCE_THRESHOLD_MS);
+export function shouldCreateLowAdherence(calculatedMs?: number | null) {
+  return Boolean(calculatedMs !== null && calculatedMs !== undefined && calculatedMs >= 0 && calculatedMs < LOW_ADHERENCE_THRESHOLD_MS);
 }
 
 // Reuse an explicit decision only for the exact capture and slot that was reviewed.

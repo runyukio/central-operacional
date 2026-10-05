@@ -53,7 +53,7 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
     WHERE j.status IN ('PENDING', 'JUSTIFIED') AND ${inIds(Prisma.sql`j."supervisorId"`, scope.activeSupervisorIds)} AND ${inIds(Prisma.sql`e.id`, eligibleIds)}
       AND j.date >= e."goLiveDate"::date AND j.date <= ${spaceDate(spaceToday())}
       AND (s.id IS NULL OR (s."deletedAt" IS NULL AND s.status::text NOT IN (${Prisma.join(protectedStatuses)})))
-      AND EXISTS (SELECT 1 FROM "WorkHourRecord" w WHERE w."employeeId"=j."employeeId" AND w.date=j.date)
+      AND EXISTS (SELECT 1 FROM "WorkHourRecord" w WHERE w."employeeId"=j."employeeId" AND w.date=j.date AND w."actualHours">=0 AND w."actualHours"<7.5)
       ${scope.supervisorId ? Prisma.sql`AND j."supervisorId"=${scope.supervisorId}` : Prisma.empty}
     UNION ALL
     SELECT r.id, 'overtime'::text, r.date, e.id, e."fullName", e."wbLogin", l.name, r."supervisorId", COALESCE(sup."fullName", 'Sem supervisor'),
