@@ -6,6 +6,7 @@ import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } fro
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import { canAccessPathForRole, getNavItems, getNavSections } from "@/lib/navigation";
 import {
+  canAccessAnonymousFeedback,
   canAccessOwnPerformance,
   canAccessPerformance,
   canAccessRealTime,
@@ -13,9 +14,39 @@ import {
   canAdminOverrideWorkflowScheduleStatus,
   canAutoUpdateAdsRequirement,
   canEditSchedule,
+  canExportAnonymousFeedback,
   canImportPerformance,
+  canManageAnonymousFeedback,
+  canViewAnonymousFeedbackAdmin,
   canViewEmployeeProfileBillingPreview
 } from "@/lib/permissions";
+
+test("Gestor, Coordenador e Gerente acessam a gestão do Feedback Anônimo", () => {
+  for (const role of ["GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT", "MANAGER"]) {
+    const user = { role, email: "gestor@example.test", status: "ACTIVE" };
+    assert.equal(canAccessAnonymousFeedback(user), true, role);
+    assert.equal(canViewAnonymousFeedbackAdmin(user), true, role);
+    assert.equal(canManageAnonymousFeedback(user), true, role);
+    assert.equal(canExportAnonymousFeedback(user), true, role);
+    assert.equal(getNavItems(user).some((item) => item.href === "/feedback-anonimo"), true, role);
+    assert.equal(canAccessPathForRole("/feedback-anonimo", user), true, role);
+    const inactive = { ...user, status: "INACTIVE" };
+    assert.equal(canAccessAnonymousFeedback(inactive), false, role);
+    assert.equal(canViewAnonymousFeedbackAdmin(inactive), false, role);
+    assert.equal(canManageAnonymousFeedback(inactive), false, role);
+    assert.equal(canExportAnonymousFeedback(inactive), false, role);
+  }
+});
+
+test("a gestão do Feedback Anônimo permanece restrita aos perfis autorizados", () => {
+  for (const role of allAppRoles) {
+    const user = { role, email: "user@example.test", status: "ACTIVE" };
+    const allowed = ["ADMIN", "GESTOR", "COORDENADOR", "GERENTE", "RH", "FINANCEIRO"].includes(role);
+    assert.equal(canViewAnonymousFeedbackAdmin(user), allowed, role);
+    assert.equal(canManageAnonymousFeedback(user), allowed, role);
+    assert.equal(canExportAnonymousFeedback(user), allowed, role);
+  }
+});
 
 test("prévia de invoice no perfil fica disponível ao próprio parceiro, a ADMIN para todos e a supervisor somente para agentes", () => {
   assert.equal(canViewEmployeeProfileBillingPreview({
