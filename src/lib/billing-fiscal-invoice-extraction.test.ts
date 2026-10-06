@@ -89,6 +89,54 @@ const geneMunicipalDocumentContext = {
   documentHash: "b46e7bc007247e335691d5ef6ed9afe1442aaed002c93ea00fe581a73b010503"
 };
 
+const gene10MunicipalDocumentContext = {
+  wbLogin: "wb_gene",
+  referenceMonth: "2026-09",
+  documentHash: "132f1f2366e2493206b062f424771540b171962075966ae45ab483d132efa477"
+};
+
+test("autoriza a NF municipal 10 de wb_gene em setembro mantendo a validação do envio ao Omie", () => {
+  const fields = extractBillingFiscalFieldsFromText(
+    municipalFiscalSampleText.replaceAll("00000029", "00000010").replace("03115", "03158")
+  );
+  assert.equal(fields.invoiceNumber, "00000010");
+  assert.equal(getBillingFiscalDocumentCodeException(gene10MunicipalDocumentContext)?.id, "SAO_PAULO_NF10_GENE_2026_09");
+  assert.deepEqual(validateBillingFiscalComplianceFields(fields, "62388834000173", gene10MunicipalDocumentContext), {
+    customerTaxId: "58151940000161",
+    supplierTaxId: "62388834000173",
+    taxationCode: "03158",
+    nbsCode: ""
+  });
+  assert.equal(isBillingFiscalAmountMismatchExempt("wb_gene", "2026-09"), false);
+
+  for (const context of [
+    undefined,
+    { ...gene10MunicipalDocumentContext, wbLogin: "wb_outro" },
+    { ...gene10MunicipalDocumentContext, referenceMonth: "2026-08" },
+    { ...gene10MunicipalDocumentContext, referenceMonth: "2026-10" },
+    { ...gene10MunicipalDocumentContext, documentHash: "outro-documento" },
+    { ...gene10MunicipalDocumentContext, documentHash: undefined }
+  ]) {
+    assert.equal(getBillingFiscalDocumentCodeException(context), null);
+    assert.throws(
+      () => validateBillingFiscalComplianceFields(fields, "62388834000173", context),
+      /Código de Tributação incorreto/
+    );
+  }
+  for (const overrides of [{ customerTaxId: "11111111000111" }, { supplierTaxId: "11111111000111" }]) {
+    assert.throws(
+      () => validateBillingFiscalComplianceFields({ ...fields, ...overrides }, "62388834000173", gene10MunicipalDocumentContext),
+      /CNPJ do (tomador|prestador) incorreto/
+    );
+  }
+  for (const overrides of [{ taxationCode: "03115" }, { nbsCode: "1.111.11.11" }]) {
+    assert.throws(
+      () => validateBillingFiscalComplianceFields({ ...fields, ...overrides }, "62388834000173", gene10MunicipalDocumentContext),
+      /Código de Tributação incorreto/
+    );
+  }
+});
+
 test("autoriza a NF municipal 9 de wb_gene somente no PDF e ciclo aprovados", () => {
   const fields = extractBillingFiscalFieldsFromText(
     municipalFiscalSampleText.replace("03115", "03158")
