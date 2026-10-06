@@ -4,7 +4,15 @@ export type BillingFiscalDocumentContext = {
   documentHash?: string | null;
 };
 
-// Explicit authorizations for these PDFs only; not blanket exemptions for the partners.
+export type BillingFiscalDocumentIdentity = {
+  accessKey: string;
+  invoiceNumber: string;
+  customerTaxId: string;
+  supplierTaxId: string;
+  serviceAmount: number;
+};
+
+// Explicit authorizations for individual invoices, not blanket partner exemptions.
 const BILLING_FISCAL_DOCUMENT_CODE_EXCEPTIONS = [{
   id: "SAO_PAULO_NF30_LUIZA03_2026_08",
   wbLogin: "wb_luiza03",
@@ -28,14 +36,39 @@ const BILLING_FISCAL_DOCUMENT_CODE_EXCEPTIONS = [{
   wbLogin: "wb_gene",
   referenceMonth: "2026-09",
   documentHash: "132f1f2366e2493206b062f424771540b171962075966ae45ab483d132efa477",
-  taxationCode: "03158"
+  taxationCode: "03158",
+  documentIdentity: {
+    accessKey: "35503081264652288000161000000000001026108705378364",
+    invoiceNumber: "10",
+    customerTaxId: "58151940000161",
+    supplierTaxId: "64652288000161",
+    serviceAmount: 10452.08
+  }
 }] as const;
 
-export function getBillingFiscalDocumentCodeException(context?: BillingFiscalDocumentContext) {
+export function getBillingFiscalDocumentCodeException(
+  context?: BillingFiscalDocumentContext,
+  identity?: Partial<BillingFiscalDocumentIdentity>
+) {
   const wbLogin = String(context?.wbLogin ?? "").trim().toLowerCase();
   return BILLING_FISCAL_DOCUMENT_CODE_EXCEPTIONS.find((exception) => (
     exception.wbLogin === wbLogin
     && exception.referenceMonth === context?.referenceMonth
-    && exception.documentHash === context?.documentHash
+    && (exception.documentHash === context?.documentHash || (
+      "documentIdentity" in exception
+      && matchesDocumentIdentity(identity, exception.documentIdentity)
+    ))
   )) ?? null;
+}
+
+function matchesDocumentIdentity(
+  actual: Partial<BillingFiscalDocumentIdentity> | undefined,
+  expected: BillingFiscalDocumentIdentity
+) {
+  const digits = (value: string | undefined) => String(value ?? "").replace(/\D/g, "");
+  return digits(actual?.accessKey) === expected.accessKey
+    && digits(actual?.invoiceNumber).replace(/^0+/, "") === expected.invoiceNumber
+    && digits(actual?.customerTaxId) === expected.customerTaxId
+    && digits(actual?.supplierTaxId) === expected.supplierTaxId
+    && Math.round(Number(actual?.serviceAmount) * 100) === Math.round(expected.serviceAmount * 100);
 }
