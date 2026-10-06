@@ -524,6 +524,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
   if ("error" in uploadValidation) return { error: uploadValidation.error, status: 400 };
 
   let stage: BillingFiscalPreviewStage = "CALCULATE_BILLING";
+  let extraction: BillingFiscalDocumentExtraction | undefined;
   try {
     const calculated = await calculateEmployeeInvoice(
       employee,
@@ -534,7 +535,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     );
     const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
     stage = "EXTRACT_DOCUMENT";
-    const extraction = await extractBillingFiscalInvoice(input.file, {
+    extraction = await extractBillingFiscalInvoice(input.file, {
       requireComplianceFields: isOwnInvoice,
       documentContext: { wbLogin: employee.wbLogin, referenceMonth }
     });
@@ -588,6 +589,15 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     };
   } catch (error) {
     if (error instanceof BillingFiscalExtractionError) {
+      if (stage === "VALIDATE_COMPLIANCE") {
+        console.warn("[billing-fiscal-preview] compliance rejected", {
+          wbLogin: employee.wbLogin,
+          referenceMonth,
+          documentHash: extraction?.documentHash,
+          invoiceNumber: extraction?.invoiceNumber,
+          extractionMethod: extraction?.extractionMethod
+        });
+      }
       return { error: error.message, status: error.status };
     }
     logBillingFiscalPreviewFailure(error, stage);
@@ -800,7 +810,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
               wbLogin,
               referenceMonth,
               documentHash: extraction.documentHash
-            })?.id ?? null,
+            }, extraction)?.id ?? null,
             invoiceFileName: fileData.fileName,
             finalAmount: calculated.finalAmount,
             totalMinutes: calculated.totalConsideredMinutes
@@ -913,6 +923,9 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       select: { cnpj: true }
     });
     validateBillingFiscalComplianceFields({
+      accessKey: fiscalInvoice.accessKey ?? "",
+      invoiceNumber: fiscalInvoice.invoiceNumber,
+      serviceAmount: Number(fiscalInvoice.grossAmount),
       customerTaxId: fiscalInvoice.customerTaxId ?? "",
       supplierTaxId: fiscalInvoice.supplierTaxId ?? "",
       taxationCode: fiscalInvoice.taxationCode ?? "",
@@ -3616,7 +3629,13 @@ function hasReusableBillingFiscalExtraction(
     && row.invoiceNumber
     && Number(row.grossAmount) > 0
   );
-  const codeException = getBillingFiscalDocumentCodeException({ ...documentContext, documentHash: row?.documentHash });
+  const codeException = getBillingFiscalDocumentCodeException({ ...documentContext, documentHash: row?.documentHash }, {
+    accessKey: row?.accessKey ?? "",
+    invoiceNumber: row?.invoiceNumber ?? "",
+    serviceAmount: Number(row?.grossAmount),
+    customerTaxId: row?.customerTaxId ?? "",
+    supplierTaxId: row?.supplierTaxId ?? ""
+  });
   return hasBaseFields && (!requireCompliance || Boolean(
     row?.customerTaxId
     && row.supplierTaxId

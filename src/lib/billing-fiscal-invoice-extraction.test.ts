@@ -95,6 +95,69 @@ const gene10MunicipalDocumentContext = {
   documentHash: "132f1f2366e2493206b062f424771540b171962075966ae45ab483d132efa477"
 };
 
+const gene10FiscalIdentity = {
+  accessKey: "35503081264652288000161000000000001026108705378364",
+  invoiceNumber: "00000010",
+  serviceAmount: 10452.08,
+  customerTaxId: "58151940000161",
+  supplierTaxId: "64652288000161",
+  taxationCode: "03158",
+  nbsCode: ""
+};
+
+test("aceita outra cópia da NF 10 de Gene pela identidade fiscal completa, inclusive na validação do Omie", () => {
+  const context = { ...gene10MunicipalDocumentContext, documentHash: "hash-da-copia-regenerada" };
+  assert.equal(getBillingFiscalDocumentCodeException(context, gene10FiscalIdentity)?.id, "SAO_PAULO_NF10_GENE_2026_09");
+  assert.equal(getBillingFiscalDocumentCodeException(context, { ...gene10FiscalIdentity, invoiceNumber: "10" })?.id, "SAO_PAULO_NF10_GENE_2026_09");
+  assert.equal(validateBillingFiscalComplianceFields(gene10FiscalIdentity, "64652288000161", context).taxationCode, "03158");
+  assert.equal(isBillingFiscalAmountMismatchExempt("wb_gene", "2026-09"), false);
+
+  for (const overrides of [
+    { accessKey: "35503081264652288000161000000000001126108705378364" },
+    { invoiceNumber: "00000011" },
+    { serviceAmount: 10452.09 },
+    { customerTaxId: "11111111000111" },
+    { supplierTaxId: "11111111000111" },
+    { accessKey: undefined },
+    { invoiceNumber: undefined },
+    { serviceAmount: undefined },
+    { customerTaxId: undefined },
+    { supplierTaxId: undefined }
+  ]) {
+    assert.equal(getBillingFiscalDocumentCodeException(context, { ...gene10FiscalIdentity, ...overrides }), null);
+  }
+  for (const alternateContext of [
+    undefined,
+    { ...context, wbLogin: "wb_outro" },
+    { ...context, referenceMonth: "2026-08" },
+    { ...context, referenceMonth: "2026-10" }
+  ]) {
+    assert.equal(getBillingFiscalDocumentCodeException(alternateContext, gene10FiscalIdentity), null);
+    assert.throws(() => validateBillingFiscalComplianceFields(gene10FiscalIdentity, "64652288000161", alternateContext), /Código de Tributação incorreto/);
+  }
+  for (const overrides of [{ taxationCode: "03115" }, { nbsCode: "1.111.11.11" }, { serviceAmount: 10452.09 }]) {
+    assert.throws(() => validateBillingFiscalComplianceFields({ ...gene10FiscalIdentity, ...overrides }, "64652288000161", context), /Código de Tributação incorreto/);
+  }
+});
+
+test("a confirmação de uma cópia autorizada continua vinculada aos bytes validados", async () => {
+  process.env.NEXTAUTH_SECRET = "billing-fiscal-test-secret";
+  const file = new File(["copia municipal validada"], "nota.pdf", { type: "application/pdf" });
+  const documentHash = hashBillingFiscalFile(Buffer.from(await file.arrayBuffer()));
+  const expected = {
+    actorEmail: "parceiro@example.com",
+    referenceMonth: "2026-09",
+    employeeId: "gene-invoice",
+    billingGrossAmount: 10452.08,
+    wbLogin: "wb_gene",
+    supplierTaxId: "64652288000161",
+    enforceCompliance: true
+  };
+  const token = createBillingFiscalValidationToken({ ...gene10FiscalIdentity, ...expected, documentHash, serviceDescription: "Serviços", extractionMethod: "PDF_TEXT" });
+  assert.equal((await verifyBillingFiscalValidationToken(token, file, expected)).invoiceNumber, "00000010");
+  await assert.rejects(verifyBillingFiscalValidationToken(token, new File(["arquivo trocado"], "nota.pdf"), expected), /não é o mesmo/);
+});
+
 test("autoriza a NF municipal 10 de wb_gene em setembro mantendo a validação do envio ao Omie", () => {
   const fields = extractBillingFiscalFieldsFromText(
     municipalFiscalSampleText.replaceAll("00000029", "00000010").replace("03115", "03158")

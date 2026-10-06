@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 
 import { BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH, isValidBillingFiscalInvoiceNumber } from "@/lib/billing-fiscal-invoice";
-import { getBillingFiscalDocumentCodeException, type BillingFiscalDocumentContext } from "@/lib/billing-fiscal-document-exceptions";
+import { getBillingFiscalDocumentCodeException, type BillingFiscalDocumentContext, type BillingFiscalDocumentIdentity } from "@/lib/billing-fiscal-document-exceptions";
 
 const VALIDATION_TOKEN_VERSION = 1;
 const VALIDATION_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -76,8 +76,10 @@ export async function extractBillingFiscalInvoice(
   }
 
   if (extension === ".pdf" || mimeType === "application/pdf") {
-    const codeException = getBillingFiscalDocumentCodeException({ ...options.documentContext, documentHash });
-    const result = await extractFromPdf(buffer, Boolean(options.requireComplianceFields), codeException?.taxationCode);
+    const result = await extractFromPdf(buffer, Boolean(options.requireComplianceFields), {
+      ...options.documentContext,
+      documentHash
+    });
     return validateExtractedFields({ ...result.fields, documentHash, extractionMethod: result.method });
   }
 
@@ -194,7 +196,7 @@ export function extractBillingFiscalFieldsFromText(text: string, metadataText = 
 }
 
 export function validateBillingFiscalComplianceFields(
-  fields: Pick<BillingFiscalDocumentExtraction, "customerTaxId" | "supplierTaxId" | "taxationCode" | "nbsCode">,
+  fields: Pick<BillingFiscalDocumentExtraction, "customerTaxId" | "supplierTaxId" | "taxationCode" | "nbsCode"> & Partial<BillingFiscalDocumentIdentity>,
   registeredSupplierTaxId: string,
   documentContext?: BillingFiscalDocumentContext
 ) {
@@ -230,7 +232,7 @@ export function validateBillingFiscalComplianceFields(
     );
   }
 
-  const codeException = getBillingFiscalDocumentCodeException(documentContext);
+  const codeException = getBillingFiscalDocumentCodeException(documentContext, fields);
   if (codeException && taxationCode === codeException.taxationCode && !String(fields.nbsCode ?? "").trim()) {
     return { customerTaxId, supplierTaxId, taxationCode, nbsCode };
   }
@@ -266,7 +268,7 @@ export function hashBillingFiscalFile(buffer: Buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, exemptMunicipalCode?: string) {
+async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, documentContext?: BillingFiscalDocumentContext) {
   const [{ getDocument }, { createCanvas }] = await Promise.all([
     import("pdfjs-dist/legacy/build/pdf.mjs"),
     import("@napi-rs/canvas")
@@ -289,7 +291,8 @@ async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, 
     }
 
     const nativeFields = extractBillingFiscalFieldsFromText(nativeText, metadataText);
-    if (hasAllRequiredFields(nativeFields, requireComplianceFields, exemptMunicipalCode)) {
+    if (hasAllRequiredFields(nativeFields, requireComplianceFields,
+      getBillingFiscalDocumentCodeException(documentContext, nativeFields)?.taxationCode)) {
       return { fields: nativeFields, method: "PDF_TEXT" as const };
     }
 
@@ -306,7 +309,8 @@ async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, 
       }).promise;
       ocrText += `\n${await recognizeBillingFiscalText(canvas.toBuffer("image/png"))}`;
       const fields = extractBillingFiscalFieldsFromText(`${nativeText}\n${ocrText}`, metadataText);
-      if (hasAllRequiredFields(fields, requireComplianceFields, exemptMunicipalCode)) {
+      if (hasAllRequiredFields(fields, requireComplianceFields,
+        getBillingFiscalDocumentCodeException(documentContext, fields)?.taxationCode)) {
         return { fields, method: "OCR" as const };
       }
     }
