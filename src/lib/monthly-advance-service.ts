@@ -34,6 +34,19 @@ const MONTH_NAMES = [
 const MONTHLY_ADVANCE_PJ_ONLY_MESSAGE = "Adiantamento mensal disponível apenas para parceiros PJ.";
 const MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE = "Adiantamento mensal indisponível para parceiros em treinamento.";
 const MONTHLY_ADVANCE_TRAINING_BLOCK_REASON = "TRAINING_STATUS";
+export const MONTHLY_ADVANCE_WAVE_BLOCK_MONTH = "2026-10";
+export const MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE = "Adiantamento de outubro/2026 indisponível para a wave 40 de ADS e a wave 13 de Vídeo.";
+const monthlyAdvanceBlockedWaves = [
+  { lob: "ADS", wave: "40" },
+  { lob: "VIDEO", wave: "13" }
+];
+
+export function isMonthlyAdvanceWaveBlocked(employee: { wave?: string | null; lob?: { name: string } | null }, referenceMonth: string) {
+  if (referenceMonth !== MONTHLY_ADVANCE_WAVE_BLOCK_MONTH) return false;
+  const wave = String(employee.wave ?? "").trim().replace(/^wave\s+/i, "");
+  const lob = String(employee.lob?.name ?? "").trim().toUpperCase();
+  return monthlyAdvanceBlockedWaves.some((blocked) => blocked.lob === lob && blocked.wave === wave);
+}
 const monthlyAdvanceTrainingStatusValues = [
   "Em treinamento",
   "EM_TREINAMENTO",
@@ -59,6 +72,7 @@ type AdvanceEmployee = {
   wbLogin: string;
   fullName: string;
   contractType?: string | null;
+  wave?: string | null;
   user?: { email: string } | null;
   lob?: { id: string; name: string } | null;
   supervisor?: { id: string; fullName: string; wbLogin: string; user?: { email: string } | null } | null;
@@ -286,13 +300,14 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
     };
   }
   const where: Prisma.MonthlyAdvanceRecordWhereInput = { referenceMonth, status: { not: "REMOVED" } };
-  const and: Prisma.MonthlyAdvanceRecordWhereInput[] = [{ employee: monthlyAdvanceEligibleEmployeeWhere() }];
+  const and: Prisma.MonthlyAdvanceRecordWhereInput[] = [{ employee: monthlyAdvanceEligibleEmployeeWhere(referenceMonth) }];
 
   if (role === "COLABORADOR") {
     const employee = await resolveEmployeeForUser(user);
     if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
     if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
     if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
+    if (isMonthlyAdvanceWaveBlocked(employee, referenceMonth)) return { error: MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE, status: 403 };
     where.employeeId = employee.id;
   }
 
@@ -401,16 +416,17 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
     data: months.map((referenceMonth, index) => {
       const record = recordByMonth.get(referenceMonth);
       const answered = Boolean(record);
-      const locked = isAdvanceMonthLockedForEmployee(referenceMonth, today, { answered });
-      const canRespond = isAdvanceMonthOpenForEmployee(referenceMonth, today, { answered });
-      const canRequestChange = !isImplementationLockedMonth(referenceMonth) && answered && isEmployeeMonthlyAdvanceCycleOpen(referenceMonth, today);
+      const waveBlocked = isMonthlyAdvanceWaveBlocked(employee, referenceMonth);
+      const locked = waveBlocked || isAdvanceMonthLockedForEmployee(referenceMonth, today, { answered });
+      const canRespond = !waveBlocked && isAdvanceMonthOpenForEmployee(referenceMonth, today, { answered });
+      const canRequestChange = !waveBlocked && !isImplementationLockedMonth(referenceMonth) && answered && isEmployeeMonthlyAdvanceCycleOpen(referenceMonth, today);
       return {
         referenceMonth,
         label: index === 0 ? "Mês atual" : "Próximo mês",
         monthLabel: formatReferenceMonth(referenceMonth),
         locked,
-        closedMessage: monthlyAdvanceClosedMessage(referenceMonth, today, answered),
-        deadlineMessage: monthlyAdvanceDeadlineMessage(referenceMonth, today, answered),
+        closedMessage: waveBlocked ? MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE : monthlyAdvanceClosedMessage(referenceMonth, today, answered),
+        deadlineMessage: waveBlocked ? "" : monthlyAdvanceDeadlineMessage(referenceMonth, today, answered),
         answered,
         canRespond,
         canRequestChange,
@@ -432,6 +448,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
   if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth) || !isMonthlyAdvanceRequestPeriodOpen()) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
+  if (isMonthlyAdvanceWaveBlocked(employee, referenceMonth)) return { error: MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE, status: 403 };
   const today = new Date();
   if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
@@ -515,6 +532,7 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
   if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 400 };
+  if (isMonthlyAdvanceWaveBlocked(employee, referenceMonth)) return { error: MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE, status: 400 };
   const amount = monthlyAdvanceAmountForOptIn(input.optIn);
 
   const previous = await prisma.monthlyAdvanceRecord.findUnique({
@@ -817,6 +835,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
   if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth) || !isMonthlyAdvanceRequestPeriodOpen()) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
+  if (isMonthlyAdvanceWaveBlocked(employee, referenceMonth)) return { error: MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE, status: 403 };
   if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
   }
@@ -933,13 +952,16 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
   if (requestedOptIn === null) throw new Error("Aderência solicitada inválida na solicitação de adiantamento.");
   const employee = await tx.employeeProfile.findUnique({
     where: { id: request.employeeId },
-    select: { contractType: true, operationalStatus: true }
+    select: { contractType: true, operationalStatus: true, wave: true, lob: { select: { name: true } } }
   });
   if (!isMonthlyAdvanceEligibleContract(employee?.contractType)) {
     return { updated: false, message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
   }
   if (isMonthlyAdvanceTrainingStatus(employee?.operationalStatus)) {
     return { updated: false, message: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE };
+  }
+  if (employee && isMonthlyAdvanceWaveBlocked(employee, referenceMonth)) {
+    return { updated: false, message: MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE };
   }
   const requestedAmount = monthlyAdvanceAmountForOptIn(requestedOptIn);
   const previous = await tx.monthlyAdvanceRecord.findUnique({
@@ -1013,6 +1035,7 @@ function parseImportRow(
   else if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) errors.push(MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE);
   if (!referenceMonth) errors.push("Mês de referência inválido.");
   else if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) errors.push(MONTHLY_ADVANCE_ENDED_MESSAGE);
+  if (employee && isMonthlyAdvanceWaveBlocked(employee, referenceMonth)) errors.push(MONTHLY_ADVANCE_WAVE_BLOCK_MESSAGE);
   if (optIn === null) errors.push("Aderente deve ser Sim ou Não.");
 
   return {
@@ -1089,21 +1112,22 @@ const monthlyAdvanceInclude = {
 async function findActiveUser(email: string) {
   return prisma.user.findFirst({
     where: { email, status: "ACTIVE" },
-    include: { role: true, employeeProfile: true }
+    include: { role: true, employeeProfile: { include: { lob: { select: { name: true } } } } }
   });
 }
 
 async function resolveEmployeeForUser(user: ActiveUser) {
   if (user.employeeProfile && !user.employeeProfile.deletedAt) return user.employeeProfile;
-  const byUserId = await prisma.employeeProfile.findFirst({ where: { userId: user.id, deletedAt: null } });
+  const byUserId = await prisma.employeeProfile.findFirst({ where: { userId: user.id, deletedAt: null }, include: { lob: { select: { name: true } } } });
   if (byUserId) return byUserId;
   const byEmail = await prisma.employeeProfile.findFirst({
-    where: { user: { email: { equals: user.email, mode: "insensitive" } }, deletedAt: null }
+    where: { user: { email: { equals: user.email, mode: "insensitive" } }, deletedAt: null },
+    include: { lob: { select: { name: true } } }
   });
   if (byEmail) return byEmail;
   const wbLoginCandidate = user.email.split("@")[0]?.trim();
   if (!wbLoginCandidate) return null;
-  return prisma.employeeProfile.findFirst({ where: { wbLogin: { equals: wbLoginCandidate, mode: "insensitive" }, deletedAt: null } });
+  return prisma.employeeProfile.findFirst({ where: { wbLogin: { equals: wbLoginCandidate, mode: "insensitive" }, deletedAt: null }, include: { lob: { select: { name: true } } } });
 }
 
 async function findEmployeeByWbLogin(wbLogin: string | undefined) {
@@ -1129,7 +1153,7 @@ function canDeleteMonthlyAdvance(role: string) {
   return roleHasCapability(role, "ADVANCE_MANAGE");
 }
 
-function monthlyAdvanceEligibleEmployeeWhere(): Prisma.EmployeeProfileWhereInput {
+function monthlyAdvanceEligibleEmployeeWhere(referenceMonth: string): Prisma.EmployeeProfileWhereInput {
   return {
     AND: [
       {
@@ -1147,7 +1171,20 @@ function monthlyAdvanceEligibleEmployeeWhere(): Prisma.EmployeeProfileWhereInput
             operationalStatus: { equals: status, mode: "insensitive" as const }
           }))
         }
-      }
+      },
+      ...(referenceMonth === MONTHLY_ADVANCE_WAVE_BLOCK_MONTH ? [{
+        OR: [
+          { wave: null },
+          {
+            NOT: {
+              OR: monthlyAdvanceBlockedWaves.map(({ lob, wave }) => ({
+                lob: { name: { equals: lob, mode: "insensitive" as const } },
+                OR: [wave, `Wave ${wave}`].map((value) => ({ wave: { equals: value, mode: "insensitive" as const } }))
+              }))
+            }
+          }
+        ]
+      }] : [])
     ]
   };
 }
