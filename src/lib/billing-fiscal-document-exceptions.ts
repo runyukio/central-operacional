@@ -23,6 +23,12 @@ const BILLING_FISCAL_DOCUMENT_CODE_EXCEPTIONS = [{
   referenceMonth: "2026-08",
   documentHash: "b46e7bc007247e335691d5ef6ed9afe1442aaed002c93ea00fe581a73b010503",
   taxationCode: "03158"
+}, {
+  id: "SAO_PAULO_NF10_GENE_2026_09",
+  wbLogin: "wb_gene",
+  referenceMonth: "2026-09",
+  documentHash: "132f1f2366e2493206b062f424771540b171962075966ae45ab483d132efa477",
+  taxationCode: "03158"
 }] as const;
 
 export function getBillingFiscalDocumentCodeException(context?: BillingFiscalDocumentContext) {
