@@ -110,8 +110,8 @@ test("exceção manual pontual de agosto/2026 libera somente os dois WBs autoriz
   }
 });
 
-test("libera fechamento manual de Ana Paula e mcelia somente em setembro/2026", () => {
-  for (const wbLogin of ["wb_anapaula", " WB_ANAPAULA ", "mcelia", " MCELIA "]) {
+test("libera os fechamentos manuais autorizados somente em setembro/2026", () => {
+  for (const wbLogin of ["wb_anapaula", " WB_ANAPAULA ", "mcelia", " MCELIA ", "wb_cauar", " WB_CAUAR ", "wb_gabrielh", " WB_GABRIELH "]) {
     const input = { referenceMonth: "2026-09", wbLogin, employeeStatus: "Ativo", finalAmount: 1224.43 };
     assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason(input), "WB_MONTH_EXCEPTION");
     for (const referenceMonth of ["2026-08", "2026-10", "2027-09", "09", "2026-9", ""]) {
@@ -119,7 +119,7 @@ test("libera fechamento manual de Ana Paula e mcelia somente em setembro/2026", 
     }
     assert.equal(isBillingFiscalAmountMismatchExempt(wbLogin, "2026-09"), false);
   }
-  for (const wbLogin of ["wb_outro", "wb_anapaula2", "anapaula", "mcelia2", "wb_mcelia", null, undefined, ""]) {
+  for (const wbLogin of ["wb_outro", "wb_anapaula2", "anapaula", "mcelia2", "wb_mcelia", "wb_cauar2", "wb_gabrielh2", null, undefined, ""]) {
     assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
       referenceMonth: "2026-09", wbLogin, employeeStatus: "Ativo", finalAmount: 1224.43
     }), null);

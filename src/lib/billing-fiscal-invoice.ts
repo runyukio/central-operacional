@@ -20,7 +20,7 @@ const BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS = new Set([
 // Não libera o fluxo automático nem os demais ciclos destes parceiros.
 const BILLING_MANUAL_CLOSURE_MONTH_EXCEPTIONS = new Map<string, ReadonlySet<string>>([
   ["2026-08", new Set(["wb_diorgenes", "wb_stephaniet"])],
-  ["2026-09", new Set(["wb_anapaula", "mcelia"])]
+  ["2026-09", new Set(["wb_anapaula", "mcelia", "wb_cauar", "wb_gabrielh"])]
 ]);
 
 export type BillingManualClosureWithoutFiscalInvoiceReason =
