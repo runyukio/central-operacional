@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { DEFAULT_BILLING_REFERENCE_MONTH } from "./billing-reference-month";
 import { DEFAULT_BILLING_REFERENCE_MONTH as serverDefault } from "./billing-service";
 
-test("Billing and profile use the September operational cycle without overriding explicit periods", () => {
-  assert.equal(DEFAULT_BILLING_REFERENCE_MONTH, "2026-09");
+test("Billing and profile use the October operational cycle without overriding explicit periods", () => {
+  assert.equal(DEFAULT_BILLING_REFERENCE_MONTH, "2026-10");
   assert.equal(serverDefault, DEFAULT_BILLING_REFERENCE_MONTH);
   for (const component of ["billing-page", "my-invoice-page"]) {
     const source = readFileSync(new URL(`../components/${component}.tsx`, import.meta.url), "utf8");
