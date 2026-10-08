@@ -30,11 +30,12 @@ export async function saveCaptureOvertimeReview(tx: Tx, input: {
   source: OvertimeSource; previous: Review | null; outcome: ReturnType<typeof captureOvertimeOutcome>;
 }) {
   const { previous, outcome } = input;
-  if (previous && previous.supervisorId === input.supervisorId && (outcome.sameSource
+  if (previous && previous.supervisorId === input.supervisorId && previous.status === outcome.status
+    && previous.excessHours === outcome.excessHours && (outcome.sameSource
     || (outcome.status === "CANCELLED" && previous.status === "CANCELLED" && previous.sourceFingerprint === outcome.sourceFingerprint))) return previous;
   if (!previous && outcome.status === "CANCELLED") return null;
   // Changing only the assigned supervisor preserves the reviewed source and decision.
-  const preserveDecision = outcome.sameSource && previous;
+  const preserveDecision = outcome.sameSource && previous?.status === outcome.status && previous;
   const data = { employeeId: input.employeeId, supervisorId: input.supervisorId, date: input.date,
     version: (previous?.version ?? 0) + 1, sourceFingerprint: outcome.sourceFingerprint, sourceSnapshot: input.source,
     sourceDurationMs: input.source.sourceDurationMs, calculatedHours: outcome.calculatedHours,
@@ -74,6 +75,9 @@ export async function reviewWorkHourOvertime(actor: Actor, input: { id: string; 
       if (!canReviewOvertime(role, user.employeeProfile?.deletedAt ? null : user.employeeProfile?.id, previous.supervisorId)) throw new MeuEspacoError("Esta revisão não está atribuída a você.", 403);
       const record = previous.record;
       const source = previous.sourceSnapshot as unknown as OvertimeSource;
+      if (captureOvertimeOutcome(source, previous).status !== "PENDING") {
+        throw new MeuEspacoError("Esta captura não excede a tolerância de 8h10. Reimporte a captura e atualize a lista.", 409);
+      }
       const freshSchedule = record.schedule;
       if (record.source !== "captura-horas" || record.scheduleId !== source.scheduleId || !freshSchedule || freshSchedule.deletedAt
         || freshSchedule.startsAt !== source.plannedStart || freshSchedule.endsAt !== source.plannedEnd

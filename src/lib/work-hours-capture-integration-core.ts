@@ -2,6 +2,7 @@ export const CAPTURE_AUTO_PRESENCE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 export const LOW_ADHERENCE_THRESHOLD_MS = (7 * 60 + 30) * 60 * 1000;
 export const STANDARD_CAPTURE_BONUS_MS = 30 * 60 * 1000;
 export const STANDARD_OPERATIONAL_DAY_MS = 8 * 60 * 60 * 1000;
+export const CAPTURE_OVERTIME_THRESHOLD_MS = STANDARD_OPERATIONAL_DAY_MS + 10 * 60 * 1000;
 
 export type OperationalHourRule = "RA_ONBOARDING" | "BILINGUAL" | "CEC_COMMENTS" | "STANDARD";
 export type CaptureImportDecision = "AUTOMATIC" | "DIVERGENCE" | "IGNORE";
@@ -98,7 +99,7 @@ export function calculateOperationalHours(
   else if (resolved.rule === "CEC_COMMENTS") operationalMs = Math.max(capturedMs, STANDARD_OPERATIONAL_DAY_MS);
   else operationalMs = capturedMs + STANDARD_CAPTURE_BONUS_MS;
 
-  const overtimeMs = Math.max(0, operationalMs - STANDARD_OPERATIONAL_DAY_MS);
+  const overtimeMs = operationalMs > CAPTURE_OVERTIME_THRESHOLD_MS ? operationalMs - STANDARD_OPERATIONAL_DAY_MS : 0;
   return {
     rule: resolved.rule,
     ruleLabel: operationalHourRuleLabel(resolved.rule),
