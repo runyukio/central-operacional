@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { CAPTURE_OVERTIME_THRESHOLD_MS } from "@/lib/work-hours-capture-integration-core";
 
 export const CAPTURE_HOURS_LIMIT = 8;
 export const CAPTURE_HOURS_LIMIT_MS = CAPTURE_HOURS_LIMIT * 3_600_000;
@@ -18,11 +19,13 @@ export function overtimeSourceFingerprint(source: OvertimeSource) {
 export function captureOvertimeOutcome(source: OvertimeSource, previous?: { sourceFingerprint: string; status: string } | null) {
   const sourceFingerprint = overtimeSourceFingerprint(source);
   const calculatedHours = source.operationalMs / 3_600_000;
-  const excessHours = Math.max(0, calculatedHours - CAPTURE_HOURS_LIMIT);
   const sameSource = previous?.sourceFingerprint === sourceFingerprint && previous.status !== "CANCELLED";
-  const status: OvertimeStatus = excessHours > 0
-    ? sameSource && (previous?.status === "APPROVED" || previous?.status === "REJECTED") ? previous.status : "PENDING"
-    : "CANCELLED";
+  // Keep completed decisions for the identical capture when the tolerance changes.
+  const reviewed = sameSource && (previous?.status === "APPROVED" || previous?.status === "REJECTED");
+  // Ten minutes are tolerated; the standard payable day remains eight hours.
+  const excessHours = source.operationalMs > CAPTURE_OVERTIME_THRESHOLD_MS || reviewed
+    ? Math.max(0, calculatedHours - CAPTURE_HOURS_LIMIT) : 0;
+  const status: OvertimeStatus = reviewed ? previous.status as "APPROVED" | "REJECTED" : excessHours > 0 ? "PENDING" : "CANCELLED";
   return { sourceFingerprint, calculatedHours, excessHours, status, sameSource,
     effectiveHours: status === "APPROVED" ? calculatedHours : Math.min(calculatedHours, CAPTURE_HOURS_LIMIT),
     validationHours: status === "PENDING" ? excessHours : 0 };

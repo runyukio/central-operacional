@@ -14,6 +14,8 @@ import { resolveCapturePeriod } from "./work-hours-capture-period";
 import { capturePeriodShape, validateCapturePeriod } from "./work-hours-capture-period-schema";
 import { CaptureBatchError, captureImportNeedsReview, processCaptureImportDays } from "./work-hours-capture-batch";
 import { reviewWorkHourOvertime } from "./work-hours-overtime-service";
+import { captureOvertimeOutcome } from "./work-hours-overtime";
+import { calculateOperationalHours } from "./work-hours-capture-integration-core";
 
 const day = "2026-09-03";
 const date = new Date(`${day}T00:00:00.000Z`);
@@ -141,7 +143,7 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
 }
 const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "findUniqueOrThrow", "timeline"].includes(call.op));
 
-for (const [captured, calculated, pending] of [[7, 7.5, false], [7.5, 8, false], [8, 8.5, true]] as const) {
+for (const [captured, calculated, pending] of [[7, 7.5, false], [7.5, 8, false], [(7 * 60 + 40) / 60, (8 * 60 + 10) / 60, false], [8, 8.5, true]] as const) {
   test(`importação de ${captured}h capturadas contabiliza ${Math.min(calculated, 8)}h e ${pending ? "valida" : "dispensa revisão do"} excedente`, async (t) => {
     const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", captured);
     const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
@@ -153,6 +155,36 @@ for (const [captured, calculated, pending] of [[7, 7.5, false], [7.5, 8, false],
     assert.equal(f.state.workHourAdherenceJustification.length, 0);
   });
 }
+
+test("reimportar captura dentro de 8h10 cancela a pendência antiga uma única vez e mantém 8h contabilizadas", async (t) => {
+  const capturedMs = (7 * 60 + 35) * 60_000;
+  const calculation = calculateOperationalHours(capturedMs, { lob: "ADS" });
+  const source = { reconciliationKey: `agent:${day}:slot-agent`, scheduleId: "slot-agent", plannedStart: "23:00", plannedEnd: "08:00",
+    sourceDurationMs: capturedMs, operationalMs: calculation.operationalMs, rule: calculation.rule,
+    ruleLabel: calculation.ruleLabel, classification: calculation.classificationLabel };
+  const outcome = captureOvertimeOutcome(source);
+  const oldReview = { id: "old-review", employeeId: "agent", workHourRecordId: "old-record", date, supervisorId: null,
+    version: 1, status: "PENDING", sourceFingerprint: outcome.sourceFingerprint, sourceSnapshot: source,
+    sourceDurationMs: capturedMs, calculatedHours: outcome.calculatedHours, excessHours: outcome.calculatedHours - 8,
+    answeredById: null, answeredAt: null, rejectionReason: null };
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot("agent", "PRESENTE")],
+    workHourRecord: [{ id: "old-record", employeeId: "agent", date, scheduleId: "slot-agent", source: "captura-horas",
+      captureReconciliationKey: source.reconciliationKey, actualHours: outcome.calculatedHours, effectiveHours: 8,
+      adjustedHours: null, status: "OK" }], workHourOvertimeReview: [oldReview] });
+  f.capture("agent", capturedMs / hour);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: oldReview.id, version: 1, action: "approve" }),
+    (error: any) => error.status === 409 && /8h10/.test(error.message));
+  const imported: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(imported.data.overtimeReviewsPending, 0);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+  assert.equal(f.state.workHourOvertimeReview[0].status, "CANCELLED");
+  assert.equal(f.state.workHourOvertimeReview[0].excessHours, 0);
+  assert.equal(f.state.workHourOvertimeReview[0].version, 2);
+  assert.equal(f.state.auditLog.filter((row) => row.entity === "WorkHourOvertimeReview").length, 1);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(f.state.workHourOvertimeReview[0].version, 2);
+  assert.equal(f.state.auditLog.filter((row) => row.entity === "WorkHourOvertimeReview").length, 1);
+});
 
 test("Captura contabiliza 8h, preserva 9h calculadas e cria uma revisão na data do turno noturno", async (t) => {
   const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
