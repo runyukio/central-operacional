@@ -50,6 +50,8 @@ export type RequestRecord = {
   nextOwner?: string;
   canSupervisorStep?: boolean;
   canWfmFinal?: boolean;
+  canPartnerAccept?: boolean;
+  canCancelPairedSwap?: boolean;
   createdAt?: string;
   updatedAt?: string;
   payload: Record<string, unknown>;

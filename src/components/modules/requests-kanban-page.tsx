@@ -1,5 +1,7 @@
 "use client";
 
+import { PairedSwapFields } from "./paired-swap-fields";
+
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, ClipboardList, KanbanSquare, Plus, RefreshCw, Search, UsersRound, XCircle } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
@@ -26,7 +28,7 @@ const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Conclu
 
 
 function isDayOffRequest(type: string) {
-  return /troca de folga|venda de folga|solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(type);
+  return /troca casada|troca de folga|venda de folga|solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(type);
 }
 
 
@@ -76,6 +78,7 @@ function createDefaultRequestDraft() {
     priority: "Média",
     requestedDate: "",
     dayOffKind: "DAY_OFF_SWAP" as DayOffKind,
+    partnerEmployeeId: "",
     currentDayOffDate: offsetOperationalDateInput(1),
     desiredDayOffDate: offsetOperationalDateInput(4),
     dayOffToSellDate: offsetOperationalDateInput(1),
@@ -100,7 +103,8 @@ function validateRequestDraft(draft: RequestDraft) {
   const dayOffKind = isDayOffRequest(draft.type) ? draft.dayOffKind : null;
   if (!dayOffKind) return "";
   if (!draft.justification.trim()) return "Informe a justificativa da solicitação de folga.";
-  if (dayOffKind === "DAY_OFF_SWAP") {
+  if (dayOffKind === "PAIRED_DAY_OFF_SWAP" && (!draft.partnerEmployeeId || !draft.acknowledgement)) return "Selecione o parceiro e confirme seu aceite da troca casada.";
+  if (dayOffKind === "DAY_OFF_SWAP" || dayOffKind === "PAIRED_DAY_OFF_SWAP") {
     if (!draft.currentDayOffDate || !draft.desiredDayOffDate) return "Para troca de folga, informe data atual e nova data desejada.";
     if (draft.currentDayOffDate === draft.desiredDayOffDate) return "A nova data não pode ser igual à data atual da folga.";
   }
@@ -125,13 +129,14 @@ async function createRequestFromDraft(draft: RequestDraft) {
       description: draft.description || draft.justification || "Solicitação criada pelo portal operacional.",
       requestedDate: draft.requestedDate || undefined,
       dayOffKind: dayOffKind ?? undefined,
-      currentDayOffDate: dayOffKind === "DAY_OFF_SWAP" ? draft.currentDayOffDate : undefined,
-      desiredDayOffDate: dayOffKind === "DAY_OFF_SWAP" ? draft.desiredDayOffDate : undefined,
+      partnerEmployeeId: dayOffKind === "PAIRED_DAY_OFF_SWAP" ? draft.partnerEmployeeId : undefined,
+      currentDayOffDate: ["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffKind ?? "") ? draft.currentDayOffDate : undefined,
+      desiredDayOffDate: ["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffKind ?? "") ? draft.desiredDayOffDate : undefined,
       dayOffToSellDate: dayOffKind === "DAY_OFF_SELL" ? draft.dayOffToSellDate : undefined,
       availabilityShift: dayOffKind === "DAY_OFF_SELL" ? draft.availabilityShift : undefined,
       preferredStartTime: dayOffKind === "DAY_OFF_SELL" ? draft.preferredStartTime : undefined,
       preferredEndTime: dayOffKind === "DAY_OFF_SELL" ? draft.preferredEndTime : undefined,
-      acknowledgement: dayOffKind === "DAY_OFF_SELL" ? draft.acknowledgement : undefined,
+      acknowledgement: ["DAY_OFF_SELL", "PAIRED_DAY_OFF_SWAP"].includes(dayOffKind ?? "") ? draft.acknowledgement : undefined,
       desiredDayOffRequestDate: dayOffKind === "DAY_OFF_REQUEST" ? draft.desiredDayOffRequestDate : undefined,
       dayOffReason: dayOffKind === "DAY_OFF_REQUEST" ? draft.dayOffReason : undefined,
       urgency: dayOffKind === "DAY_OFF_REQUEST" ? draft.urgency : undefined,
@@ -168,7 +173,7 @@ function RequestCreateModal({
               onChange={(event) => {
                 const type = event.target.value;
                 const dayOffKind = dayOffKindFromRequest({ type });
-                setDraft((current) => ({ ...current, type, title: type, dayOffKind: dayOffKind ?? current.dayOffKind }));
+                setDraft((current) => ({ ...current, type, title: type, acknowledgement: false, dayOffKind: dayOffKind ?? current.dayOffKind }));
               }}
               className="h-11 w-full rounded-lg border border-border px-3 outline-none"
             >
@@ -191,6 +196,7 @@ function RequestCreateModal({
           </label>
           {isDayOffRequest(draft.type) ? (
             <div className="grid gap-3 md:grid-cols-2">
+              {draft.dayOffKind === "PAIRED_DAY_OFF_SWAP" ? <PairedSwapFields value={draft} onChange={patch => setDraft(current => ({ ...current, ...patch }))} /> : null}
               {draft.dayOffKind === "DAY_OFF_SWAP" ? (
                 <>
                   <label className="block">

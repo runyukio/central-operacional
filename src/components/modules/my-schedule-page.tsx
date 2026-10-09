@@ -1,5 +1,7 @@
 "use client";
 
+import { PairedSwapFields } from "./paired-swap-fields";
+
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { useEffect, useState } from "react";
 import { CalendarDays } from "lucide-react";
@@ -10,6 +12,7 @@ import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours } from "@/l
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceRequestPeriodOpen } from "@/lib/monthly-advance-constants";
 import { AdditionalRegistrationDataResponse, ClientRequest, CoverageWarningDialog, CoverageWarningDialogState, DayOffKind, FormInput, FormSelect, InfoLine, MonthlyAdvanceRecordClient, RequestDetailContent, SystemSettings, WorkHourRow, WorkHourSummary, apiJson, coverageImpactFromError, currencyFormatter, currentOperationalDateInput, currentOperationalMonth, dateInputFromParts, dayOffKindFromRequest, dayOffKindLabels, formatHourDifference, formatWorkHourSummaryDifference, formatWorkHourValue, getRequestIcon, monthRange, moodOptionForScore, normalizeMoodScoreForUi, offsetOperationalDateInput, operationalDateFromParts, operationalMoodOptions, requestPriorities, requestStatuses, requestTypes, scheduleMonthFormatter, shiftTagClass, statusFromScheduleCell } from './shared';
 const dayOffOptions: Array<{ kind: DayOffKind; title: string; description: string }> = [
+  { kind: "PAIRED_DAY_OFF_SWAP", title: "Troca casada", description: "Trocar folgas com outro parceiro da mesma LOB e turno." },
   { kind: "DAY_OFF_SWAP", title: "Trocar folga", description: "Mover uma folga para outra data já programada." },
   { kind: "DAY_OFF_SELL", title: "Vender folga", description: "Trabalhar em uma Folga, Folga aprovada ou Troca aprovada." },
   { kind: "DAY_OFF_REQUEST", title: "Solicitar dia de folga", description: "Pedir folga em uma data em que você está programado." }
@@ -81,6 +84,7 @@ export function MySchedulePage() {
   const [requestFilters, setRequestFilters] = useState({ status: "Todos", type: "Todos", priority: "Todos", query: "" });
   const [dayOffForm, setDayOffForm] = useState({
     kind: "DAY_OFF_SWAP" as DayOffKind,
+    partnerEmployeeId: "",
     currentDayOffDate: offsetOperationalDateInput(1),
     desiredDayOffDate: offsetOperationalDateInput(4),
     dayOffToSellDate: offsetOperationalDateInput(1),
@@ -111,6 +115,8 @@ export function MySchedulePage() {
 
   useEffect(() => {
     void loadMyRequests();
+    const requestId = new URLSearchParams(window.location.search).get("request");
+    if (requestId) void apiJson<{ data: ClientRequest }>(`/api/requests?id=${encodeURIComponent(requestId)}`).then(result => setSelectedRequest(result.data)).catch(() => setDayOffMessage("Não foi possível abrir a solicitação."));
     void loadMyMonthlyAdvance();
     void loadMyScheduleSettings();
     void loadMyMood();
@@ -289,7 +295,8 @@ export function MySchedulePage() {
 
   function validateDayOffForm() {
     if (!dayOffForm.justification.trim()) return "Justificativa é obrigatória.";
-    if (dayOffForm.kind === "DAY_OFF_SWAP") {
+    if (dayOffForm.kind === "PAIRED_DAY_OFF_SWAP" && (!dayOffForm.partnerEmployeeId || !dayOffForm.acknowledgement)) return "Selecione o parceiro e confirme seu aceite da troca casada.";
+    if (["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffForm.kind)) {
       if (!dayOffForm.currentDayOffDate || !dayOffForm.desiredDayOffDate) return "Informe a data atual e a nova data desejada.";
       if (dayOffForm.currentDayOffDate === dayOffForm.desiredDayOffDate) return "A nova data não pode ser igual à data atual da folga.";
     }
@@ -323,13 +330,14 @@ export function MySchedulePage() {
           priority: dayOffForm.kind === "DAY_OFF_REQUEST" ? dayOffForm.urgency : "Média",
           description: dayOffForm.justification,
           dayOffKind: dayOffForm.kind,
-          currentDayOffDate: dayOffForm.kind === "DAY_OFF_SWAP" ? dayOffForm.currentDayOffDate : undefined,
-          desiredDayOffDate: dayOffForm.kind === "DAY_OFF_SWAP" ? dayOffForm.desiredDayOffDate : undefined,
+          partnerEmployeeId: dayOffForm.kind === "PAIRED_DAY_OFF_SWAP" ? dayOffForm.partnerEmployeeId : undefined,
+          currentDayOffDate: ["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffForm.kind) ? dayOffForm.currentDayOffDate : undefined,
+          desiredDayOffDate: ["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffForm.kind) ? dayOffForm.desiredDayOffDate : undefined,
           dayOffToSellDate: dayOffForm.kind === "DAY_OFF_SELL" ? dayOffForm.dayOffToSellDate : undefined,
           availabilityShift: dayOffForm.kind === "DAY_OFF_SELL" ? dayOffForm.availabilityShift : undefined,
           preferredStartTime: dayOffForm.kind === "DAY_OFF_SELL" ? dayOffForm.preferredStartTime : undefined,
           preferredEndTime: dayOffForm.kind === "DAY_OFF_SELL" ? dayOffForm.preferredEndTime : undefined,
-          acknowledgement: dayOffForm.kind === "DAY_OFF_SELL" ? dayOffForm.acknowledgement : undefined,
+          acknowledgement: ["DAY_OFF_SELL", "PAIRED_DAY_OFF_SWAP"].includes(dayOffForm.kind) ? dayOffForm.acknowledgement : undefined,
           desiredDayOffRequestDate: dayOffForm.kind === "DAY_OFF_REQUEST" ? dayOffForm.desiredDayOffRequestDate : undefined,
           dayOffReason: dayOffForm.kind === "DAY_OFF_REQUEST" ? dayOffForm.dayOffReason : undefined,
           urgency: dayOffForm.kind === "DAY_OFF_REQUEST" ? dayOffForm.urgency : undefined,
@@ -356,7 +364,7 @@ export function MySchedulePage() {
 
   function selectDayOffKind(kind: DayOffKind) {
     setDayOffMessage("");
-    setDayOffForm((current) => ({ ...current, kind }));
+    setDayOffForm((current) => ({ ...current, kind, acknowledgement: false }));
   }
 
   function shiftForScheduleDate(dateIso: string) {
@@ -545,7 +553,9 @@ export function MySchedulePage() {
   ]));
   const currentMoodOption = moodOptionForScore(moodForm.moodScore);
   const CurrentMoodIcon = currentMoodOption.icon;
-  const dayOffSubmitLabel = dayOffForm.kind === "DAY_OFF_SWAP"
+  const dayOffSubmitLabel = dayOffForm.kind === "PAIRED_DAY_OFF_SWAP"
+    ? "Aceitar e solicitar troca casada"
+    : dayOffForm.kind === "DAY_OFF_SWAP"
     ? "Enviar troca de folga"
     : dayOffForm.kind === "DAY_OFF_SELL"
       ? "Enviar venda de folga"
@@ -876,7 +886,7 @@ export function MySchedulePage() {
             {dayOffMessage ? (
               <div role="alert" className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{dayOffMessage}</div>
             ) : null}
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-2">
               {dayOffOptions.map((option) => (
                 <button type="button" key={option.kind} onClick={() => selectDayOffKind(option.kind)} className={cn("rounded-lg border p-4 text-left transition", dayOffForm.kind === option.kind ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
                   <p className="font-extrabold">{option.title}</p>
@@ -885,6 +895,7 @@ export function MySchedulePage() {
               ))}
             </div>
             <div className="mt-5 grid gap-4 md:grid-cols-2">
+              {dayOffForm.kind === "PAIRED_DAY_OFF_SWAP" ? <PairedSwapFields value={dayOffForm} onChange={patch => setDayOffForm(current => ({ ...current, ...patch }))} /> : null}
               {dayOffForm.kind === "DAY_OFF_SWAP" ? (
                 <>
                   <FormInput label="Data atual da folga" type="date" value={dayOffForm.currentDayOffDate} onChange={(value) => setDayOffForm({ ...dayOffForm, currentDayOffDate: value })} />

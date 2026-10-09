@@ -12,6 +12,7 @@
     "test:billing-fiscal": "tsx --test src/lib/billing-fiscal-invoice.test.ts src/lib/billing-fiscal-invoice-extraction.test.ts src/components/billing-fiscal-invoice-upload.test.ts",
     "test:omie": "tsx --test src/lib/omie-service.test.ts src/lib/billing-omie-allocation.test.ts",
     "test:cec": "tsx --test src/lib/realtime-cec-cpd.test.ts",
+    "test:paired-swap": "tsx --test src/lib/paired-day-off-service.test.ts src/lib/request-creation.test.ts src/lib/request-code.test.ts",
     "test:performance-export": "tsx --test src/lib/performance-agents-export.test.ts",
     "test:work-hours-capture": "tsx --test src/lib/work-hours-capture-integration-core.test.ts src/lib/work-hours-capture-review.test.ts src/lib/work-hours-capture-integration-service.test.ts",
     "db:up": "docker compose up -d",

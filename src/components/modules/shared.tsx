@@ -16,11 +16,12 @@ export const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "I
 
 export const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = approvedShiftBaseTimes;
 
-export const dayOffKinds = ["DAY_OFF_SWAP", "DAY_OFF_SELL", "DAY_OFF_REQUEST"] as const;
+export const dayOffKinds = ["DAY_OFF_SWAP", "DAY_OFF_SELL", "DAY_OFF_REQUEST", "PAIRED_DAY_OFF_SWAP"] as const;
 
 export type DayOffKind = (typeof dayOffKinds)[number];
 
 export const dayOffKindLabels: Record<DayOffKind, string> = {
+  PAIRED_DAY_OFF_SWAP: "Troca Casada",
   DAY_OFF_SWAP: "Troca de Folga",
   DAY_OFF_SELL: "Venda de Folga",
   DAY_OFF_REQUEST: "Solicitação de Dia de Folga"
@@ -44,6 +45,8 @@ export type ClientRequest = {
   nextOwner?: string;
   canSupervisorStep?: boolean;
   canWfmFinal?: boolean;
+  canPartnerAccept?: boolean;
+  canCancelPairedSwap?: boolean;
   time: string;
   description?: string;
   payload?: Record<string, unknown>;
@@ -761,6 +764,7 @@ export function statusFromScheduleCell(value: string) {
 export function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> | { type: string; payload?: Record<string, unknown> }): DayOffKind | null {
   const raw = String(request.payload?.dayOffKind ?? request.payload?.internalType ?? "");
   if ((dayOffKinds as readonly string[]).includes(raw)) return raw as DayOffKind;
+  if (request.type === "Troca Casada") return "PAIRED_DAY_OFF_SWAP";
   if (/venda de folga/i.test(request.type)) return "DAY_OFF_SELL";
   if (/solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(request.type)) return "DAY_OFF_REQUEST";
   if (/troca de folga/i.test(request.type)) return "DAY_OFF_SWAP";
@@ -1058,7 +1062,7 @@ export function shiftTagClass(value: string) {
 }
 
 
-export const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Troca de Turno", "Alteração de Adiantamento", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
+export const requestTypes = ["Troca Casada", "Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Troca de Turno", "Alteração de Adiantamento", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
 
 export const requestPriorities = ["Baixa", "Média", "Alta", "Crítica"];
 
@@ -1121,9 +1125,10 @@ export function RequestDetailContent({
   const isApproved = selected.status === "Aprovado";
   const canSupervisorStep = selected.status === "Aberto" && Boolean(selected.canSupervisorStep);
   const canWfmFinal = selected.status === "Em análise" && Boolean(selected.canWfmFinal);
-  const canReject = canSupervisorStep || canWfmFinal;
+  const canPartnerAccept = Boolean(selected.canPartnerAccept) && selected.status === "Aberto";
+  const canReject = canSupervisorStep || canWfmFinal || canPartnerAccept;
   const canConclude = selected.status === "Aprovado" && Boolean(selected.canWfmFinal);
-  const canCancel = !isProcessed && !isApproved && actorRole === "COLABORADOR" && selected.status === "Aberto";
+  const canCancel = dayOffKind === "PAIRED_DAY_OFF_SWAP" ? Boolean(selected.canCancelPairedSwap) : !isProcessed && !isApproved && actorRole === "COLABORADOR" && selected.status === "Aberto";
   const buttonsDisabled = Boolean(actionPending) || isProcessed;
   const actionInput = dayOffKind === "DAY_OFF_SELL" && canWfmFinal ? approvalData : undefined;
   const stageText: Record<string, string> = {
@@ -1146,9 +1151,9 @@ export function RequestDetailContent({
       <div className="grid grid-cols-2 gap-3">
         <MetricPill value={selected.priority} label="Prioridade" />
         <MetricPill value={selected.status} label="Status" />
-        <MetricPill value={stageText[selected.status] ?? selected.status} label="Etapa atual" />
+        <MetricPill value={dayOffKind === "PAIRED_DAY_OFF_SWAP" ? selected.nextStep ?? selected.status : stageText[selected.status] ?? selected.status} label="Etapa atual" />
         {dayOffKind ? <MetricPill value={dayOffKindLabels[dayOffKind]} label="Modalidade" /> : null}
-        {payload.scheduleApplicationStatus ? <MetricPill value={String(payload.scheduleApplicationStatus)} label="Aplicação no cronograma" /> : null}
+        {payload.scheduleApplicationStatus ? <MetricPill value={dayOffKind === "PAIRED_DAY_OFF_SWAP" ? ({ PENDING: "Aguardando aprovações", APPLIED: "Cronogramas atualizados", NOT_APPLIED: "Não aplicada" }[String(payload.scheduleApplicationStatus)] ?? "Acompanhar") : String(payload.scheduleApplicationStatus)} label="Aplicação no cronograma" /> : null}
       </div>
 
       <div className="grid gap-2 rounded-lg border border-border bg-white p-4 text-sm md:grid-cols-2">
@@ -1159,6 +1164,15 @@ export function RequestDetailContent({
         <InfoLine label="Responsável pela próxima etapa" value={selected.nextOwner ?? "-"} />
       </div>
 
+      {dayOffKind === "PAIRED_DAY_OFF_SWAP" ? (
+        <div className="space-y-2 rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+          <p><strong>Parceiro:</strong> {String(payload.partnerName ?? "-")}</p>
+          <p><strong>Folga do solicitante:</strong> {String(payload.currentDayOffDate ?? "-")} → trabalhará no horário do parceiro.</p>
+          <p><strong>Folga do parceiro:</strong> {String(payload.desiredDayOffDate ?? "-")} → o solicitante folgará e o parceiro trabalhará no horário dele.</p>
+          <p>Aceite do solicitante: {payload.requesterAcceptedAt ? "Confirmado" : "Pendente"} • Aceite do parceiro: {payload.partnerAcceptedAt ? "Confirmado" : "Pendente"}</p>
+          <p>Supervisor: {payload.supervisorApprovedAt ? "Aprovado" : "Pendente"} • WFM: {payload.wfmApprovedAt ? "Aprovado" : "Pendente"}</p>
+        </div>
+      ) : null}
       <div className="rounded-lg border border-border bg-slate-50 p-4 text-sm text-muted">
         <p className="mb-2 font-bold text-navy-950">Descrição</p>
         <p>{selected.description}</p>
@@ -1255,6 +1269,7 @@ export function RequestDetailContent({
       </div>
 
       <div className="grid grid-cols-2 gap-3">
+        {canPartnerAccept ? <button disabled={buttonsDisabled} onClick={() => onMove(selected.id, "Aprovado")} className="rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">{actionPending.endsWith(":Aprovado") ? "Aceitando..." : "Aceitar troca casada"}</button> : null}
         {canSupervisorStep || canWfmFinal ? <button disabled={buttonsDisabled} onClick={() => onMove(selected.id, "Aprovado", actionInput)} className="rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">{actionPending.endsWith(":Aprovado") ? "Aprovando..." : canWfmFinal ? "Aprovar final" : "Aprovar etapa"}</button> : null}
         {canReject ? <button disabled={buttonsDisabled} onClick={() => onMove(selected.id, "Recusado")} className="rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">{actionPending.endsWith(":Recusado") ? "Recusando..." : "Recusar"}</button> : null}
         {canConclude ? <button disabled={Boolean(actionPending)} onClick={() => onMove(selected.id, "Concluído")} className="rounded-lg border border-border bg-white px-4 py-3 text-sm font-bold disabled:opacity-60">{actionPending.endsWith(":Concluído") ? "Concluindo..." : "Concluir"}</button> : null}

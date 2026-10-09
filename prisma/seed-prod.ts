@@ -72,6 +72,7 @@ async function main() {
 
   for (const [name, area] of [
     ["Troca de Folga", "WFM"],
+    ["Troca Casada", "WFM"],
     ["Venda de Folga", "WFM"],
     ["Solicitação de Dia de Folga", "WFM"],
     ["Troca de Turno", "WFM"],

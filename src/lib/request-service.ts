@@ -18,6 +18,7 @@ import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { baseTimesForShift } from "@/lib/shift-base-times";
 import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
+import { createPairedSwap, updatePairedSwap, isPairedSwap, PairedSwapError, PAIRED_SWAP_KIND } from "@/lib/paired-day-off-service";
 import { isShiftChangeEffective } from "@/lib/shift-change-effective-service";
 
 const uiToDbStatus = {
@@ -162,7 +163,8 @@ export type CreateRequestInput = {
   title: string;
   description: string;
   priority: UiPriority;
-  dayOffKind?: DayOffKind;
+  dayOffKind?: DayOffKind | typeof PAIRED_SWAP_KIND;
+  partnerEmployeeId?: string;
   requestedDate?: string;
   currentDayOffDate?: string;
   desiredDayOffDate?: string;
@@ -283,6 +285,11 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
 
   try {
     const user = await findActiveUser(actor.email);
+    if (isPairedSwap(input.type) || input.dayOffKind === PAIRED_SWAP_KIND) {
+      if (!user || user.status !== "ACTIVE") return validationFailure("Usuário ativo não encontrado.");
+      const request = await createPairedSwap(user.id, input);
+      return { data: mapPrismaRequest(request, user, actor), persisted: true };
+    }
     if (!user && allowDemoDataFallback) {
       return {
         data: createMockRequest(actor, {
@@ -386,6 +393,7 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
 
     return { data: await mapPrismaRequestWithImpact(request, user, actor), persisted: true };
   } catch (error) {
+    if (error instanceof PairedSwapError) return validationFailure(error.message);
     const mapped = mapRequestCreateError(error);
     recordErrorLog({
       userEmail: actor.email,
@@ -395,7 +403,7 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
       action: "REQUEST_CREATE",
       severity: "ERROR"
     });
-    if (!allowDemoDataFallback) return mapped;
+    if (!allowDemoDataFallback || isPairedSwap(input.type) || input.dayOffKind === PAIRED_SWAP_KIND) return mapped;
     return {
       data: createMockRequest(actor, {
         type: input.type,
@@ -438,6 +446,12 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     });
 
     if (!existing) return null;
+    if (isPairedSwap(existing.type.name, existing.payload)) {
+      if (user.status !== "ACTIVE") return "FORBIDDEN" as const;
+      diagnostics.pairedSwap = true;
+      const result = await updatePairedSwap(actor, user.id, existing.id, status, reason);
+      return { data: mapPrismaRequest(result.request, user, actor), scheduleUpdated: result.scheduleUpdated, persisted: true };
+    }
     diagnostics.currentStatus = existing.status;
     diagnostics.type = existing.type.name;
     diagnostics.employeeId = existing.employeeId;
@@ -639,7 +653,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean; shiftChangeUpdated?: boolean } | null;
     return { data: await mapPrismaRequestWithImpact(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated || historyMetadata?.shiftChangeUpdated), persisted: true };
   } catch (error) {
-    if (error instanceof DomainError) {
+    if (error instanceof DomainError || error instanceof PairedSwapError) {
       return validationFailure(error.message);
     }
     recordErrorLog({
@@ -651,7 +665,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       severity: "ERROR",
       metadata: diagnostics
     });
-    if (!allowDemoDataFallback) return mapRequestStatusError(error, diagnostics);
+    if (!allowDemoDataFallback || diagnostics.pairedSwap) return mapRequestStatusError(error, diagnostics);
     const result = updateMockRequestStatus(actor, id, status, reason, actionInput);
     if (!result || result === "FORBIDDEN") return result;
     if ("record" in result) return { data: result.record, scheduleUpdated: result.scheduleUpdated, persisted: false };
@@ -963,12 +977,12 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
   const andFilters: Prisma.RequestWhereInput[] = [];
 
   if (filters.scope === "mine" || !roleHasCapability(actor.role, "PIPELINES")) {
-    where.requesterId = user.id;
+    andFilters.push({ OR: [{ requesterId: user.id }, { type: { name: "Troca Casada" }, payload: { path: ["partnerUserId"], equals: user.id } }] });
   }
 
   if (isPendingActionFilter(filters.pendingAction)) {
     if (role === "SUPERVISOR") {
-      andFilters.push({ status: "ABERTO", ...supervisorStepRequestTypeWhere() });
+      andFilters.push({ OR: [{ status: "ABERTO", ...supervisorStepRequestTypeWhere() }, { status: "ABERTO", type: { name: "Troca Casada" }, employee: { supervisor: { userId: user.id } }, payload: { path: ["stage"], equals: "SUPERVISOR" } }] });
     } else if (role === "WFM") {
       andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
     } else if (roleHasCapability(actor.role, "PIPELINES")) {
@@ -1001,7 +1015,7 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
   if (filters.assignedTo && filters.assignedTo !== "Todos") {
     const assignedTo = filters.assignedTo.toLowerCase();
     if (assignedTo === "supervisor") {
-      andFilters.push({ status: "ABERTO" });
+      andFilters.push({ OR: [{ status: "ABERTO", type: { name: { not: "Troca Casada" } } }, { status: "ABERTO", type: { name: "Troca Casada" }, payload: { path: ["stage"], equals: "SUPERVISOR" } }] });
     } else if (assignedTo === "wfm") {
       andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
     } else if (assignedTo === "wfm/admin") {
@@ -1304,7 +1318,7 @@ async function sendSupervisorRequestToWfmAnalysis(
 }
 
 function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) {
-  return request.requesterId === user.id || roleHasCapability(actor.role, "PIPELINES");
+  return request.requesterId === user.id || (isPairedSwap(request.type.name, request.payload) && (request.payload as Record<string, unknown>)?.partnerUserId === user.id) || roleHasCapability(actor.role, "PIPELINES");
 }
 
 function canMutateRequest(actor: Actor, userId: string, request: PrismaRequest, status: UiRequestStatus) {
@@ -1502,10 +1516,12 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
     status: dbToUiStatus[request.status] ?? "Aberto",
     area: request.assignedArea,
     assignee: request.assignee?.name,
-    nextStep: nextStepForRequest(request.status),
-    nextOwner: nextOwnerForRequest(request),
-    canSupervisorStep,
-    canWfmFinal,
+    nextStep: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? "Aceite do parceiro" : isPairedSwap(request.type.name, payload) && request.status === "APROVADO" ? "Cronogramas atualizados" : nextStepForRequest(request.status),
+    nextOwner: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? String(payload.partnerName) : isPairedSwap(request.type.name, payload) && payload.stage === "DONE" ? "Sem próxima ação" : nextOwnerForRequest(request),
+    canSupervisorStep: isPairedSwap(request.type.name, payload) ? payload.stage === "SUPERVISOR" && role === "SUPERVISOR" && request.employee?.supervisor?.userId === user?.id : canSupervisorStep,
+    canWfmFinal: isPairedSwap(request.type.name, payload) ? payload.stage === "WFM" && role === "WFM" : canWfmFinal,
+    canPartnerAccept: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" && payload.partnerUserId === user?.id,
+    canCancelPairedSwap: isPairedSwap(request.type.name, payload) && request.requesterId === user?.id && payload.stage !== "DONE",
     time: formatDateTime(request.createdAt),
     description: request.description,
     payload,
