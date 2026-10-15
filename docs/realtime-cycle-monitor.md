@@ -1,8 +1,13 @@
 # Real Time cycle monitor
 
-Production cron checks queues and agents independently every minute. Expected
-cycles are :00 and :30 in America/Sao_Paulo, with five minutes of grace. It checks
-the latest successful cycle, not whether an old cycle was recently reimported.
+Production cron checks queues and agents independently every minute. An alert
+fires only when the last successful import for that feed is more than 20 minutes
+old (exactly 20 minutes is still healthy). Freshness uses the batch importedAt
+timestamp, ordered by latest successful import, rather than the :00/:30 cycle
+label. Reimporting an older cycle refreshes this import watchdog. Cycle labels
+ahead of the clock do not cause an alert when the import is recent. Missing or
+invalid import timestamps are reported separately. Messages show the last import
+time in America/Sao_Paulo and the received cycle for reference.
 
 Server configuration: `REALTIME_CYCLE_MONITOR_ENABLED=true`, secret
 `REALTIME_CYCLE_MONITOR_KIM_URL`, existing `CRON_SECRET`. KIM only, mentioning
@@ -23,7 +28,7 @@ are not automatically retried: inspect KIM and private receipts before any
 manual resend. This favors avoiding duplicate notifications over guaranteed
 delivery during provider or runtime failures.
 
-No operational records or schema changes. This is a cycle freshness monitor,
+No operational records or schema changes. This is an import freshness monitor,
 not external uptime monitoring: database, Vercel or KIM outages may prevent it
 from sending. It cannot detect partial imports that still report SUCCESS.
 

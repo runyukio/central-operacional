@@ -7,8 +7,8 @@ const receiptKey = (id: string) => `realtime-cycle-monitor:v1:delivery:${id}`;
 
 export async function readCycleHealth(now = new Date(), db: Pick<Prisma.TransactionClient, "realTimeQueueCycleSummary" | "realTimeAgentCycleSummary"> = prisma) {
   const [q, a] = await Promise.all([
-    db.realTimeQueueCycleSummary.findFirst({ where: { batch: { status: "SUCCESS" } }, orderBy: [{ cycleDownload: "desc" }, { createdAt: "desc" }], select: { cycleDownload: true, batch: { select: { importedAt: true } } } }),
-    db.realTimeAgentCycleSummary.findFirst({ where: { batch: { status: "SUCCESS" } }, orderBy: [{ cycleDownload: "desc" }, { createdAt: "desc" }], select: { cycleDownload: true, batch: { select: { importedAt: true } } } })
+    db.realTimeQueueCycleSummary.findFirst({ where: { batch: { status: "SUCCESS" } }, orderBy: [{ batch: { importedAt: "desc" } }, { cycleDownload: "desc" }, { createdAt: "desc" }], select: { cycleDownload: true, batch: { select: { importedAt: true } } } }),
+    db.realTimeAgentCycleSummary.findFirst({ where: { batch: { status: "SUCCESS" } }, orderBy: [{ batch: { importedAt: "desc" } }, { cycleDownload: "desc" }, { createdAt: "desc" }], select: { cycleDownload: true, batch: { select: { importedAt: true } } } })
   ]);
   return [evaluateCycle({ feed: "queues", cycle: q?.cycleDownload ?? null, importedAt: q?.batch.importedAt.toISOString() ?? null }, now), evaluateCycle({ feed: "agents", cycle: a?.cycleDownload ?? null, importedAt: a?.batch.importedAt.toISOString() ?? null }, now)];
 }

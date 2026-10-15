@@ -2,8 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
-import { runCycleMonitor } from "./realtime-cycle-monitor-service";
+import { readCycleHealth, runCycleMonitor } from "./realtime-cycle-monitor-service";
 import { GET, POST } from "../app/api/cron/realtime-cycle-monitor/route";
+
+test("reads the latest successful import separately for queues and agents", async t => {
+  const queries: unknown[] = [];
+  mockPrismaDelegate(t, "realTimeQueueCycleSummary", { findFirst: async (query: unknown) => {
+    queries.push(query);
+    return { cycleDownload: "2026-10-15 18:00", batch: { importedAt: new Date("2026-10-15T20:58:00Z") } };
+  } });
+  mockPrismaDelegate(t, "realTimeAgentCycleSummary", { findFirst: async (query: unknown) => {
+    queries.push(query);
+    return { cycleDownload: "2026-10-15 18:00", batch: { importedAt: new Date("2026-10-15T20:30:00Z") } };
+  } });
+  const [queues, agents] = await readCycleHealth(new Date("2026-10-15T20:59:00Z"));
+  assert.equal(queues.status, "ok");
+  assert.equal(agents.status, "late");
+  assert.equal(agents.delayMinutes, 29);
+  for (const query of queries) {
+    assert.deepEqual(query, {
+      where: { batch: { status: "SUCCESS" } },
+      orderBy: [{ batch: { importedAt: "desc" } }, { cycleDownload: "desc" }, { createdAt: "desc" }],
+      select: { cycleDownload: true, batch: { select: { importedAt: true } } }
+    });
+  }
+});
 
 test("route rejects unauthenticated calls and tests without an idempotency key", async () => {
   const old = process.env.CRON_SECRET;
