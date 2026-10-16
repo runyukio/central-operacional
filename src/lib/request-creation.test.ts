@@ -136,16 +136,16 @@ for (const blocked of [
   });
 }
 
-for (const date of ["2026-09-30", "2026-12-01", "2027-11-10", "2026-11-31", "2026-11-1", ""]) {
+for (const date of ["2026-11-31", "2026-02-30", "2027-02-29", "2026-11-1", "bad", ""]) {
   test(`Venda de Folga: rejects target ${date} before any database access`, async () => {
     const result = await createOperationalRequest(actor, { ...inputs[2], dayOffToSellDate: date });
     assert.ok("error" in result);
-    assert.match(result.error ?? "", /novembro de 2026/);
+    assert.match(result.error ?? "", /data válida/);
   });
 }
 
-for (const date of ["2026-10-01", "2026-10-31", "2026-11-01", "2026-11-30"]) {
-  test(`Venda de Folga: accepts the October/November boundary ${date}`, async (t) => {
+for (const date of ["2026-09-30", "2026-10-31", "2026-11-30", "2026-12-01", "2027-01-10", "2027-11-10", "2028-02-29"]) {
+  test(`Venda de Folga: accepts dates without a month or year restriction: ${date}`, async (t) => {
     const input = { ...inputs[2], dayOffToSellDate: date };
     mockCreation(t, input);
     const result = await createOperationalRequest(actor, input);

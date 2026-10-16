@@ -194,15 +194,24 @@ test("creation API service routes paired requests through the two-person workflo
   assert.equal(result.data.canCancelPairedSwap, true);
 });
 
-for (const dates of [
-  { currentDayOffDate: "2026-09-30" },
-  { desiredDayOffDate: "2026-12-01" },
-  { currentDayOffDate: "2027-11-10", desiredDayOffDate: "2027-11-12" }
-]) {
-  test(`paired swap restricts both target dates to October/November 2026: ${JSON.stringify(dates)}`, async () => {
-    await assert.rejects(createPairedSwap("requester-user", { ...input, ...dates }), /novembro de 2026/);
-    const result = await createOperationalRequest(requesterActor, { ...input, ...dates });
+for (const date of ["2026-12-32", "2027-02-29", "bad", ""]) {
+  test(`paired swap still rejects invalid dates: ${date}`, async () => {
+    await assert.rejects(createPairedSwap("requester-user", { ...input, desiredDayOffDate: date }), /datas válidas/);
+    const result = await createOperationalRequest(requesterActor, { ...input, desiredDayOffDate: date });
     assert.ok("error" in result);
-    assert.match(result.error ?? "", /novembro de 2026/);
+    assert.match(result.error ?? "", /datas válidas/);
+  });
+}
+
+for (const [currentDate, desiredDate] of [["2026-12-10", "2026-12-12"], ["2026-12-31", "2027-01-02"], ["2027-02-10", "2027-02-12"]]) {
+  test(`paired swap can be created outside October/November: ${currentDate} to ${desiredDate}`, async t => {
+    const { state, profiles } = fixture(t);
+    state.schedules.forEach(row => { row.date = new Date(`${row.date.toISOString().slice(0, 10) === current ? currentDate : desiredDate}T00:00:00Z`); });
+    mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "requester-user", name: "Ana", email: requesterActor.email, status: "ACTIVE", role: { name: "COLABORADOR" }, employeeProfile: profiles[0] }) });
+    const result = await createOperationalRequest(requesterActor, { ...input, currentDayOffDate: currentDate, desiredDayOffDate: desiredDate });
+    assert.ok("data" in result, JSON.stringify(result));
+    assert.equal(state.request.payload.currentDayOffDate, currentDate);
+    assert.equal(state.request.payload.desiredDayOffDate, desiredDate);
+    assert.equal(state.request.payload.stage, "PARTNER");
   });
 }
