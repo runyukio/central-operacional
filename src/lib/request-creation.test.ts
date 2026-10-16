@@ -9,6 +9,16 @@ import { createOperationalRequest, type CreateRequestInput } from "./request-ser
 const actor = { email: "agent@example.test", name: "Test agent", role: "COLABORADOR" as const };
 const inputs: CreateRequestInput[] = [
   {
+    type: "Troca de Folga", title: "Troca de Folga", priority: "Média",
+    description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_SWAP",
+    currentDayOffDate: "2026-10-20", desiredDayOffDate: "2026-10-21"
+  },
+  {
+    type: "Solicitação de Dia de Folga", title: "Solicitação de Dia de Folga", priority: "Média",
+    description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_REQUEST",
+    desiredDayOffRequestDate: "2026-10-21", dayOffReason: "Pessoal"
+  },
+  {
     type: "Venda de Folga", title: "Venda de Folga", priority: "Média",
     description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_SELL",
     dayOffToSellDate: "2026-11-10", availabilityShift: "Manhã", acknowledgement: true
@@ -26,7 +36,7 @@ function mockCreation(t: TestContext, input: CreateRequestInput, duplicate = fal
   mockPrismaDelegate(t, "schedule", {
     count: async () => 2,
     findUnique: async ({ where }) => ({
-      status: where.employeeId_date.date.toISOString().startsWith(input.dayOffToSellDate ?? "2026-11-10") ? "FOLGA" : "PRESENTE"
+      status: where.employeeId_date.date.toISOString().startsWith(input.currentDayOffDate ?? input.dayOffToSellDate ?? "2026-11-10") ? "FOLGA" : "PRESENTE"
     })
   });
   mockPrismaDelegate(t, "request", { findMany: async () => duplicate ? [{ payload: input }] : [] });
@@ -120,23 +130,23 @@ for (const blocked of [
   { type: "Venda de Folga", dayOffKind: "DAY_OFF_SWAP" as const }
 ]) {
   test(`${blocked.type}/${blocked.dayOffKind}: blocks new requests before any database access`, async () => {
-    const result = await createOperationalRequest(actor, { ...inputs[0], ...blocked });
+    const result = await createOperationalRequest(actor, { ...inputs[2], ...blocked, currentDayOffDate: "2026-11-10", desiredDayOffDate: "2026-11-11", desiredDayOffRequestDate: "2026-11-11" });
     assert.ok("error" in result);
-    assert.match(result.error ?? "", /desabilitadas/);
+    assert.match(result.error ?? "", /apenas para datas de outubro|não corresponde/);
   });
 }
 
-for (const date of ["2026-10-31", "2026-12-01", "2027-11-10", "2026-11-31", "2026-11-1", ""]) {
+for (const date of ["2026-09-30", "2026-12-01", "2027-11-10", "2026-11-31", "2026-11-1", ""]) {
   test(`Venda de Folga: rejects target ${date} before any database access`, async () => {
-    const result = await createOperationalRequest(actor, { ...inputs[0], dayOffToSellDate: date });
+    const result = await createOperationalRequest(actor, { ...inputs[2], dayOffToSellDate: date });
     assert.ok("error" in result);
     assert.match(result.error ?? "", /novembro de 2026/);
   });
 }
 
-for (const date of ["2026-11-01", "2026-11-30"]) {
-  test(`Venda de Folga: accepts the November boundary ${date}`, async (t) => {
-    const input = { ...inputs[0], dayOffToSellDate: date };
+for (const date of ["2026-10-01", "2026-10-31", "2026-11-01", "2026-11-30"]) {
+  test(`Venda de Folga: accepts the October/November boundary ${date}`, async (t) => {
+    const input = { ...inputs[2], dayOffToSellDate: date };
     mockCreation(t, input);
     const result = await createOperationalRequest(actor, input);
     assert.ok("data" in result, JSON.stringify(result));
