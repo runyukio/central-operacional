@@ -949,12 +949,14 @@ export type FormInputProps = {
   placeholder?: string;
   helper?: string;
   maxLength?: number;
+  min?: string;
+  max?: string;
   inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
   autoComplete?: string;
 };
 
 
-export function FormInput({ label, value, onChange, type = "text", error, disabled = false, placeholder, helper, maxLength, inputMode, autoComplete }: FormInputProps) {
+export function FormInput({ label, value, onChange, type = "text", error, disabled = false, placeholder, helper, maxLength, min, max, inputMode, autoComplete }: FormInputProps) {
   function openDatePicker(input: HTMLInputElement) {
     if (type !== "date" || disabled) return;
     const picker = input as HTMLInputElement & { showPicker?: () => void };
@@ -968,7 +970,7 @@ export function FormInput({ label, value, onChange, type = "text", error, disabl
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
-      <input type={type} value={value} disabled={disabled} placeholder={placeholder} maxLength={maxLength} inputMode={inputMode} autoComplete={autoComplete} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
+      <input type={type} value={value} disabled={disabled} placeholder={placeholder} maxLength={maxLength} min={min} max={max} inputMode={inputMode} autoComplete={autoComplete} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
       {!error && helper ? <span className="mt-1 block text-xs font-semibold text-muted">{helper}</span> : null}
     </label>

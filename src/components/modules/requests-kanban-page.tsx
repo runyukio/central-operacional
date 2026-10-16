@@ -1,5 +1,6 @@
 "use client";
 
+import { DAY_OFF_REQUEST_START, DAY_OFF_REQUEST_END, DAY_OFF_REQUEST_NOTICE, isDayOffRequestCreationEnabled, validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 import { PairedSwapFields } from "./paired-swap-fields";
 
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
@@ -73,15 +74,15 @@ function paginationRange(page: number, limit: number, total: number) {
 
 function createDefaultRequestDraft() {
   return {
-    type: "Troca de Folga",
-    title: "Troca de Folga",
+    type: "Troca Casada",
+    title: "Troca Casada",
     priority: "Média",
     requestedDate: "",
-    dayOffKind: "DAY_OFF_SWAP" as DayOffKind,
+    dayOffKind: "PAIRED_DAY_OFF_SWAP" as DayOffKind,
     partnerEmployeeId: "",
-    currentDayOffDate: offsetOperationalDateInput(1),
-    desiredDayOffDate: offsetOperationalDateInput(4),
-    dayOffToSellDate: offsetOperationalDateInput(1),
+    currentDayOffDate: DAY_OFF_REQUEST_START,
+    desiredDayOffDate: "2026-11-02",
+    dayOffToSellDate: DAY_OFF_REQUEST_START,
     availabilityShift: "Manhã",
     preferredStartTime: "",
     preferredEndTime: "",
@@ -100,6 +101,8 @@ type RequestDraft = ReturnType<typeof createDefaultRequestDraft>;
 
 
 function validateRequestDraft(draft: RequestDraft) {
+  const policyError = validateDayOffRequestPolicy({ ...draft, dayOffKind: isDayOffRequest(draft.type) ? draft.dayOffKind : undefined });
+  if (policyError) return policyError;
   const dayOffKind = isDayOffRequest(draft.type) ? draft.dayOffKind : null;
   if (!dayOffKind) return "";
   if (!draft.justification.trim()) return "Informe a justificativa da solicitação de folga.";
@@ -177,7 +180,7 @@ function RequestCreateModal({
               }}
               className="h-11 w-full rounded-lg border border-border px-3 outline-none"
             >
-              {requestTypes.filter((type) => type !== "Alteração de Adiantamento" || isMonthlyAdvanceRequestPeriodOpen()).map((type) => (
+              {requestTypes.filter((type) => isDayOffRequestCreationEnabled(type) && (type !== "Alteração de Adiantamento" || isMonthlyAdvanceRequestPeriodOpen())).map((type) => (
                 <option key={type}>{type}</option>
               ))}
             </select>
@@ -196,6 +199,7 @@ function RequestCreateModal({
           </label>
           {isDayOffRequest(draft.type) ? (
             <div className="grid gap-3 md:grid-cols-2">
+              <p className="text-sm text-muted md:col-span-2">{DAY_OFF_REQUEST_NOTICE}</p>
               {draft.dayOffKind === "PAIRED_DAY_OFF_SWAP" ? <PairedSwapFields value={draft} onChange={patch => setDraft(current => ({ ...current, ...patch }))} /> : null}
               {draft.dayOffKind === "DAY_OFF_SWAP" ? (
                 <>
@@ -213,7 +217,7 @@ function RequestCreateModal({
                 <>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-semibold text-muted">Data da folga que deseja vender</span>
-                    <input type="date" value={draft.dayOffToSellDate} onChange={(event) => setDraft((current) => ({ ...current, dayOffToSellDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                    <input type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_REQUEST_END} value={draft.dayOffToSellDate} onChange={(event) => setDraft((current) => ({ ...current, dayOffToSellDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
                   </label>
                   <FormSelect label="Turno desejado" value={draft.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setDraft((current) => ({ ...current, availabilityShift: value }))} />
                   <FormInput label="Entrada preferencial" value={draft.preferredStartTime} onChange={(value) => setDraft((current) => ({ ...current, preferredStartTime: value }))} />

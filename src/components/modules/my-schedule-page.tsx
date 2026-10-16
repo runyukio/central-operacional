@@ -1,5 +1,6 @@
 "use client";
 
+import { DAY_OFF_REQUEST_START, DAY_OFF_REQUEST_END, DAY_OFF_REQUEST_NOTICE, isDayOffRequestCreationEnabled, validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 import { PairedSwapFields } from "./paired-swap-fields";
 
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
@@ -83,11 +84,11 @@ export function MySchedulePage() {
   const [coverageWarning, setCoverageWarning] = useState<CoverageWarningDialogState | null>(null);
   const [requestFilters, setRequestFilters] = useState({ status: "Todos", type: "Todos", priority: "Todos", query: "" });
   const [dayOffForm, setDayOffForm] = useState({
-    kind: "DAY_OFF_SWAP" as DayOffKind,
+    kind: "PAIRED_DAY_OFF_SWAP" as DayOffKind,
     partnerEmployeeId: "",
-    currentDayOffDate: offsetOperationalDateInput(1),
-    desiredDayOffDate: offsetOperationalDateInput(4),
-    dayOffToSellDate: offsetOperationalDateInput(1),
+    currentDayOffDate: DAY_OFF_REQUEST_START,
+    desiredDayOffDate: "2026-11-02",
+    dayOffToSellDate: DAY_OFF_REQUEST_START,
     availabilityShift: "Manhã",
     preferredStartTime: "",
     preferredEndTime: "",
@@ -294,6 +295,8 @@ export function MySchedulePage() {
   }
 
   function validateDayOffForm() {
+    const policyError = validateDayOffRequestPolicy({ ...dayOffForm, dayOffKind: dayOffForm.kind });
+    if (policyError) return policyError;
     if (!dayOffForm.justification.trim()) return "Justificativa é obrigatória.";
     if (dayOffForm.kind === "PAIRED_DAY_OFF_SWAP" && (!dayOffForm.partnerEmployeeId || !dayOffForm.acknowledgement)) return "Selecione o parceiro e confirme seu aceite da troca casada.";
     if (["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffForm.kind)) {
@@ -879,7 +882,7 @@ export function MySchedulePage() {
             <div className="mb-5 flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Solicitar Folga</h2>
-                <p className="text-sm text-muted">Qual tipo de solicitação de folga você deseja abrir?</p>
+                <p className="text-sm text-muted">{DAY_OFF_REQUEST_NOTICE}</p>
               </div>
               <button type="button" onClick={() => setShowDayOffModal(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
@@ -887,7 +890,7 @@ export function MySchedulePage() {
               <div role="alert" className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{dayOffMessage}</div>
             ) : null}
             <div className="grid gap-3 md:grid-cols-2">
-              {dayOffOptions.map((option) => (
+              {dayOffOptions.filter((option) => isDayOffRequestCreationEnabled(dayOffKindLabels[option.kind])).map((option) => (
                 <button type="button" key={option.kind} onClick={() => selectDayOffKind(option.kind)} className={cn("rounded-lg border p-4 text-left transition", dayOffForm.kind === option.kind ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
                   <p className="font-extrabold">{option.title}</p>
                   <p className="mt-1 text-xs text-muted">{option.description}</p>
@@ -904,7 +907,7 @@ export function MySchedulePage() {
               ) : null}
               {dayOffForm.kind === "DAY_OFF_SELL" ? (
                 <>
-                  <FormInput label="Data da folga que deseja vender" type="date" value={dayOffForm.dayOffToSellDate} onChange={(value) => setDayOffForm({ ...dayOffForm, dayOffToSellDate: value })} helper="Pode ser Folga, Folga aprovada ou Troca aprovada." />
+                  <FormInput label="Data da folga que deseja vender" type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_REQUEST_END} value={dayOffForm.dayOffToSellDate} onChange={(value) => setDayOffForm({ ...dayOffForm, dayOffToSellDate: value })} helper="Pode ser Folga, Folga aprovada ou Troca aprovada." />
                   <FormSelect label="Turno desejado" value={dayOffForm.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setDayOffForm({ ...dayOffForm, availabilityShift: value })} />
                   <FormInput label="Horário preferencial de entrada" value={dayOffForm.preferredStartTime} onChange={(value) => setDayOffForm({ ...dayOffForm, preferredStartTime: value })} />
                   <FormInput label="Horário preferencial de saída" value={dayOffForm.preferredEndTime} onChange={(value) => setDayOffForm({ ...dayOffForm, preferredEndTime: value })} />

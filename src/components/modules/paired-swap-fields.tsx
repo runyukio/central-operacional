@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { DAY_OFF_REQUEST_START, DAY_OFF_REQUEST_END } from "@/lib/day-off-request-policy";
 import { apiJson, FormInput } from "./shared";
 
 type SwapFields = { partnerEmployeeId: string; currentDayOffDate: string; desiredDayOffDate: string; acknowledgement: boolean };
@@ -31,8 +32,8 @@ export function PairedSwapFields({ value, onChange }: { value: SwapFields; onCha
       </label>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : !loading && !partners.length ? <p className="text-sm text-muted">Nenhum parceiro ativo disponível na mesma LOB e turno.</p> : null}
       <div className="grid gap-3 md:grid-cols-2">
-        <FormInput type="date" label="Sua folga atual (você trabalhará)" value={value.currentDayOffDate} onChange={date => onChange({ currentDayOffDate: date, acknowledgement: false })} />
-        <FormInput type="date" label="Folga do parceiro (você folgará)" value={value.desiredDayOffDate} onChange={date => onChange({ desiredDayOffDate: date, acknowledgement: false })} />
+        <FormInput type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_REQUEST_END} label="Sua folga atual (você trabalhará)" value={value.currentDayOffDate} onChange={date => onChange({ currentDayOffDate: date, acknowledgement: false })} />
+        <FormInput type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_REQUEST_END} label="Folga do parceiro (você folgará)" value={value.desiredDayOffDate} onChange={date => onChange({ desiredDayOffDate: date, acknowledgement: false })} />
       </div>
       <label className="flex items-start gap-2 rounded-lg border border-blue-100 p-3 text-sm text-blue-800">
         <input type="checkbox" checked={value.acknowledgement} onChange={event => onChange({ acknowledgement: event.target.checked })} />

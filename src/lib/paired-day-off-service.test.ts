@@ -9,11 +9,12 @@ const requesterActor = { email: "requester@test.invalid", name: "Ana", role: "CO
 const partnerActor = { email: "partner@test.invalid", name: "Bia", role: "COLABORADOR" as const };
 const supervisorActor = { email: "supervisor@test.invalid", name: "Supervisor", role: "SUPERVISOR" as const };
 const wfmActor = { email: "wfm@test.invalid", name: "WFM", role: "WFM" as const };
-const current = "2099-10-10", desired = "2099-10-12";
+const current = "2026-11-10", desired = "2026-11-12";
 const input: CreateRequestInput = { type: "Troca Casada", title: "Troca Casada", description: "Compromisso", justification: "Compromisso", priority: "Média" as const,
   dayOffKind: PAIRED_SWAP_KIND, partnerEmployeeId: "partner", acknowledgement: true, currentDayOffDate: current, desiredDayOffDate: desired };
 
 function fixture(t: TestContext) {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-16T12:00:00Z") });
   const profile = (id: string, name: string) => ({ id, fullName: name, wbLogin: id, userId: `${id}-user`, deletedAt: null, terminationDate: null,
     roleTitle: "Agente", operationalStatus: "Ativo", lobId: "ads", shiftId: "night", supervisorId: "supervisor", shift: { name: "Noite" }, lob: { name: "ADS" }, user: { id: `${id}-user`, status: "ACTIVE" } });
   const profiles = [profile("requester", "Ana"), profile("partner", "Bia")];
@@ -149,11 +150,11 @@ test("changed schedule blocks final approval; concurrent write rolls back all fo
 });
 
 test("invalid, same, current and past dates fail; future dates preserve the operational date", () => {
-  for (const date of ["bad", "2099-99-10", "2099-02-30", "2099-10-01", "2099-09-30"]) {
-    assert.throws(() => validatePairedDates(date, desired, "2099-10-01"));
+  for (const date of ["bad", "2099-99-10", "2099-02-30", "2026-10-16", "2026-10-15"]) {
+    assert.throws(() => validatePairedDates(date, desired, "2026-10-16"));
   }
-  assert.throws(() => validatePairedDates(current, current, "2099-10-01"), /diferentes/);
-  assert.doesNotThrow(() => validatePairedDates(current, desired, "2099-10-01"));
+  assert.throws(() => validatePairedDates(current, current, "2026-10-16"), /diferentes/);
+  assert.doesNotThrow(() => validatePairedDates(current, desired, "2026-10-16"));
 });
 
 test("only same-LOB same-shift active agents appear in the partner selector", async t => {
@@ -192,3 +193,16 @@ test("creation API service routes paired requests through the two-person workflo
   assert.equal(result.data.nextStep, "Aceite do parceiro");
   assert.equal(result.data.canCancelPairedSwap, true);
 });
+
+for (const dates of [
+  { currentDayOffDate: "2026-10-31" },
+  { desiredDayOffDate: "2026-12-01" },
+  { currentDayOffDate: "2027-11-10", desiredDayOffDate: "2027-11-12" }
+]) {
+  test(`paired swap restricts both target dates to November 2026: ${JSON.stringify(dates)}`, async () => {
+    await assert.rejects(createPairedSwap("requester-user", { ...input, ...dates }), /novembro de 2026/);
+    const result = await createOperationalRequest(requesterActor, { ...input, ...dates });
+    assert.ok("error" in result);
+    assert.match(result.error ?? "", /novembro de 2026/);
+  });
+}

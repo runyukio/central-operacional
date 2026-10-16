@@ -1,4 +1,5 @@
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
+import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 
 import type { Actor, Priority as UiPriority, RequestRecord, RequestStatus as UiRequestStatus } from "@/lib/mock-db";
 import {
@@ -280,7 +281,7 @@ export async function getOperationalRequest(actor: Actor, id: string) {
 }
 
 export async function createOperationalRequest(actor: Actor, input: CreateRequestInput) {
-  const validationError = validateCreateInput(input);
+  const validationError = validateDayOffRequestPolicy(input) || validateCreateInput(input);
   if (validationError) return validationFailure(validationError);
 
   try {
