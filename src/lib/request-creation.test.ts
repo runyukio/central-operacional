@@ -9,14 +9,9 @@ import { createOperationalRequest, type CreateRequestInput } from "./request-ser
 const actor = { email: "agent@example.test", name: "Test agent", role: "COLABORADOR" as const };
 const inputs: CreateRequestInput[] = [
   {
-    type: "Troca de Folga", title: "Troca de Folga", priority: "Média",
-    description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_SWAP",
-    currentDayOffDate: "2026-09-10", desiredDayOffDate: "2026-09-11"
-  },
-  {
     type: "Venda de Folga", title: "Venda de Folga", priority: "Média",
     description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_SELL",
-    dayOffToSellDate: "2026-09-10", availabilityShift: "Manhã", acknowledgement: true
+    dayOffToSellDate: "2026-11-10", availabilityShift: "Manhã", acknowledgement: true
   }
 ];
 
@@ -31,7 +26,7 @@ function mockCreation(t: TestContext, input: CreateRequestInput, duplicate = fal
   mockPrismaDelegate(t, "schedule", {
     count: async () => 2,
     findUnique: async ({ where }) => ({
-      status: where.employeeId_date.date.toISOString().startsWith("2026-09-10") ? "FOLGA" : "PRESENTE"
+      status: where.employeeId_date.date.toISOString().startsWith(input.dayOffToSellDate ?? "2026-11-10") ? "FOLGA" : "PRESENTE"
     })
   });
   mockPrismaDelegate(t, "request", { findMany: async () => duplicate ? [{ payload: input }] : [] });
@@ -117,3 +112,33 @@ test("não permite solicitação de adiantamento para novembro/2026", async () =
   assert.ok("error" in result);
   assert.match(result.error ?? "", /somente até outubro\/2026/);
 });
+
+for (const blocked of [
+  { type: "Troca de Folga", dayOffKind: "DAY_OFF_SWAP" as const },
+  { type: "Solicitação de Dia de Folga", dayOffKind: "DAY_OFF_REQUEST" as const },
+  { type: "Suporte geral", dayOffKind: "DAY_OFF_SWAP" as const },
+  { type: "Venda de Folga", dayOffKind: "DAY_OFF_SWAP" as const }
+]) {
+  test(`${blocked.type}/${blocked.dayOffKind}: blocks new requests before any database access`, async () => {
+    const result = await createOperationalRequest(actor, { ...inputs[0], ...blocked });
+    assert.ok("error" in result);
+    assert.match(result.error ?? "", /desabilitadas/);
+  });
+}
+
+for (const date of ["2026-10-31", "2026-12-01", "2027-11-10", "2026-11-31", "2026-11-1", ""]) {
+  test(`Venda de Folga: rejects target ${date} before any database access`, async () => {
+    const result = await createOperationalRequest(actor, { ...inputs[0], dayOffToSellDate: date });
+    assert.ok("error" in result);
+    assert.match(result.error ?? "", /novembro de 2026/);
+  });
+}
+
+for (const date of ["2026-11-01", "2026-11-30"]) {
+  test(`Venda de Folga: accepts the November boundary ${date}`, async (t) => {
+    const input = { ...inputs[0], dayOffToSellDate: date };
+    mockCreation(t, input);
+    const result = await createOperationalRequest(actor, input);
+    assert.ok("data" in result, JSON.stringify(result));
+  });
+}

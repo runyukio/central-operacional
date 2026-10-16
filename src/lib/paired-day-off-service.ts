@@ -7,6 +7,8 @@ import { shiftCategoryName } from "@/lib/shift-display";
 import type { Actor, RequestStatus } from "@/lib/mock-db";
 import type { CreateRequestInput } from "@/lib/request-service";
 
+import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
+
 export const PAIRED_SWAP_TYPE = "Troca Casada";
 export const PAIRED_SWAP_KIND = "PAIRED_DAY_OFF_SWAP";
 export class PairedSwapError extends Error {}
@@ -128,6 +130,8 @@ async function supervisorUserId(tx: Prisma.TransactionClient, supervisorId: stri
 }
 
 export async function createPairedSwap(userId: string, input: CreateRequestInput) {
+  const policyError = validateDayOffRequestPolicy({ ...input, type: PAIRED_SWAP_TYPE, dayOffKind: PAIRED_SWAP_KIND });
+  if (policyError) throw new PairedSwapError(policyError);
   if (!input.partnerEmployeeId || !input.acknowledgement || !input.justification?.trim()) throw new PairedSwapError("Selecione o parceiro, informe a justificativa e confirme seu aceite da troca casada.");
   validatePairedDates(input.currentDayOffDate, input.desiredDayOffDate);
   return prisma.$transaction(async tx => {
