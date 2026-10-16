@@ -1,5 +1,5 @@
 import { CAPACITY_HOUR, capacityDate, capacityDay, uniqueCapacityIntervals, type CapacitySchedule } from "./ads-capacity-core";
-import type { ExecutiveForecastPoint } from "./executive-forecast-core";
+import { forecastRemainingInInterval, type ExecutiveForecastPoint } from "./executive-forecast-core";
 import { isAbsenceStatus, normalizeOperationalStatus } from "./attendance-calculation";
 
 export const ADS_GLIDE_STALE_MINUTES = 90;
@@ -62,12 +62,12 @@ export function buildAdsBacklogGlide(input: {
   const available = input.agents.filter((agent) => !input.unavailable?.has(agent.id));
   const invalidSchedules = available.some((agent) => agent.start === null || agent.end === null || agent.end <= agent.start);
   const agents = uniqueCapacityIntervals(available);
-  const forecasts = new Map<string, number>();
+  const forecasts = new Map<string, ExecutiveForecastPoint>();
   const invalidForecasts = new Set<string>();
   for (const point of input.forecast) {
     const key = `${point.dateKey}|${point.hour}`;
     if (forecasts.has(key) || !Number.isFinite(point.input) || point.input < 0) invalidForecasts.add(key);
-    else forecasts.set(key, point.input);
+    else forecasts.set(key, point);
   }
   let backlog: number | null = input.currentBacklog !== null && Number.isFinite(input.currentBacklog) && input.currentBacklog >= 0 ? input.currentBacklog : null;
   let incomplete = backlog === null || invalidSchedules;
@@ -80,7 +80,7 @@ export function buildAdsBacklogGlide(input: {
     const durationHours = (end - start) / CAPACITY_HOUR;
     const dateKey = capacityDate(start), hour = new Date(start).getUTCHours();
     const key = `${dateKey}|${hour}`, incoming = forecasts.get(key);
-    const forecast = incoming === undefined || invalidForecasts.has(key) ? null : incoming * durationHours;
+    const forecast = incoming === undefined || invalidForecasts.has(key) ? null : forecastRemainingInInterval(incoming, start, end);
     const active = agents.filter((agent) => agent.start !== null && agent.end !== null && agent.start < end && agent.end > start);
     let effectiveAgentHours = 0, knownCapacity = 0, missingAbs = false;
     const missing = new Set<string>();

@@ -16,9 +16,9 @@ const observations = Array.from({ length: 24 * 90 }, (_, h) => ({
   input: h % 24 === 14 ? 1000 : 100,
 }));
 const days = completeForecastDays(observations);
-test("168 distinct candidates preserve the original library and add the ADS seasonal correction", () => {
-  assert.equal(VOLUME_CANDIDATES.length, 168);
-  assert.equal(new Set(VOLUME_CANDIDATES.map((c) => c.id)).size, 168);
+test("169 distinct candidates preserve comparators and add the ADS adaptive historical prior", () => {
+  assert.equal(VOLUME_CANDIDATES.length, 169);
+  assert.equal(new Set(VOLUME_CANDIDATES.map((c) => c.id)).size, 169);
   assert.ok(VOLUME_CANDIDATES.some((c) => c.window === 1));
   assert.ok(VOLUME_CANDIDATES.some((c) => c.window === 120));
 });

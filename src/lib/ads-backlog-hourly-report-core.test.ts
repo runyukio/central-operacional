@@ -81,6 +81,26 @@ test("backlog consumes the canonical forecast and never falls back to the expire
   assert.equal(buildAdsBacklogHourlyReportSnapshot({...base,forecast:[{dateKey:"2026-08-04",hour:20,input:123}]})?.forecastedVolume,123);
 });
 
+test("the hourly report consumes only the nowcast remainder, without re-adding arrivals included in current backlog", () => {
+  const report=buildAdsBacklogHourlyReportSnapshot({
+    selectedCycle:"2026-08-04 20:30",queueRows:[queueRow()],agentRows:[agent("Agent","wb_partial","Material Queues",100,220)],
+    forecast:ADS_BACKLOG_PLAN.map(point=>point.dateKey==="2026-08-04"&&point.hour===20
+      ? {dateKey:point.dateKey,hour:point.hour,input:360,remainingInput:60,observedUntil:Date.UTC(2026,7,4,20,30)}
+      : {dateKey:point.dateKey,hour:point.hour,input:561}),
+  });
+  assert.ok(report);
+  assert.equal(report.forecastedVolume,360,"the displayed current-hour total still includes its observed portion");
+  assert.equal(report.materialTotalSubmitPerHour,120);
+  assert.equal(report.expectedNextHourBacklog,4000,"4000 current + 60 future arrivals - 60 future submits");
+});
+
+test("the hourly report distinguishes a known zero remainder from unavailable partial-hour metadata", () => {
+  const input={selectedCycle:"2026-08-04 20:30",queueRows:[queueRow()],agentRows:[agent("Agent","wb_partial","Material Queues",100,220)]};
+  const point={dateKey:"2026-08-04",hour:20,input:300,observedUntil:Date.UTC(2026,7,4,20,30)};
+  assert.equal(buildAdsBacklogHourlyReportSnapshot({...input,forecast:[{...point,remainingInput:0}]})?.expectedNextHourBacklog,3940);
+  assert.equal(buildAdsBacklogHourlyReportSnapshot({...input,forecast:[point]}),null);
+});
+
 function queueRow(): AdsExecutiveQueueRow {
   return {
     lob: "ADS",

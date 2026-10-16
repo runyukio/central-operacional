@@ -7,7 +7,7 @@ import {
   type AdsExecutiveQueueRow
 } from "@/lib/ads-executive-report-core";
 
-import type { ExecutiveForecastPoint } from "./executive-forecast-core";
+import { forecastRemainingInInterval, type ExecutiveForecastPoint } from "./executive-forecast-core";
 const HOUR_MS = 60 * 60 * 1000;
 
 export type AdsBacklogPlanPoint = {
@@ -79,7 +79,9 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
     selected.timestamp
   );
   const remainingHourFraction = Math.max(0, Math.min(1, (60 - selected.minute) / 60));
-  const remainingForecastVolume = planPoint.forecastVolume * remainingHourFraction;
+  const currentForecast = input.forecast.find(point => point.dateKey === selected.dateKey && point.hour === selected.hour);
+  const remainingForecastVolume = currentForecast ? forecastRemainingInInterval(currentForecast, selected.timestamp, currentHourTimestamp + HOUR_MS) : null;
+  if (remainingForecastVolume === null) return null;
   const remainingMaterialOutput = materialProductivity.totalSubmitPerHour * remainingHourFraction;
   const expectedNextHourBacklog = Math.max(
     0,

@@ -4,10 +4,10 @@
  */
 export const VOLUME_FORECAST_POLICIES = {
   ADS: {
-    id: "ads-seasonal-damped",
-    label: "ADS · sazonalidade semanal e tendência amortecida",
+    id: "ads-robust-prior",
+    label: "ADS · base histórica sazonal + revisão intradia",
     rationale:
-      "Damp duplicate recent amplification and blend weekends with a robust weekday reference; reviewed across retrospective periods and horizons, with remaining spike risk.",
+      "Typical weekday level and shape form a historical prior; observed current-day arrivals revise the remaining hours without propagating one partial day to future dates.",
   },
   VIDEO: {
     id: "daily-3-h0-profile-120-all",

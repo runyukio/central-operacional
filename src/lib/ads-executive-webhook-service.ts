@@ -307,7 +307,7 @@ export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?
 
   const parsedCycle = parseAdsExecutiveCycle(selectedCycle);
   const [forecast, requirements] = await Promise.all([
-    loadExecutiveForecast("ADS", parsedCycle.dateKey),
+    loadExecutiveForecast("ADS", parsedCycle.dateKey, { asOfCycle: selectedCycle }),
     loadExecutiveRequirements("ADS", parsedCycle.dateKey)
   ]);
 
@@ -349,7 +349,7 @@ async function sendLatestExecutiveReport(config: ExecutiveWebhookConfig): Promis
 
   const parsedCycle = parseAdsExecutiveCycle(selectedCycle);
   const [forecast, requirements] = await Promise.all([
-    loadExecutiveForecast(config.lob, parsedCycle.dateKey),
+    loadExecutiveForecast(config.lob, parsedCycle.dateKey, { asOfCycle: selectedCycle }),
     loadExecutiveRequirements(config.lob, parsedCycle.dateKey)
   ]);
   const report = buildAdsExecutiveReportSnapshot({

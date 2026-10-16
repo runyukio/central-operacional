@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildForecastDisplay, type ForecastPayload } from "@/lib/volume-forecast-display";
+import { buildForecastDisplay, forecastCycleLabel, type ForecastDisplayRow, type ForecastPayload } from "@/lib/volume-forecast-display";
 import dynamic from "next/dynamic";
 import {
   type LucideIcon,
@@ -257,36 +257,8 @@ type ForecastHour = {
   samples: number;
 };
 
-type ForecastModel = {
-  hasForecast: boolean;
-  lastRealAt: Date | null;
-  projectedUntil: Date | null;
-  next24h: number | null;
-  horizonTotal: number | null;
-  peak: { value: number; at: Date | null };
-  adjustment: number | null;
-  accuracy: number | null;
-  dailyAccuracy: number | null;
-  modelLabels: string[];
-  bias: number | null;
-  evaluatedHours: number;
-  warnings: string[];
-  horizonHours: number;
-  chartRows: ForecastChartRow[];
-  tableRows: ForecastChartRow[];
-};
-
-type ForecastChartRow = {
-  key: string;
-  label: string;
-  realComplete: boolean;
-  real: number | null;
-  forecast: number | null;
-  lower: number | null;
-  upper: number | null;
-  adjustment: number | null;
-  confidence: number | null;
-};
+type ForecastModel = ReturnType<typeof buildForecastDisplay>;
+type ForecastChartRow = ForecastDisplayRow;
 
 
 const granularityOptions: Array<{ value: PerformanceGranularity; label: string }> = [
@@ -489,8 +461,25 @@ export function PerformanceAutomationPage() {
   }, [loadQueue]);
 
   useEffect(() => {
-    if (activeTab === "forecast") void loadForecast();
-    return () => forecastRequest.current?.abort();
+    if (activeTab !== "forecast") return;
+    let timer: number | undefined;
+    const refreshVisibleForecast = () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      timer = undefined;
+      if (document.visibilityState !== "visible") {
+        forecastRequest.current?.abort();
+        return;
+      }
+      void loadForecast();
+      timer = window.setInterval(() => void loadForecast(), hourMs);
+    };
+    refreshVisibleForecast();
+    document.addEventListener("visibilitychange", refreshVisibleForecast);
+    return () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisibleForecast);
+      forecastRequest.current?.abort();
+    };
   }, [activeTab, loadForecast, manualImportVersion]);
 
   useEffect(() => {
@@ -1915,7 +1904,8 @@ function ImportResultMetric({ label, value }: { label: string; value: number }) 
   return <div><p className="text-[11px] font-black uppercase tracking-wide text-emerald-700">{label}</p><p className="mt-1 text-xl font-black text-emerald-950">{formatNumber(value)}</p></div>;
 }
 
-function ForecastViewPanel({
+/** Presentation can be rendered with a read-only fixture for visual checks. */
+export function ForecastViewPanel({
   loading,
   model,
   lobs,
@@ -1952,7 +1942,7 @@ function ForecastViewPanel({
           <div className="min-w-0">
             <p className="mb-2 text-[11px] font-black uppercase tracking-wide text-muted">Periodo</p>
             <div className="grid grid-cols-2 gap-2">
-              <InfoTile title="Ultimo real" value={formatForecastDate(model.lastRealAt)} />
+              <InfoTile title="Último real importado" value={formatForecastDate(model.lastRealAt)} />
               <InfoTile title="Projetado ate" value={formatForecastDate(model.projectedUntil)} />
             </div>
           </div>
@@ -1969,24 +1959,32 @@ function ForecastViewPanel({
           </SlicerGroup>
         </div>
 
+        {model.adaptive ? <div className="grid gap-3 md:grid-cols-3">
+          <ForecastCard title="Base histórica · hoje" value={formatOptionalNumber(model.adaptive.referenceToday)} helper="referência calculada antes do dia" icon={BarChart3} tone="blue" />
+          <ForecastCard title="Recebido no Real Time" value={formatOptionalNumber(model.adaptive.actualToday)} helper={`até ${forecastCycleLabel(model.adaptive.cycle)} · Brasil`} icon={Clock} tone="green" />
+          <ForecastCard title="Estimativa atualizada · hoje" value={formatOptionalNumber(model.adaptive.updatedDayEstimate)} helper={`recebido + ${formatOptionalNumber(model.adaptive.remainingToday)} previstos no restante do dia`} icon={TrendingUp} tone="cyan" />
+        </div> : null}
+
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <ForecastCard title="Hoje · 24h" value={formatOptionalNumber(model.next24h)} helper="forecast do dia completo" icon={TrendingUp} tone="cyan" />
+          {!model.adaptive && model.hasBaseline ? <ForecastCard title="Base histórica · hoje" value={formatOptionalNumber(model.baselineToday)} helper="referência calculada antes do dia" icon={BarChart3} tone="blue" /> : null}
+          {!model.adaptive ? <ForecastCard title={model.hasBaseline ? "Estimativa hoje" : "Hoje · 24h"} value={formatOptionalNumber(model.next24h)} helper={model.next24h === null ? "sem previsão operacional neste ciclo" : model.hasBaseline ? "previsão operacional disponível" : "base histórica do dia completo"} icon={TrendingUp} tone="cyan" /> : null}
           <ForecastCard title={`${horizon} dias`} value={formatOptionalNumber(model.horizonTotal)} helper={`${model.horizonHours} horas base`} icon={BarChart3} tone="blue" />
-          <ForecastCard title="Viés" value={formatOptionalPercent(model.bias)} helper="positivo: superestimação" icon={RefreshCw} tone="green" />
-          <ForecastCard title="Assertividade horária" value={formatOptionalPercent(model.accuracy)} helper={`1 − WAPE · ${model.evaluatedHours} horas testadas`} icon={Gauge} tone="green" />
-          <ForecastCard title="Assertividade diária" value={formatOptionalPercent(model.dailyAccuracy)} helper="erro dos totais de cada dia" icon={Gauge} tone="blue" />
+          <ForecastCard title="Viés da base histórica" value={formatOptionalPercent(model.bias)} helper="positivo: superestimação no teste histórico" icon={RefreshCw} tone="green" />
+          <ForecastCard title="Assertividade horária da base" value={formatOptionalPercent(model.accuracy)} helper={`1 − WAPE · ${model.evaluatedHours} horas testadas`} icon={Gauge} tone="green" />
+          <ForecastCard title="Assertividade diária da base" value={formatOptionalPercent(model.dailyAccuracy)} helper="erro dos totais de cada dia no teste histórico" icon={Gauge} tone="blue" />
           <ForecastCard title="Pico previsto" value={formatOptionalNumber(model.peak.at ? model.peak.value : null)} helper={formatForecastDate(model.peak.at)} icon={Clock} tone="orange" />
         </div>
 
         <p className="text-xs font-bold text-muted">{model.modelLabels.join(" · ")}</p>
-        <p className="text-xs text-muted">Um modelo oficial por LOB em todo o sistema, com corte antes do início do dia. Teste reconstruído nos últimos 7 dias completos da base, sem usar o realizado do dia previsto. Assertividade horária mede também quando o volume entra; diária compara os totais. Não representa garantia de acerto.</p>
+        {model.adaptive ? <p className="text-xs text-muted">A estimativa de ADS combina o recebido no Real Time até o ciclo indicado com a previsão atualizada do restante de hoje. Os dias seguintes mantêm a base histórica. Atualização a cada hora enquanto esta aba estiver visível e ao voltar para ela.</p> : null}
+        <p className="text-xs text-muted">A base histórica usa somente dias completos anteriores ao dia previsto. Assertividade e viés comparam essa base com o realizado dos últimos 7 dias completos, sem usar o realizado do próprio dia para recalibrar a previsão testada. Esses indicadores não medem o acerto da atualização intradiária. Assertividade horária mede também quando o volume entra; diária compara os totais. Não representa garantia de acerto.</p>
         {model.warnings.map((warning) => <p key={warning} role="status" className="text-xs font-bold text-amber-700 dark:text-amber-300">{warning}</p>)}
         <div className="rounded-xl border border-border bg-white p-3">
           <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-sm font-black text-navy-950">Forecast {forecastViewOptions.find((option) => option.value === selectedView)?.label.toLowerCase()}</h3>
             <span className="text-xs font-bold text-muted">{selectedLob || "Todas as LOBs"} · {horizon} dias</span>
           </div>
-          {loading ? <EmptyBox label="Carregando forecast..." /> : <ForecastChart rows={model.chartRows} />}
+          {loading ? <EmptyBox label="Carregando forecast..." /> : <ForecastChart rows={model.chartRows} showBaseline={model.hasBaseline} />}
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-border bg-white">
@@ -1995,8 +1993,9 @@ function ForecastViewPanel({
               <tr>
                 <th className="px-3 py-3">Periodo</th>
                 <th className="px-3 py-3 text-right">Enqueue real</th>
-                <th className="px-3 py-3 text-right">Forecast</th>
-                <th className="px-3 py-3 text-right">Real − Forecast</th>
+                {model.hasBaseline ? <th className="px-3 py-3 text-right">Base histórica</th> : null}
+                <th className="px-3 py-3 text-right">{model.hasBaseline ? "Estimativa" : "Forecast"}</th>
+                <th className="px-3 py-3 text-right">{model.hasBaseline ? "Real − Base" : "Real − Forecast"}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/70">
@@ -2004,11 +2003,12 @@ function ForecastViewPanel({
                 <tr key={row.key} className="hover:bg-blue-50/40">
                   <td className="px-3 py-2 font-black text-navy-950">{row.label}</td>
                   <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(row.real)}{row.real !== null && !row.realComplete ? <small className="ml-1 text-amber-700 dark:text-amber-300">parcial</small> : null}</td>
+                  {model.hasBaseline ? <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(row.baseline)}</td> : null}
                   <td className="px-3 py-2 text-right font-bold text-navy-950">{formatOptionalNumber(row.forecast)}</td>
-                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(!row.realComplete || row.real === null || row.forecast === null ? null : row.real - row.forecast)}</td>
+                  <td className="px-3 py-2 text-right font-bold text-muted">{formatOptionalNumber(!row.realComplete || row.real === null || (model.hasBaseline ? row.baseline : row.forecast) === null ? null : row.real - (model.hasBaseline ? row.baseline! : row.forecast!))}</td>
                 </tr>
               ))}
-              {!model.tableRows.length ? <tr><td colSpan={4} className="px-3 py-8 text-center text-sm font-bold text-muted">Sem forecast valido para o filtro selecionado.</td></tr> : null}
+              {!model.tableRows.length ? <tr><td colSpan={model.hasBaseline ? 5 : 4} className="px-3 py-8 text-center text-sm font-bold text-muted">Sem forecast valido para o filtro selecionado.</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -2017,7 +2017,7 @@ function ForecastViewPanel({
   );
 }
 
-function ForecastChart({ rows }: { rows: ForecastChartRow[] }) {
+function ForecastChart({ rows, showBaseline }: { rows: ForecastChartRow[]; showBaseline: boolean }) {
   if (!rows.length) return <EmptyBox label="Sem pontos para exibir." />;
   return (
     <ResponsiveContainer width="100%" height={420}>
@@ -2025,15 +2025,17 @@ function ForecastChart({ rows }: { rows: ForecastChartRow[] }) {
         <CartesianGrid stroke="#E5EAF2" vertical={false} strokeDasharray="4 4" />
         <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 11, fontWeight: 700 }} tickLine={false} axisLine={false} minTickGap={18} />
         <YAxis tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
-        <RechartsTooltip content={<ForecastTooltip />} cursor={{ stroke: "#0f172a", strokeDasharray: "4 4" }} />
+        <RechartsTooltip content={<ForecastTooltip showBaseline={showBaseline} />} cursor={{ stroke: "#0f172a", strokeDasharray: "4 4" }} />
+        <Legend />
         <Line type="monotone" dataKey="real" name="Enqueue real" stroke="#2563EB" strokeWidth={3} dot={false} connectNulls={false} />
-        <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#0284C7" strokeWidth={3} strokeDasharray="5 5" dot={false} connectNulls={false} />
+        {showBaseline ? <Line type="monotone" dataKey="baseline" name="Base histórica" stroke="#94A3B8" strokeWidth={2} strokeDasharray="3 3" dot={false} connectNulls={false} /> : null}
+        <Line type="monotone" dataKey="forecast" name={showBaseline ? "Estimativa" : "Forecast"} stroke="#0284C7" strokeWidth={3} strokeDasharray="5 5" dot={false} connectNulls={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
 }
 
-function ForecastTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ForecastChartRow }> }) {
+function ForecastTooltip({ active, payload, showBaseline }: { active?: boolean; payload?: Array<{ payload: ForecastChartRow }>; showBaseline: boolean }) {
   if (!active || !payload?.length) return null;
   const row = payload[0].payload;
   return (
@@ -2041,7 +2043,8 @@ function ForecastTooltip({ active, payload }: { active?: boolean; payload?: Arra
       <p className="mb-2 font-black text-navy-950">{row.label}</p>
       <div className="space-y-1 text-muted">
         <div className="flex justify-between gap-4"><span>Enqueue real{row.real !== null && !row.realComplete ? " (parcial)" : ""}</span><span>{formatOptionalNumber(row.real)}</span></div>
-        <div className="flex justify-between gap-4"><span>Forecast</span><span>{formatOptionalNumber(row.forecast)}</span></div>
+        {showBaseline ? <div className="flex justify-between gap-4"><span>Base histórica</span><span>{formatOptionalNumber(row.baseline)}</span></div> : null}
+        <div className="flex justify-between gap-4"><span>{showBaseline ? "Estimativa" : "Forecast"}</span><span>{formatOptionalNumber(row.forecast)}</span></div>
       </div>
     </div>
   );
