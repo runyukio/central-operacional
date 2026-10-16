@@ -134,3 +134,30 @@ test("unavailable backlog, invalid schedules and duplicate forecast keys cannot 
     assert.equal(result.clearanceAt, null);
   }
 });
+
+test("the glide starts from live backlog and never re-adds observed arrivals from a revised partial hour", () => {
+  const result = buildAdsBacklogGlide({
+    snapshotTimestamp: at("11:30"), endTimestamp: at("13:00"), currentBacklog: 100, absRate: 0,
+    agents: [agent({end:at("13:00"),rate:100,status:"PRESENTE"})],
+    forecast: [
+      {dateKey:"2026-10-16",hour:11,input:350,remainingInput:50,observedUntil:at("11:30")},
+      {dateKey:"2026-10-16",hour:12,input:0},
+    ],
+  });
+  assert.deepEqual(result.points.map(point=>point.forecast),[50,0]);
+  assert.deepEqual(result.points.map(point=>point.capacity),[50,100]);
+  assert.deepEqual(result.points.map(point=>point.backlog),[100,0]);
+  assert.equal(result.clearanceAt,at("13:00"));
+});
+
+test("an invalid partial-hour remainder suppresses the glide instead of falling back to total-hour input", () => {
+  const result = buildAdsBacklogGlide({
+    snapshotTimestamp:at("11:30"),endTimestamp:at("12:00"),currentBacklog:100,absRate:0,
+    agents:[agent({rate:100,status:"PRESENTE"})],
+    forecast:[{dateKey:"2026-10-16",hour:11,input:350,observedUntil:at("11:30")}],
+  });
+  assert.equal(result.points[0].forecast,null);
+  assert.equal(result.points[0].backlog,null);
+  assert.equal(result.state,"incomplete");
+  assert.equal(result.clearanceAt,null);
+});

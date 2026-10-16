@@ -137,3 +137,26 @@ test("Brasil wall-clock cycles are independent of the browser or process timezon
     assert.equal(run([rows]).actualToday, null);
   } finally { if (timezone === undefined) delete process.env.TZ; else process.env.TZ = timezone; }
 });
+
+test("daily context compares observed arrivals with the frozen prior and sums only revised future demand", () => {
+  const reference = forecast();
+  const revised: ExecutiveForecastPoint[] = reference.map(point=>point.hour<11
+    ? {...point,input:60,remainingInput:0,observedUntil:at(point.hour+1)}
+    : point.hour===11 ? {...point,input:90,remainingInput:60,observedUntil:at(11.5)} : {...point,input:120});
+  const result = buildGlideDemandContext({snapshotTimestamp:at(11.5),queueHistories:[history(11.5)],forecast:revised,referenceForecast:reference,onlineActive:true});
+  assert.deepEqual(result,{
+    referenceToday:2400,actualToday:690,expectedToCycle:1150,remainingToday:1500,
+    updatedDayEstimate:2190,observedUntil:at(11.5),actualRecent3h:180,expectedRecent3h:300,adjusted:true,
+  });
+  assert.equal(reference.reduce((sum,point)=>sum+point.input,0),2400,"revising the current day cannot overwrite its historical reference");
+});
+
+test("a broken revised remainder does not destroy valid observed or baseline context", () => {
+  const reference=forecast(),revised=reference.map(point=>point.hour===11?{...point,input:300,observedUntil:at(11.5)}:point);
+  const result=buildGlideDemandContext({snapshotTimestamp:at(11.5),queueHistories:[history(11.5)],forecast:revised,referenceForecast:reference,onlineActive:true});
+  assert.equal(result.referenceToday,2400);
+  assert.equal(result.actualToday,690);
+  assert.equal(result.expectedToCycle,1150);
+  assert.equal(result.remainingToday,null);
+  assert.equal(result.updatedDayEstimate,null);
+});

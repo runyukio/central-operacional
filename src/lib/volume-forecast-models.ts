@@ -22,7 +22,7 @@ type Daily = {
 export type ForecastCandidate = {
   id: string;
   family: string;
-  kind: "naive" | "hourly" | "blend" | "profile" | "ensemble" | "recent95" | "adsSeasonal";
+  kind: "naive" | "hourly" | "blend" | "profile" | "ensemble" | "recent95" | "adsSeasonal" | "adsRobustPrior";
   window: number;
   halfLife?: number;
   weekday?: boolean;
@@ -49,6 +49,12 @@ export const VOLUME_CANDIDATES: ForecastCandidate[] = [
     family: "Ensemble amortecido e padrão de fim de semana",
     kind: "adsSeasonal",
     window: 120,
+  },
+  {
+    id: "ads-robust-prior",
+    family: "Base por dia da semana e nível recente robusto",
+    kind: "adsRobustPrior",
+    window: 56,
   },
   ...[1, 7, 14].map((window) => ({
     id: `naive-${window}d`,
@@ -317,7 +323,7 @@ function median(values: number[]) {
 }
 
 /** Calendar-specific level and shape; zero baselines cannot infer a positive restart. */
-function robustWeekend(days: ForecastDay[], target: number, cut: number): number[] | null {
+function robustWeekday(days: ForecastDay[], target: number, cut: number): number[] | null {
   const reference = chooseDays(days, cut, 56);
   const byWeekday = Array.from({ length: 7 }, (_, weekday) => reference.filter(day => day.weekday === weekday));
   if (byWeekday.some(rows => rows.length < 2)) return null;
@@ -344,7 +350,7 @@ function adsSeasonal(days: ForecastDay[], target: number, cut: number): number[]
   if (!damped) return null;
   const weekday = new Date(target).getUTCDay();
   if (weekday !== 0 && weekday !== 6) return damped;
-  const robust = robustWeekend(days, target, cut);
+  const robust = robustWeekday(days, target, cut);
   // Component rounding, then the equal blend, is part of the evaluated model.
   return robust ? damped.map((value, hour) => Math.round((value + robust[hour]) / 2)) : null;
 }
@@ -402,6 +408,7 @@ export function predictCandidate(
   let values: number[] | null = null;
   if (c.kind === "ensemble") values = ensemble(days, target, cut);
   if (c.kind === "adsSeasonal") values = adsSeasonal(days, target, cut);
+  if (c.kind === "adsRobustPrior") values = robustWeekday(days, target, cut);
   if (c.kind === "recent95") {
     const seven = hourly(days, target, cut, { window: 7, halfLife: 3.5 }),
       three = hourly(days, target, cut, { window: 3, halfLife: 1.5 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createVolumeForecastEngine, evaluateVolumeForecast, forecastDates, operationalForecastToday } from "./volume-forecast-core";
+import { forecastRemainingInInterval, type ExecutiveForecastPoint } from "./executive-forecast-core";
 const H=3600000;
 const data=Array.from({length:24*35},(_,hour)=>({at:new Date(Date.UTC(2026,7,1,hour)),input:100+hour%24*3}));
 test("one target/cutoff yields the same forecast irrespective of range or call order",()=>{
@@ -40,4 +41,26 @@ test("zero denominator has unavailable accuracy rather than 100 percent",()=>{
  const zeros=data.map(r=>({...r,input:0}));
  const score=evaluateVolumeForecast(createVolumeForecastEngine(zeros),["2026-09-01"]);
  assert.equal(score.hours,24);assert.equal(score.wape,null);assert.equal(score.accuracy,null);
+});
+
+test("a revised partial hour integrates only the remaining demand, independently of its observed component", () => {
+ const at = (minutes: number) => Date.parse("2026-10-16T11:00:00Z") + minutes * 60_000;
+ const revised: ExecutiveForecastPoint = {dateKey:"2026-10-16",hour:11,input:350,remainingInput:50,observedUntil:at(30)};
+ assert.equal(forecastRemainingInInterval(revised,at(30),at(60)),50);
+ assert.equal(forecastRemainingInInterval(revised,at(30),at(45)),25);
+ assert.equal(forecastRemainingInInterval(revised,at(45),at(60)),25);
+ assert.equal(forecastRemainingInInterval({...revised,input:9999},at(30),at(60)),50,"already observed cases cannot change future demand");
+ assert.equal(forecastRemainingInInterval({dateKey:"2026-10-16",hour:11,input:350},at(30),at(60)),175,"ordinary baseline hours keep proportional integration");
+});
+
+test("fully observed hours and an explicit zero remainder contribute zero, while incomplete metadata is unavailable", () => {
+ const start=Date.parse("2026-10-16T11:00:00Z"),end=start+H;
+ assert.equal(forecastRemainingInInterval({dateKey:"2026-10-16",hour:11,input:300,remainingInput:0,observedUntil:end},start,end),0);
+ assert.equal(forecastRemainingInInterval({dateKey:"2026-10-16",hour:11,input:300,remainingInput:0,observedUntil:start+H/2},start+H/2,end),0);
+ for(const point of [
+  {dateKey:"2026-10-16",hour:11,input:300,remainingInput:50},
+  {dateKey:"2026-10-16",hour:11,input:300,observedUntil:start+H/2},
+  {dateKey:"2026-10-16",hour:11,input:300,remainingInput:50,observedUntil:end+1},
+  {dateKey:"2026-10-16",hour:11,input:300,remainingInput:50,observedUntil:end},
+ ]) assert.equal(forecastRemainingInInterval(point,start+H/2,end),null);
 });

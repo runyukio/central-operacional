@@ -1,5 +1,5 @@
 import { parseAdsExecutiveCycle } from "./ads-executive-report-core";
-import type { ExecutiveForecastPoint } from "./executive-forecast-core";
+import { forecastRemainingInInterval, type ExecutiveForecastPoint } from "./executive-forecast-core";
 
 const HOUR = 3_600_000;
 const HALF_HOUR = HOUR / 2;
@@ -18,6 +18,7 @@ export type GlideDemandContext = {
   observedUntil: number;
   actualRecent3h: number | null;
   expectedRecent3h: number | null;
+  adjusted?: boolean;
 };
 
 function cycleTimestamp(cycle: string) {
@@ -67,40 +68,51 @@ function observedWindow(histories: ReturnType<typeof indexHistory>[], start: num
 function forecastKey(dateKey: string, hour: number) { return `${dateKey}|${hour}`; }
 
 /** A missing/invalid hourly input never becomes zero, including at partial-hour boundaries. */
-function expectedWindow(forecast: Map<string, number | null>, start: number, end: number): number | null {
+function expectedWindow(forecast: Map<string, ExecutiveForecastPoint | null>, start: number, end: number, remainingOnly = false): number | null {
   let total = 0;
   for (let at = Math.floor(start / HOUR) * HOUR; at < end; at += HOUR) {
     const date = new Date(at), value = forecast.get(forecastKey(date.toISOString().slice(0, 10), date.getUTCHours()));
     if (value === undefined || value === null) return null;
-    total += value * (Math.min(end, at + HOUR) - Math.max(start, at)) / HOUR;
+    const volume = remainingOnly ? forecastRemainingInInterval(value, Math.max(start, at), Math.min(end, at + HOUR)) : value.input * (Math.min(end, at + HOUR) - Math.max(start, at)) / HOUR;
+    if (volume === null) return null;
+    total += volume;
   }
   return total;
 }
 
-/** Read-only context: compares the canonical forecast with observed arrivals without changing any projection. */
+function indexForecast(points: ExecutiveForecastPoint[]) {
+  const result = new Map<string, ExecutiveForecastPoint | null>();
+  for (const point of points) {
+    if (!Number.isInteger(point.hour) || point.hour < 0 || point.hour > 23) continue;
+    const key = forecastKey(point.dateKey, point.hour);
+    const value = Number.isFinite(point.input) && point.input >= 0 ? point : null;
+    if (result.has(key)) result.set(key, null);
+    else result.set(key, value);
+  }
+  return result;
+}
+
+/** Compare elapsed actuals with the frozen prior and integrate only the revised future. */
 export function buildGlideDemandContext(input: {
   snapshotTimestamp: number;
   queueHistories: GlideDemandHistoryPoint[][];
   forecast: ExecutiveForecastPoint[];
+  referenceForecast?: ExecutiveForecastPoint[];
+  onlineActive?: boolean;
 }): GlideDemandContext {
   const snapshotDate = new Date(input.snapshotTimestamp);
   if (!Number.isFinite(snapshotDate.getTime())) throw new Error("Ciclo inválido para o contexto de demanda ADS.");
   const dateKey = snapshotDate.toISOString().slice(0, 10);
   const dayStart = Math.floor(input.snapshotTimestamp / DAY) * DAY;
   const dayEnd = dayStart + DAY;
-  const byHour = new Map<string, number | null>();
-  for (const point of input.forecast) {
-    if (!Number.isInteger(point.hour) || point.hour < 0 || point.hour > 23) continue;
-    const key = forecastKey(point.dateKey, point.hour);
-    const value = Number.isFinite(point.input) && point.input >= 0 ? point.input : null;
-    if (byHour.has(key)) byHour.set(key, null);
-    else byHour.set(key, value);
-  }
+  const byHour = indexForecast(input.forecast), referencePoints = input.referenceForecast ?? input.forecast, reference = indexForecast(referencePoints);
   const todayPoints = input.forecast.filter(point => point.dateKey === dateKey);
   const todayComplete = todayPoints.length === 24 && todayPoints.every(point => Number.isInteger(point.hour) && point.hour >= 0 && point.hour <= 23 && byHour.get(forecastKey(dateKey, point.hour)) != null);
-  const referenceToday = todayComplete ? expectedWindow(byHour, dayStart, dayEnd) : null;
-  const expectedToCycle = todayComplete ? expectedWindow(byHour, dayStart, input.snapshotTimestamp) : null;
-  const remainingToday = todayComplete ? expectedWindow(byHour, input.snapshotTimestamp, dayEnd) : null;
+  const referenceTodayPoints = referencePoints.filter(point => point.dateKey === dateKey);
+  const referenceComplete = referenceTodayPoints.length === 24 && referenceTodayPoints.every(point => Number.isInteger(point.hour) && point.hour >= 0 && point.hour <= 23 && reference.get(forecastKey(dateKey, point.hour)) != null);
+  const referenceToday = referenceComplete ? expectedWindow(reference, dayStart, dayEnd) : null;
+  const expectedToCycle = referenceComplete ? expectedWindow(reference, dayStart, input.snapshotTimestamp) : null;
+  const remainingToday = todayComplete ? expectedWindow(byHour, input.snapshotTimestamp, dayEnd, true) : null;
   const histories = input.queueHistories.map(history => indexHistory(history, input.snapshotTimestamp));
   const actualToday = observedWindow(histories, dayStart, input.snapshotTimestamp);
   return {
@@ -108,6 +120,7 @@ export function buildGlideDemandContext(input: {
     updatedDayEstimate: actualToday !== null && remainingToday !== null ? actualToday + remainingToday : null,
     observedUntil: input.snapshotTimestamp,
     actualRecent3h: observedWindow(histories, input.snapshotTimestamp - 3 * HOUR, input.snapshotTimestamp),
-    expectedRecent3h: expectedWindow(byHour, input.snapshotTimestamp - 3 * HOUR, input.snapshotTimestamp),
+    expectedRecent3h: expectedWindow(reference, input.snapshotTimestamp - 3 * HOUR, input.snapshotTimestamp),
+    ...(input.onlineActive === undefined ? {} : { adjusted: input.onlineActive }),
   };
 }

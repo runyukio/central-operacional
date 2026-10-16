@@ -90,7 +90,7 @@ export async function readAdsBacklogGlide(actor: Actor, query: AdsBacklogGlideQu
   const stale = snapshotTimestamp !== null && (cycleAgeMinutes! > ADS_GLIDE_STALE_MINUTES || cycleAgeMinutes! < -5 || snapshotAgeMinutes === null || snapshotAgeMinutes > ADS_GLIDE_STALE_MINUTES || snapshotAgeMinutes < -5);
   const warnings = [...plan.warnings, ...absReference.warnings,
     "Projeção consolidada de ADS: considera capacidade compartilhada entre filas. Restrições de skill, prioridade e roteamento podem impedir a limpeza de uma fila específica.",
-    "As entradas futuras usam a previsão histórica da Central. O ritmo recebido hoje é exibido separadamente e não é extrapolado para todo o horizonte.",
+    "A referência histórica é revista para as horas restantes de hoje conforme as entradas do Real Time. O ritmo parcial não é extrapolado para os dias seguintes.",
     "O ABS observado nos últimos sete dias completos é aplicado somente a turnos ainda sem presença confirmada. Não há novo desconto de pausas nem fator 1,29."
   ];
   if (stale) warnings.push("O ciclo ou a importação do Real Time está desatualizado ou com horário inconsistente. A projeção parte do ciclo indicado; a previsão de limpeza foi suspensa.");
@@ -112,11 +112,15 @@ export async function readAdsBacklogGlide(actor: Actor, query: AdsBacklogGlideQu
   })];
   const employeeIds = [...new Set(agents.map((agent) => agent.employeeId))];
   const [forecast, attendances] = await Promise.all([
-    loadExecutiveForecastRange("ADS", glideForecastDates(snapshotTimestamp - 3 * 3_600_000, endTimestamp)),
+    loadExecutiveForecastRange("ADS", glideForecastDates(snapshotTimestamp - 3 * 3_600_000, endTimestamp), { asOfCycle: snapshotCycle ?? undefined }),
     employeeIds.length ? prisma.attendanceRecord.findMany({ where: { employeeId: { in: employeeIds }, date: { gte: new Date(capacityDay(addCapacityDays(today, -1))), lt: new Date(endTimestamp) } }, select: { employeeId: true, scheduleId: true, date: true, status: true } }) : []
   ]);
+  if (forecast.adaptive?.cycle === snapshotCycle && forecast.adaptive.snapshotIntegrity === "incomplete") {
+    warnings.push(...forecast.warnings, "O último ciclo está com cobertura de filas ADS incompleta ou inconsistente. A soma parcial não representa o backlog total; atualize a fonte para retomar a previsão de limpeza.");
+    return { ...base, currentBacklog: null, points: [], clearanceAt: null, reaccumulates: false, state: stale ? "stale" : "incomplete", warnings: [...new Set(warnings)] };
+  }
   const { confirmedPresent, unavailable } = resolveGlideAttendance(agents, snapshotTimestamp, attendances.map((row) => ({ ...row, date: capacityDate(row.date.getTime()) })));
-  const demand = buildGlideDemandContext({ snapshotTimestamp, queueHistories: queueRows.map(row => row.history), forecast: forecast.points });
+  const demand = buildGlideDemandContext({ snapshotTimestamp, queueHistories: queueRows.map(row => row.history), forecast: forecast.points, referenceForecast: forecast.baselinePoints, onlineActive: forecast.adaptive?.status === "active" });
   const result = buildAdsBacklogGlide({ snapshotTimestamp, endTimestamp, currentBacklog, agents, forecast: forecast.points, confirmedPresent, unavailable, stale, absRate: absReference.rate });
   warnings.push(...forecast.warnings);
   if (result.points.some((point) => point.missingAgents > 0)) warnings.push("Há agentes sem referência de produtividade. A capacidade é incompleta e a previsão de limpeza foi suspensa.");
