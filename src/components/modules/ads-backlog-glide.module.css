@@ -1,0 +1,23 @@
+.metrics { display: grid; grid-template-columns: 1fr 1.4fr .8fr; gap: 18px; border-block: 1px solid var(--border); padding: 18px 0; }
+.metrics > div { min-width: 0; }
+.metricLabel { display: block; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.metricValue { display: block; margin-top: 8px; font-size: 28px; line-height: 1.2; letter-spacing: -.03em; overflow-wrap: anywhere; }
+.eta { font-size: 22px; }
+.warning, .assumption { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
+.assumption { color: var(--muted); background: var(--space-tint); }
+.warning { color: #92400e; border: 1px solid #fcd34d; background: #fffbeb; }
+:global(.dark) .warning { color: #fcd34d; background: #78350f33; border-color: #92400e; }
+.tableViewport { container-type: inline-size; min-width: 0; }
+.hourTable { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
+.hourTable th { padding: 10px 8px; font-size: 11px; font-weight: 700; }
+.hourTable td { padding: 10px 8px; border-top: 1px solid var(--border); font-size: 12px; vertical-align: middle; overflow-wrap: anywhere; }
+.hourTable th:first-child { width: 17%; }
+@media (max-width: 640px) { .metrics { grid-template-columns: 1fr; gap: 16px; } .metricValue { font-size: 24px; } .eta { font-size: 20px; } }
+@container (max-width: 799px) {
+  .hourTable, .hourTable tbody { display: block; }
+  .hourTable thead { display: none; }
+  .hourTable tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px; margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; }
+  .hourTable td { border: 0; padding: 0; }
+  .hourTable td:first-child, .hourTable td:last-child { grid-column: 1 / -1; }
+  .hourTable td::before { content: attr(data-label); display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+}
