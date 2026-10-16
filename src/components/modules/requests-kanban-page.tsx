@@ -1,6 +1,6 @@
 "use client";
 
-import { DAY_OFF_REQUEST_START, DAY_OFF_REQUEST_END, DAY_OFF_REQUEST_NOTICE, isDayOffRequestCreationEnabled, validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
+import { DAY_OFF_REQUEST_START, DAY_OFF_REQUEST_END, DAY_OFF_REQUEST_NOTICE, DAY_OFF_OCTOBER_END, validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 import { PairedSwapFields } from "./paired-swap-fields";
 
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
@@ -80,9 +80,9 @@ function createDefaultRequestDraft() {
     requestedDate: "",
     dayOffKind: "PAIRED_DAY_OFF_SWAP" as DayOffKind,
     partnerEmployeeId: "",
-    currentDayOffDate: DAY_OFF_REQUEST_START,
-    desiredDayOffDate: "2026-11-02",
-    dayOffToSellDate: DAY_OFF_REQUEST_START,
+    currentDayOffDate: offsetOperationalDateInput(1),
+    desiredDayOffDate: offsetOperationalDateInput(4),
+    dayOffToSellDate: offsetOperationalDateInput(1),
     availabilityShift: "Manhã",
     preferredStartTime: "",
     preferredEndTime: "",
@@ -180,7 +180,7 @@ function RequestCreateModal({
               }}
               className="h-11 w-full rounded-lg border border-border px-3 outline-none"
             >
-              {requestTypes.filter((type) => isDayOffRequestCreationEnabled(type) && (type !== "Alteração de Adiantamento" || isMonthlyAdvanceRequestPeriodOpen())).map((type) => (
+              {requestTypes.filter((type) => type !== "Alteração de Adiantamento" || isMonthlyAdvanceRequestPeriodOpen()).map((type) => (
                 <option key={type}>{type}</option>
               ))}
             </select>
@@ -205,11 +205,11 @@ function RequestCreateModal({
                 <>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-semibold text-muted">Data atual da folga</span>
-                    <input type="date" value={draft.currentDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, currentDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                    <input type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_OCTOBER_END} value={draft.currentDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, currentDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
                   </label>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-semibold text-muted">Nova data desejada</span>
-                    <input type="date" value={draft.desiredDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                    <input type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_OCTOBER_END} value={draft.desiredDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
                   </label>
                 </>
               ) : null}
@@ -232,7 +232,7 @@ function RequestCreateModal({
                 <>
                   <label className="block">
                     <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada para folga</span>
-                    <input type="date" value={draft.desiredDayOffRequestDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffRequestDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                    <input type="date" min={DAY_OFF_REQUEST_START} max={DAY_OFF_OCTOBER_END} value={draft.desiredDayOffRequestDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffRequestDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
                   </label>
                   <FormSelect label="Motivo" value={draft.dayOffReason} options={["Pessoal", "Saúde", "Familiar", "Compromisso externo", "Estudos", "Emergência", "Outro"]} onChange={(value) => setDraft((current) => ({ ...current, dayOffReason: value }))} />
                   <FormSelect label="Urgência" value={draft.urgency} options={requestPriorities} onChange={(value) => setDraft((current) => ({ ...current, urgency: value }))} />

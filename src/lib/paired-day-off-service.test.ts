@@ -195,11 +195,11 @@ test("creation API service routes paired requests through the two-person workflo
 });
 
 for (const dates of [
-  { currentDayOffDate: "2026-10-31" },
+  { currentDayOffDate: "2026-09-30" },
   { desiredDayOffDate: "2026-12-01" },
   { currentDayOffDate: "2027-11-10", desiredDayOffDate: "2027-11-12" }
 ]) {
-  test(`paired swap restricts both target dates to November 2026: ${JSON.stringify(dates)}`, async () => {
+  test(`paired swap restricts both target dates to October/November 2026: ${JSON.stringify(dates)}`, async () => {
     await assert.rejects(createPairedSwap("requester-user", { ...input, ...dates }), /novembro de 2026/);
     const result = await createOperationalRequest(requesterActor, { ...input, ...dates });
     assert.ok("error" in result);
