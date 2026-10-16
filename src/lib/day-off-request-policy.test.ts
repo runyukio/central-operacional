@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { validateDayOffRequestPolicy } from "./day-off-request-policy";
 
-for (const month of ["10", "11"]) {
+for (const month of Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, "0"))) {
   for (const kind of ["PAIRED_DAY_OFF_SWAP", "DAY_OFF_SWAP", "DAY_OFF_SELL", "DAY_OFF_REQUEST"]) {
     test(`${kind}: ${month}/2026 follows the monthly availability`, () => {
       const result = validateDayOffRequestPolicy({
@@ -34,3 +34,9 @@ test("day off requests use the same fallback target dates as the service", () =>
 test("unrelated requests keep their availability", () => {
   assert.equal(validateDayOffRequestPolicy({ type: "Troca de Turno", requestedDate: "2026-12-01" }), "");
 });
+
+for (const kind of ["PAIRED_DAY_OFF_SWAP", "DAY_OFF_SELL"]) {
+  test(`${kind}: future years and cross-year dates are available`, () => {
+    assert.equal(validateDayOffRequestPolicy({ dayOffKind: kind, currentDayOffDate: "2027-12-31", desiredDayOffDate: "2028-01-02", dayOffToSellDate: "2028-02-29" }), "");
+  });
+}
