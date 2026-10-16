@@ -6,7 +6,7 @@ import { buildAdsExecutiveReportSnapshot } from "./ads-executive-report-core";
 import { VOLUME_FORECAST_POLICIES } from "./volume-forecast-policies";
 const day = "2026-09-20", H = 3600000;
 function series(value: number): ForecastPayload["series"][number] {
-  return { lob: "ADS", points: Array.from({length:24}, (_,hour) => ({dateKey:day,hour,input:value,model:"report-ensemble",cutoff:day})), actuals: [], latestVolumeAt:null, updatedAt:null, version:"test",modelVersion:"test",modelLabel:VOLUME_FORECAST_POLICIES.ADS.label,cutoff:day,evaluation:null,warnings:[] };
+  return { lob: "ADS", points: Array.from({length:24}, (_,hour) => ({dateKey:day,hour,input:value,model:VOLUME_FORECAST_POLICIES.ADS.id,cutoff:day})), actuals: [], latestVolumeAt:null, updatedAt:null, version:"test",modelVersion:"test",modelLabel:VOLUME_FORECAST_POLICIES.ADS.label,cutoff:day,evaluation:null,warnings:[] };
 }
 function payload(rows = [series(10)]): ForecastPayload { return { today:day,horizon:1,canImport:false,lobs:["ADS"],warnings:[],series:rows }; }
 test("Performance hours, daily totals and executive exports use identical server points, including zero", () => {
@@ -34,7 +34,7 @@ test("partial actual days cannot be compared with full-day forecasts", () => {
 });
 test("LOB policies are distinct and centrally controlled", () => {
   assert.equal(new Set(Object.values(VOLUME_FORECAST_POLICIES).map(p=>p.id)).size,3);
-  assert.equal(VOLUME_FORECAST_POLICIES.ADS.id,"report-ensemble");
+  assert.equal(VOLUME_FORECAST_POLICIES.ADS.id,"ads-seasonal-damped");
   assert.equal(VOLUME_FORECAST_POLICIES.VIDEO.id,"daily-3-h0-profile-120-all");
   assert.equal(VOLUME_FORECAST_POLICIES.COMMENTS.id,"weekday-28d-h7");
 });

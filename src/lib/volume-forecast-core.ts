@@ -23,7 +23,7 @@ export {
   operationalForecastToday,
   type VolumeObservation,
 } from "./volume-forecast-time";
-export const VOLUME_FORECAST_VERSION = "volume-v3-lob-hourly-167-complete-cutoff";
+export const VOLUME_FORECAST_VERSION = "volume-v4-ads-seasonal-damped";
 export type VolumeModel = string;
 export type VolumeForecastPoint = {
   dateKey: string;
