@@ -8,8 +8,8 @@ One read-only source, `volume-forecast-service.ts`, supplies Performance, Real T
 - Queue ownership follows the existing Performance mapping, including ADS overrides. Aggregate incoming volume by queue/hour before downstream allocation. Only successful imports or legacy rows without a batch, with nonnegative values, enter training. No agent join multiplies input.
 - Performance stores operational São Paulo wall-clock values in UTC fields. Do not apply the UTC offset again. The execution date is calculated in America/Sao_Paulo.
 - Historical targets use the start of their own date as cutoff. Today and future targets use today's midnight. Only complete observed 24-hour days strictly before the cutoff enter fitting. Training windows are anchored to the most recent complete observed day before that cutoff, including when imports are stale; the warning remains visible. Explicit zeros count; absent hours are not zeros. Forecasts never become training observations.
-- Policies are fixed per LOB in `volume-forecast-policies.ts`, version `volume-v3-lob-hourly-167-complete-cutoff`. All consumers use them. There is no client-selected model, in-day recalibration or expensive runtime model tournament. Parameters fit the latest available historical data on each source revision.
-- ADS retains the recency-adjusted ensemble. VIDEO uses the last three calendar days' daily volume (at least two complete days) and a volume-weighted hourly profile over up to 120 days. COMMENTS uses matching weekdays/hours from the last 28 days, exponentially weighted with seven-day half-life (at least two matching complete days).
+- Policies are fixed per LOB in `volume-forecast-policies.ts`, version `volume-v4-ads-seasonal-damped`. All consumers use them. There is no client-selected model, in-day recalibration or expensive runtime model tournament. Parameters fit the latest available historical data on each source revision.
+- ADS uses a damped ensemble with an explicit weekend seasonal blend, described below. VIDEO uses the last three calendar days' daily volume (at least two complete days) and a volume-weighted hourly profile over up to 120 days. COMMENTS uses matching weekdays/hours from the last 28 days, exponentially weighted with seven-day half-life (at least two matching complete days).
 - With inadequate history, forecast is unavailable; no undocumented model fallback or invented observations.
 - The source coverage budget is 142 calendar days before each allowed cutoff, including training/evaluation buffer. The same bound is enforced inside the engine, so fetching a wider date range cannot introduce older training data and change a stale forecast.
 - CEC CPD/FRT is not incoming volume. The API reports that limitation rather than manufacturing a forecast. HC/Glide path performance scenarios and Omie payment dates are not incoming-volume forecasts and remain unchanged.
@@ -17,7 +17,29 @@ One read-only source, `volume-forecast-service.ts`, supplies Performance, Real T
 - Performance cancels old requests, labels incomplete actual days, suppresses full-day comparisons against partial actuals, and warns about stale bases. No client fallback fits Real Time actuals.
 - Finite backlog target dates are unchanged. Historical workbook forecasts are removed. Missing canonical forecasts cannot reactivate expired deliveries or fall back to workbook values.
 
-## Model comparison, 20 September 2026
+## ADS correction, 16 October 2026
+
+The former ADS ensemble projected 22,462 arrivals for Saturday 17 October with cutoff 16 October. The current imported source has 15 complete Saturdays from July onwards; their maximum is 15,237 and the latest four average 10,584.25. This history is context, not a hard cap. October 15 is partial, so October 14 (27,595 arrivals) is the latest complete training day. The ensemble's unadjusted Saturday blend totals 13,003.59; its extra recent multipliers of 1.59–1.85 raise the rounded total to 22,462. Recent inputs were affecting the components, learned weights and an additional multiplier simultaneously, while only about 26% of effective component weight distinguished the weekday.
+
+The `ads-seasonal-damped` candidate retains the learned ensemble components and halves only the deviation of its extra multiplier from one: `A -> 1 + 0.5 * (A - 1)`. On Saturdays and Sundays it averages that damped hourly forecast equally with a robust weekday forecast. The latter uses median daily totals for each weekday over 56 calendar days, a median seven-complete-day level after dividing each day by its weekday baseline, and a normalized median hourly profile for the target weekday. Each weekday needs two reference days; the recent seven days must be present. Missing history or a zero baseline with positive observed demand is unavailable, with no undocumented fallback. An all-zero observed reference remains zero. Component and final-hour integer rounding deliberately match the evaluated prototype.
+
+The original ensemble remains in the candidate library for comparison; only the ADS production policy changes. Full source observations, including October 14, remain intact. No historical maximum is used as a ceiling, no incomplete day or Real Time reconciliation is substituted into fitting, and predictions are never fed back as observations. The shared 142-day snapshot budget, latest-complete anchor and 120-day ensemble history remain in force. Bumping the model version invalidates old forecast cache keys across all consumers.
+
+The review reconstructed 106 complete days (July 1–October 14) from the current successful-import source and compared the original, damped and seasonal alternatives. Development was iterative after the anomaly was identified. The adopted combination was fifth in the August diagnostic ranking and was chosen for its mechanism and balance across subsequent checks; it was **not** a blind selection winner. These are retrospective temporal comparisons, not a pristine untouched holdout or archived issued forecasts. Partitions use identical complete days for every candidate.
+
+Combined error below is `0.7 * hourly WAPE + 0.3 * daily WAPE`, averaged equally across leads 1, 7 and 14:
+
+| Period | Days | Former ADS | Revised ADS |
+|---|---:|---:|---:|
+| August 3–30 | 28 | 22.73% | 22.00% |
+| August 31–September 27 | 28 | 26.47% | 25.27% |
+| September 28–October 14 | 17 | 47.85% | 46.04% |
+
+The August 31–September 27 comparison improves at every separately checked lead (1, 2, 7 and 14 days). With a missing latest training day, the lead-2 combined error improves from 27.37% to 24.75% over that period and 43.68% to 42.57% in the recent period. This does not establish superiority on every cut: ordinary lead-2 recent error worsens from 39.11% to 39.56%, and daily Saturday error in that recent cut worsens from 25.68% to 39.84%. There are only four Saturdays in each earlier partition and two in the recent partition; renewed spikes can still be underestimated. No probability or precision guarantee follows from these tests.
+
+At the reviewed source snapshot/cutoff, the revised shared forecast totals 13,920 on October 17, 13,050 on October 18 and 235,662 over October 16–29, versus 318,112 previously. These are conditional model outputs that update with the source, not received volume or permanent manual values. ADS glide paths, capacity calculations, Performance and executive exports all consume the same revised hourly points; ABS and schedules are separate inputs.
+
+## Original model comparison, 20 September 2026
 
 167 configurations were compared for each LOB: seasonal naive (1/7/14 days), hourly moving averages, exponential averages, weekday/hour seasonality, short/long blends, recent/seasonal blends, daily total × hourly profile, damped Holt trend × profile, and both previous ensemble/recent implementations. Windows range from 1 to 120 days.
 

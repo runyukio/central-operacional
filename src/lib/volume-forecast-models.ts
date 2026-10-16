@@ -22,7 +22,7 @@ type Daily = {
 export type ForecastCandidate = {
   id: string;
   family: string;
-  kind: "naive" | "hourly" | "blend" | "profile" | "ensemble" | "recent95";
+  kind: "naive" | "hourly" | "blend" | "profile" | "ensemble" | "recent95" | "adsSeasonal";
   window: number;
   halfLife?: number;
   weekday?: boolean;
@@ -42,6 +42,12 @@ export const VOLUME_CANDIDATES: ForecastCandidate[] = [
     id: "realtime-recent",
     family: "Recente 95% existente",
     kind: "recent95",
+    window: 120,
+  },
+  {
+    id: "ads-seasonal-damped",
+    family: "Ensemble amortecido e padrão de fim de semana",
+    kind: "adsSeasonal",
     window: 120,
   },
   ...[1, 7, 14].map((window) => ({
@@ -271,7 +277,7 @@ const ensembleFits = new WeakMap<
   ForecastDay[],
   Map<number, { rows: ForecastActual[]; weights: ForecastModelWeights }>
 >();
-function ensemble(days: ForecastDay[], target: number, cut: number) {
+function ensemble(days: ForecastDay[], target: number, cut: number, damping = 1) {
   const fits = ensembleFits.get(days) ?? new Map();
   ensembleFits.set(days, fits);
   if (!fits.has(cut)) {
@@ -291,14 +297,56 @@ function ensemble(days: ForecastDay[], target: number, cut: number) {
   const fit = fits.get(cut)!;
   return Array.from(
     { length: 24 },
-    (_, hour) =>
-      predictForecastHour(
+    (_, hour) => {
+      const point = predictForecastHour(
         fit.rows,
         new Date(target + hour * H),
         fit.rows.at(-1)!.at,
         fit.weights,
-      ).forecast,
+      );
+      // The four components already reflect recent demand. Preserve the legacy
+      // multiplier exactly by default; ADS applies half of its additional lift/drop.
+      return damping === 1 ? point.forecast : point.forecast / point.adjustment * (1 + damping * (point.adjustment - 1));
+    },
   );
+}
+
+function median(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+/** Calendar-specific level and shape; zero baselines cannot infer a positive restart. */
+function robustWeekend(days: ForecastDay[], target: number, cut: number): number[] | null {
+  const reference = chooseDays(days, cut, 56);
+  const byWeekday = Array.from({ length: 7 }, (_, weekday) => reference.filter(day => day.weekday === weekday));
+  if (byWeekday.some(rows => rows.length < 2)) return null;
+  const base = byWeekday.map(rows => median(rows.map(day => day.total)));
+  const recent = chooseDays(days, cut, 7);
+  if (recent.length !== 7) return null;
+  const normalized: number[] = [];
+  for (const day of recent) {
+    if (base[day.weekday] > 0) normalized.push(day.total / base[day.weekday]);
+    else if (day.total === 0) normalized.push(1);
+    else return null;
+  }
+  const weekday = new Date(target).getUTCDay(), total = base[weekday] * median(normalized);
+  if (total === 0) return Array<number>(24).fill(0);
+  const profiles = byWeekday[weekday].filter(day => day.total > 0);
+  if (!profiles.length) return null;
+  const shape = Array.from({ length: 24 }, (_, hour) => median(profiles.map(day => day.values[hour] / day.total)));
+  const shapeTotal = shape.reduce((sum, value) => sum + value, 0);
+  return shapeTotal > 0 ? shape.map(share => Math.round(total * share / shapeTotal)) : null;
+}
+
+function adsSeasonal(days: ForecastDay[], target: number, cut: number): number[] | null {
+  const damped = ensemble(days, target, cut, 0.5)?.map(value => Math.max(0, Math.round(value)));
+  if (!damped) return null;
+  const weekday = new Date(target).getUTCDay();
+  if (weekday !== 0 && weekday !== 6) return damped;
+  const robust = robustWeekend(days, target, cut);
+  // Component rounding, then the equal blend, is part of the evaluated model.
+  return robust ? damped.map((value, hour) => Math.round((value + robust[hour]) / 2)) : null;
 }
 function profile(rows: ForecastDay[], target: number, cut: number, c: Profile) {
   const weekday = new Date(target).getUTCDay(),
@@ -353,6 +401,7 @@ export function predictCandidate(
   const cut = Math.min(requestedCut, lastObserved.at + D);
   let values: number[] | null = null;
   if (c.kind === "ensemble") values = ensemble(days, target, cut);
+  if (c.kind === "adsSeasonal") values = adsSeasonal(days, target, cut);
   if (c.kind === "recent95") {
     const seven = hourly(days, target, cut, { window: 7, halfLife: 3.5 }),
       three = hourly(days, target, cut, { window: 3, halfLife: 1.5 });

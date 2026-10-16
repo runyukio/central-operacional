@@ -1,13 +1,13 @@
 /** Central, versioned LOB policies. No client or report can select a different model.
- * Compared against 167 configurations; August selection and separate Aug 31–Sep 16 validation.
- * Do not replace an incumbent with a challenger that fails the separate validation.
+ * The original 167-model comparison and the later ADS anomaly review are documented
+ * separately. Changes require time-separated retrospective checks, not a desired total.
  */
 export const VOLUME_FORECAST_POLICIES = {
   ADS: {
-    id: "report-ensemble",
-    label: "ADS · ensemble ajustado ao volume recente",
+    id: "ads-seasonal-damped",
+    label: "ADS · sazonalidade semanal e tendência amortecida",
     rationale:
-      "Best joint daily/hourly score in selection; retained in the separate validation.",
+      "Damp duplicate recent amplification and blend weekends with a robust weekday reference; reviewed across retrospective periods and horizons, with remaining spike risk.",
   },
   VIDEO: {
     id: "daily-3-h0-profile-120-all",
