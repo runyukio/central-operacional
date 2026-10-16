@@ -2,7 +2,6 @@ import { CAPACITY_HOUR, capacityDate, capacityDay, uniqueCapacityIntervals, type
 import type { ExecutiveForecastPoint } from "./executive-forecast-core";
 import { isAbsenceStatus, normalizeOperationalStatus } from "./attendance-calculation";
 
-export const ADS_GLIDE_ABS_RATE = 0.075;
 export const ADS_GLIDE_STALE_MINUTES = 90;
 export type AdsGlideAgent = CapacitySchedule & { rate: number | null };
 export type AdsBacklogGlidePoint = {
@@ -14,7 +13,7 @@ export type AdsBacklogGlidePoint = {
   hour: number;
   forecast: number | null;
   scheduledAgents: number;
-  effectiveAgentHours: number;
+  effectiveAgentHours: number | null;
   averageProductivity: number | null;
   capacity: number | null;
   backlog: number | null;
@@ -52,10 +51,10 @@ export function buildAdsBacklogGlide(input: {
   confirmedPresent?: Set<string>;
   unavailable?: Set<string>;
   stale?: boolean;
-  absRate?: number;
+  absRate: number | null;
 }) {
-  const absRate = input.absRate ?? ADS_GLIDE_ABS_RATE;
-  if (!Number.isFinite(absRate) || absRate < 0 || absRate > 1) throw new Error("ABS inválido.");
+  const absRate = input.absRate;
+  if (absRate !== null && (!Number.isFinite(absRate) || absRate < 0 || absRate > 1)) throw new Error("ABS inválido.");
   if (!Number.isFinite(input.snapshotTimestamp) || !Number.isFinite(input.endTimestamp) || input.endTimestamp <= input.snapshotTimestamp) {
     return { points: [] as AdsBacklogGlidePoint[], clearanceAt: null, reaccumulates: false, state: (input.stale ? "stale" : "incomplete") as AdsBacklogGlideState };
   }
@@ -83,26 +82,27 @@ export function buildAdsBacklogGlide(input: {
     const key = `${dateKey}|${hour}`, incoming = forecasts.get(key);
     const forecast = incoming === undefined || invalidForecasts.has(key) ? null : incoming * durationHours;
     const active = agents.filter((agent) => agent.start !== null && agent.end !== null && agent.start < end && agent.end > start);
-    let effectiveAgentHours = 0, knownCapacity = 0;
+    let effectiveAgentHours = 0, knownCapacity = 0, missingAbs = false;
     const missing = new Set<string>();
     for (const agent of active) {
       const hours = (Math.min(end, agent.end!) - Math.max(start, agent.start!)) / CAPACITY_HOUR;
       // Confirmed attendance only removes uncertainty for the shift that has already started.
       const present = agent.start! <= input.snapshotTimestamp && (input.confirmedPresent?.has(agent.id) || ["PRESENTE", "ATRASO"].includes(agent.status));
-      const effectiveHours = hours * (present ? 1 : 1 - absRate);
+      if (!present && absRate === null) missingAbs = true;
+      const effectiveHours = hours * (present ? 1 : absRate === null ? 0 : 1 - absRate);
       effectiveAgentHours += effectiveHours;
       const rate = rates.get(agent.id);
       if (rate === null || rate === undefined || !Number.isFinite(rate) || rate < 0) missing.add(agent.employeeId);
       else knownCapacity += rate * effectiveHours;
     }
-    const capacity = missing.size || invalidSchedules ? null : knownCapacity;
+    const capacity = missing.size || invalidSchedules || missingAbs ? null : knownCapacity;
     if (forecast === null || capacity === null) incomplete = true;
     backlog = backlog !== null && forecast !== null && capacity !== null ? Math.max(0, backlog + forecast - capacity) : null;
     if (backlog === 0 && firstZero === null) firstZero = end;
     if (firstZero !== null && backlog !== null && backlog > 0) reaccumulates = true;
     points.push({ timestamp: end, intervalStart: start, durationHours, dateKey, hour, forecast,
       scheduledAgents: new Set(active.map((agent) => agent.employeeId)).size,
-      effectiveAgentHours, averageProductivity: capacity !== null && effectiveAgentHours > 0 ? capacity / effectiveAgentHours : null,
+      effectiveAgentHours: missingAbs ? null : effectiveAgentHours, averageProductivity: capacity !== null && effectiveAgentHours > 0 ? capacity / effectiveAgentHours : null,
       capacity, backlog, missingAgents: missing.size });
     start = end;
   }

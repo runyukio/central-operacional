@@ -7,13 +7,39 @@ const agent = (overrides: Partial<AdsGlideAgent> = {}): AdsGlideAgent => ({ id: 
 const forecast = (hours: number[], input = 10) => hours.map((hour) => ({ dateKey: "2026-10-16", hour, input }));
 
 test("burns live backlog against every forecast hour and applies expected ABS only to uncertain attendance", () => {
-  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("12:00"), currentBacklog: 30, agents: [agent()], forecast: forecast([8, 9, 10, 11]) };
+  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("12:00"), currentBacklog: 30, absRate: 0.075, agents: [agent()], forecast: forecast([8, 9, 10, 11]) };
   const uncertain = buildAdsBacklogGlide(input);
   assert.deepEqual(uncertain.points.map((row) => row.backlog), [21.5, 13, 4.5, 0]);
   assert.equal(uncertain.clearanceAt, at("12:00"));
   const present = buildAdsBacklogGlide({ ...input, confirmedPresent: new Set(["shift"]) });
   assert.deepEqual(present.points.map((row) => row.capacity), [20, 20, 20, 20]);
   assert.equal(present.clearanceAt, at("11:00"));
+});
+
+test("uses the observed ABS at full precision only for unconfirmed shifts", () => {
+  const observedAbs = 36 / 283;
+  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:00"), endTimestamp: at("10:00"), currentBacklog: 1000,
+    agents: [agent({ end: at("09:00"), rate: 100 }), agent({ id: "future", start: at("09:00"), rate: 100 })],
+    forecast: forecast([8, 9], 0), absRate: observedAbs, confirmedPresent: new Set(["shift"]) });
+  assert.equal(result.points[0].capacity, 100);
+  assert.equal(result.points[1].capacity, 100 * (1 - observedAbs));
+  assert.equal(result.points[1].effectiveAgentHours, 1 - observedAbs);
+});
+
+test("unavailable observed ABS cannot become zero or a fixed fallback, but confirmed presence remains known", () => {
+  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("10:00"), currentBacklog: 10,
+    agents: [agent({ end: at("09:00"), rate: 100 }), agent({ id: "future", start: at("09:00"), rate: 100 })],
+    forecast: forecast([8, 9], 0), absRate: null, confirmedPresent: new Set(["shift"]) };
+  const result = buildAdsBacklogGlide(input);
+  assert.equal(result.points[0].capacity, 100);
+  assert.equal(result.points[1].capacity, null);
+  assert.equal(result.points[1].effectiveAgentHours, null);
+  assert.equal(result.points[1].backlog, null);
+  assert.equal(result.state, "incomplete");
+  assert.equal(result.clearanceAt, null);
+  const zero = buildAdsBacklogGlide({ ...input, absRate: 0 });
+  assert.equal(zero.points[1].capacity, 100);
+  assert.equal(zero.state, "projected");
 });
 
 test("starts at the actual snapshot, prorates the partial hour and crosses midnight without shifting São Paulo twice", () => {
@@ -39,7 +65,7 @@ test("overlapping shifts of the same person cannot manufacture capacity", () => 
 });
 
 test("confirmed absence removes the shift, and presence does not carry into another shift of that person", () => {
-  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:00"), endTimestamp: at("11:00"), currentBacklog: 1000,
+  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:00"), endTimestamp: at("11:00"), currentBacklog: 1000, absRate: 0.075,
     agents: [agent({ end: at("09:00"), rate: 100 }), agent({ id: "tomorrow", start: at("09:00"), end: at("10:00"), rate: 100 }), agent({ id: "absent", employeeId: "b", rate: 100 })],
     confirmedPresent: new Set(["shift", "tomorrow"]), unavailable: new Set(["absent"]), forecast: forecast([8, 9, 10], 0) });
   assert.deepEqual(result.points.map((row) => row.capacity), [100, 92.5, 0]);
@@ -55,13 +81,13 @@ test("attendance overrides a still-scheduled absence, keeps presence shift-speci
   ]);
   assert.deepEqual([...resolved.unavailable].sort(), ["early", "shift"]);
   assert.deepEqual([...resolved.confirmedPresent], ["late"]);
-  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("09:00"), endTimestamp: at("10:00"), currentBacklog: 100, agents, forecast: forecast([9], 0), ...resolved });
+  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("09:00"), endTimestamp: at("10:00"), currentBacklog: 100, absRate: 0.075, agents, forecast: forecast([9], 0), ...resolved });
   assert.equal(result.points[0].capacity, 20, "only confirmed late arrival remains, without an additional ABS deduction");
   assert.equal(result.points[0].scheduledAgents, 1);
 });
 
 test("explicit zero productivity is observed capacity zero; missing productivity is unavailable", () => {
-  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("09:00"), currentBacklog: 10, forecast: forecast([8], 0) };
+  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("09:00"), currentBacklog: 10, absRate: 0.075, forecast: forecast([8], 0) };
   const zero = buildAdsBacklogGlide({ ...input, agents: [agent({ rate: 0 })] });
   assert.equal(zero.points[0].capacity, 0);
   assert.equal(zero.state, "no-clearance");
@@ -73,7 +99,7 @@ test("explicit zero productivity is observed capacity zero; missing productivity
 });
 
 test("a missing forecast hour never becomes zero and suppresses an otherwise early ETA", () => {
-  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:00"), endTimestamp: at("10:00"), currentBacklog: 10, agents: [agent({ rate: 100 })], forecast: forecast([8], 0) });
+  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:00"), endTimestamp: at("10:00"), currentBacklog: 10, absRate: 0.075, agents: [agent({ rate: 100 })], forecast: forecast([8], 0) });
   assert.equal(result.points[0].backlog, 0);
   assert.equal(result.points[1].forecast, null);
   assert.equal(result.points[1].backlog, null);
@@ -82,7 +108,7 @@ test("a missing forecast hour never becomes zero and suppresses an otherwise ear
 });
 
 test("reports first zero separately from sustained clearance and never extrapolates beyond the horizon", () => {
-  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("10:00"), currentBacklog: 10, agents: [agent({ end: at("09:00"), rate: 100 })], forecast: forecast([8, 9], 20) };
+  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("10:00"), currentBacklog: 10, absRate: 0.075, agents: [agent({ end: at("09:00"), rate: 100 })], forecast: forecast([8, 9], 20) };
   const result = buildAdsBacklogGlide(input);
   assert.equal(result.clearanceAt, at("09:00"));
   assert.equal(result.reaccumulates, true);
@@ -93,7 +119,7 @@ test("reports first zero separately from sustained clearance and never extrapola
 });
 
 test("stale data retains its own timestamp and curve but cannot publish an ETA", () => {
-  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:30"), endTimestamp: at("10:00"), currentBacklog: 1, agents: [agent({ rate: 100 })], forecast: forecast([8, 9], 0), stale: true });
+  const result = buildAdsBacklogGlide({ snapshotTimestamp: at("08:30"), endTimestamp: at("10:00"), currentBacklog: 1, absRate: 0.075, agents: [agent({ rate: 100 })], forecast: forecast([8, 9], 0), stale: true });
   assert.equal(result.points[0].intervalStart, at("08:30"));
   assert.equal(result.points[0].backlog, 0);
   assert.equal(result.clearanceAt, null);
@@ -101,7 +127,7 @@ test("stale data retains its own timestamp and curve but cannot publish an ETA",
 });
 
 test("unavailable backlog, invalid schedules and duplicate forecast keys cannot produce a misleading clearance", () => {
-  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("09:00"), currentBacklog: 10, agents: [agent()], forecast: forecast([8], 0) };
+  const input = { snapshotTimestamp: at("08:00"), endTimestamp: at("09:00"), currentBacklog: 10, absRate: 0.075, agents: [agent()], forecast: forecast([8], 0) };
   for (const override of [{ currentBacklog: null }, { agents: [agent({ start: null })] }, { forecast: forecast([8, 8], 0) }]) {
     const result = buildAdsBacklogGlide({ ...input, ...override });
     assert.equal(result.state, "incomplete");

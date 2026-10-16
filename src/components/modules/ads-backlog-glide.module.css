@@ -3,6 +3,11 @@
 .metricLabel { display: block; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .metricValue { display: block; margin-top: 8px; font-size: 28px; line-height: 1.2; letter-spacing: -.03em; overflow-wrap: anywhere; }
 .eta { font-size: 22px; }
+.demand { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
+.demand > div { min-width: 0; }
+.demandHeading, .demandFootnote { grid-column: 1 / -1; }
+.demandValue { display: block; margin-top: 6px; font-size: 22px; line-height: 1.2; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.demandFootnote { margin: 0; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .warning, .assumption { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .assumption { color: var(--muted); background: var(--space-tint); }
 .warning { color: #92400e; border: 1px solid #fcd34d; background: #fffbeb; }
@@ -12,7 +17,7 @@
 .hourTable th { padding: 10px 8px; font-size: 11px; font-weight: 700; }
 .hourTable td { padding: 10px 8px; border-top: 1px solid var(--border); font-size: 12px; vertical-align: middle; overflow-wrap: anywhere; }
 .hourTable th:first-child { width: 17%; }
-@media (max-width: 640px) { .metrics { grid-template-columns: 1fr; gap: 16px; } .metricValue { font-size: 24px; } .eta { font-size: 20px; } }
+@media (max-width: 640px) { .metrics, .demand { grid-template-columns: 1fr; gap: 16px; } .metricValue { font-size: 24px; } .eta { font-size: 20px; } }
 @container (max-width: 799px) {
   .hourTable, .hourTable tbody { display: block; }
   .hourTable thead { display: none; }

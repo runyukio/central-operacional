@@ -8,7 +8,9 @@ import { getRealtimeSnapshot } from "./realtime-service";
 import { loadExecutiveForecastRange } from "./executive-forecast-service";
 import { parseAdsExecutiveCycle } from "./ads-executive-report-core";
 import { addCapacityDays, capacityClock, capacityDate, capacityDay, capacitySkill } from "./ads-capacity-core";
-import { ADS_GLIDE_ABS_RATE, ADS_GLIDE_STALE_MINUTES, buildAdsBacklogGlide, glideForecastDates, resolveGlideAttendance, type AdsGlideAgent, type AdsBacklogGlidePoint, type AdsBacklogGlideState } from "./ads-backlog-glide-core";
+import { ADS_GLIDE_STALE_MINUTES, buildAdsBacklogGlide, glideForecastDates, resolveGlideAttendance, type AdsGlideAgent, type AdsBacklogGlidePoint, type AdsBacklogGlideState } from "./ads-backlog-glide-core";
+import { readObservedAdsGlideAbs, type ObservedAdsGlideAbs } from "./ads-backlog-glide-abs";
+import { buildGlideDemandContext, type GlideDemandContext } from "./ads-backlog-glide-demand";
 
 export class AdsBacklogGlideError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -17,7 +19,9 @@ export type AdsBacklogGlideQuery = { horizonDays?: string };
 export type AdsBacklogGlideResponse = {
   snapshotCycle: string | null;
   currentBacklog: number | null;
-  absRate: number;
+  absRate: number | null;
+  absReference: ObservedAdsGlideAbs;
+  demand: GlideDemandContext | null;
   calculatedAt: string;
   historyPeriod: { startDate: string; endDate: string };
   sources: {
@@ -55,11 +59,12 @@ export async function readAdsBacklogGlide(actor: Actor, query: AdsBacklogGlideQu
   if (![7, 14].includes(horizonDays) || query.horizonDays?.trim() === "") throw new AdsBacklogGlideError("Selecione um horizonte de 7 ou 14 dias.", 400);
   const clock = capacityClock(now), today = capacityDate(clock), endDate = addCapacityDays(today, horizonDays - 1);
   const endTimestamp = capacityDay(addCapacityDays(endDate, 1));
-  const [plan, initialRealtime, previousSchedules] = await Promise.all([
+  const [plan, initialRealtime, previousSchedules, absReference] = await Promise.all([
     readAdsCapacityPlan(currentActor, { startDate: today, endDate, shift: "Todos" }, now),
     getRealtimeSnapshot(currentActor, { view: "queues" }),
     // Include the preceding night cohort, which is deliberately outside the planning table's start dates.
-    readAdsCapacitySchedules({ startDate: new Date(capacityDay(addCapacityDays(today, -1))), endDate: new Date(capacityDay(addCapacityDays(today, -1))) }, { currentAdsOnly: true })
+    readAdsCapacitySchedules({ startDate: new Date(capacityDay(addCapacityDays(today, -1))), endDate: new Date(capacityDay(addCapacityDays(today, -1))) }, { currentAdsOnly: true }),
+    readObservedAdsGlideAbs(today)
   ]);
   if ("error" in initialRealtime) throw new AdsBacklogGlideError(initialRealtime.error || "Não foi possível consultar o Real Time.", initialRealtime.status ?? 500);
   let realtime = initialRealtime;
@@ -83,14 +88,14 @@ export async function readAdsBacklogGlide(actor: Actor, query: AdsBacklogGlideQu
   const validBacklog = queueRows.length > 0 && queueRows.every((row) => Number.isFinite(row.current.backlog) && row.current.backlog >= 0);
   const currentBacklog = validBacklog ? queueRows.reduce((sum, row) => sum + row.current.backlog, 0) : null;
   const stale = snapshotTimestamp !== null && (cycleAgeMinutes! > ADS_GLIDE_STALE_MINUTES || cycleAgeMinutes! < -5 || snapshotAgeMinutes === null || snapshotAgeMinutes > ADS_GLIDE_STALE_MINUTES || snapshotAgeMinutes < -5);
-  const warnings = [...plan.warnings,
+  const warnings = [...plan.warnings, ...absReference.warnings,
     "Projeção consolidada de ADS: considera capacidade compartilhada entre filas. Restrições de skill, prioridade e roteamento podem impedir a limpeza de uma fila específica.",
-    "O forecast é o canônico de Performance. O backlog e a presença atualizam a projeção; o volume futuro não é recalibrado pelo Real Time intradia.",
-    "ABS esperado de 7,5% aplicado somente a turnos ainda sem presença confirmada. Não há novo desconto de pausas nem fator 1,29."
+    "As entradas futuras usam a previsão histórica da Central. O ritmo recebido hoje é exibido separadamente e não é extrapolado para todo o horizonte.",
+    "O ABS observado nos últimos sete dias completos é aplicado somente a turnos ainda sem presença confirmada. Não há novo desconto de pausas nem fator 1,29."
   ];
   if (stale) warnings.push("O ciclo ou a importação do Real Time está desatualizado ou com horário inconsistente. A projeção parte do ciclo indicado; a previsão de limpeza foi suspensa.");
   if (currentBacklog === null) warnings.push("Backlog ADS indisponível ou inválido no último ciclo. Ausência de filas não é tratada como backlog zero.");
-  const base = { snapshotCycle, currentBacklog, absRate: ADS_GLIDE_ABS_RATE, calculatedAt: now.toISOString(), historyPeriod: plan.historyPeriod,
+  const base = { snapshotCycle, currentBacklog, absRate: absReference.rate, absReference, demand: null as GlideDemandContext | null, calculatedAt: now.toISOString(), historyPeriod: plan.historyPeriod,
     sources: { snapshotImportedAt, snapshotAgeMinutes, cycleAgeMinutes, ...plan.sources }, warnings, assumedSharedCapacity: true as const };
   if (snapshotTimestamp === null || snapshotTimestamp >= endTimestamp || capacityDate(snapshotTimestamp) < today) {
     if (snapshotTimestamp !== null && capacityDate(snapshotTimestamp) < today) warnings.push("O último ciclo pertence a um dia anterior. Atualize a base para combinar o backlog com o cronograma atual.");
@@ -107,17 +112,19 @@ export async function readAdsBacklogGlide(actor: Actor, query: AdsBacklogGlideQu
   })];
   const employeeIds = [...new Set(agents.map((agent) => agent.employeeId))];
   const [forecast, attendances] = await Promise.all([
-    loadExecutiveForecastRange("ADS", glideForecastDates(snapshotTimestamp, endTimestamp)),
+    loadExecutiveForecastRange("ADS", glideForecastDates(snapshotTimestamp - 3 * 3_600_000, endTimestamp)),
     employeeIds.length ? prisma.attendanceRecord.findMany({ where: { employeeId: { in: employeeIds }, date: { gte: new Date(capacityDay(addCapacityDays(today, -1))), lt: new Date(endTimestamp) } }, select: { employeeId: true, scheduleId: true, date: true, status: true } }) : []
   ]);
   const { confirmedPresent, unavailable } = resolveGlideAttendance(agents, snapshotTimestamp, attendances.map((row) => ({ ...row, date: capacityDate(row.date.getTime()) })));
-  const result = buildAdsBacklogGlide({ snapshotTimestamp, endTimestamp, currentBacklog, agents, forecast: forecast.points, confirmedPresent, unavailable, stale });
+  const demand = buildGlideDemandContext({ snapshotTimestamp, queueHistories: queueRows.map(row => row.history), forecast: forecast.points });
+  const result = buildAdsBacklogGlide({ snapshotTimestamp, endTimestamp, currentBacklog, agents, forecast: forecast.points, confirmedPresent, unavailable, stale, absRate: absReference.rate });
   warnings.push(...forecast.warnings);
-  if (result.points.some((point) => point.capacity === null)) warnings.push("Há agentes sem referência de produtividade ou com horário inválido. A capacidade é incompleta e a previsão de limpeza foi suspensa.");
+  if (result.points.some((point) => point.missingAgents > 0)) warnings.push("Há agentes sem referência de produtividade. A capacidade é incompleta e a previsão de limpeza foi suspensa.");
+  if (agents.some(agent => agent.start === null || agent.end === null || agent.end <= agent.start)) warnings.push("Há cronogramas com horário inválido. A capacidade é incompleta e a previsão de limpeza foi suspensa.");
   if (result.points.some((point) => point.forecast === null)) warnings.push("Há horas sem forecast disponível. Essas horas não viram volume zero; a previsão de limpeza foi suspensa.");
   const uncoveredIntervals = result.points.filter((point) => point.scheduledAgents === 0).length;
   if (uncoveredIntervals) warnings.push(`${uncoveredIntervals} intervalos estão sem pessoas disponíveis no cronograma após as ausências confirmadas. A capacidade desses intervalos é zero.`);
   if (result.state === "no-clearance") warnings.push("O backlog não zera no horizonte com o forecast, cronograma e ABS considerados.");
   if (result.reaccumulates) warnings.push("A projeção zera em um intervalo e volta a acumular depois. A primeira zeragem não representa limpeza sustentada.");
-  return { ...base, ...result, warnings: [...new Set(warnings)] };
+  return { ...base, ...result, demand, warnings: [...new Set(warnings)] };
 }
