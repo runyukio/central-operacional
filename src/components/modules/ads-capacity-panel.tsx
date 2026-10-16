@@ -11,6 +11,7 @@ import capacityStyles from "./ads-capacity.module.css";
 import { addCapacityDays, CAPACITY_SHIFTS, type CapacityRow } from "@/lib/ads-capacity-core";
 import type { AdsCapacitySummary } from "@/lib/ads-capacity-service";
 import { selectCapacityDisplay } from "./ads-capacity-display";
+import { AdsBacklogGlidePanel } from "./ads-backlog-glide-panel";
 
 const statusLabels = { sufficient: "Capacidade suficiente", deficit: "Déficit", incomplete: "Dados incompletos" };
 const sourceLabels = { individual: "Histórico individual", skill: "Estimativa pela skill", missing: "Sem dados" };
@@ -32,6 +33,7 @@ export function AdsCapacityPanel() {
   const detail = useSpaceRead<{ row: CapacityRow }>(`/api/staff-coverage/ads/planning/details?${detailsParams}`, selected !== null && Boolean(data));
   const apply = () => { setSelected(null); setFilters({ ...draft }); setRevision((r) => r + 1); };
   return <section aria-label="Planejamento de capacidade ADS" className={`${styles.root} space-y-4`}>
+    <AdsBacklogGlidePanel />
     <form className={`${styles.panel} flex flex-wrap items-end gap-3`} onSubmit={(event) => { event.preventDefault(); apply(); }}>
       <FormInput label="Data inicial" type="date" value={draft.startDate} onChange={(startDate) => setDraft((d) => ({ ...d, startDate }))} />
       <FormInput label="Data final" type="date" value={draft.endDate} onChange={(endDate) => setDraft((d) => ({ ...d, endDate }))} />
