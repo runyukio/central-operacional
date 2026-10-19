@@ -3,7 +3,7 @@ import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
 import { getWorkHourAdherenceSummary } from "./work-hours-capture-integration-service";
 import { ADHERENCE_SUMMARY_SUPERVISORS as summaryRoster } from "./work-hour-adherence-summary";
-import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, getWorkHourAdherenceFilterOptions, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
+import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, reprocessCecCaptureHours, exportWorkHourAdherenceJustifications, getWorkHourAdherenceFilterOptions, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
 import { deleteWorkHourRecord, reviewWorkHourAdjustment, upsertManualWorkHourRecord } from "./work-hours-service";
 import { respondSpacePending } from "./meu-espaco-pending-service";
 import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
@@ -136,7 +136,7 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
     calls.push({ model: "capture", op: "timeline", args: clone(options) });
     return [clone(timeline)];
   }) as any);
-  return { get state() { return state; }, calls, timeline,
+  return { get state() { return state; }, calls, timeline, tx: delegates,
     capture(id = "agent", hours = 1, data = day) { timeline.rows.push({ employeeId: id, wbLogin: `wb_${id}`, slotId: `slot-${id}`, data, activeMs: hours * hour }); },
     decision(id: string, action: any) { return { id, action, revision: state.workHourCaptureDivergence.find((row) => row.id === id)!.updatedAt.toISOString() }; }
   };
@@ -1271,3 +1271,54 @@ test("presença explícita sem captura aplica fórmula sobre zero e exige aderê
   assert.equal(f.state.workHourAdherenceJustification[0].sourceDurationMs, 0);
   assert.equal(f.state.schedule[0].status, "PRESENTE");
 });
+
+
+test("reprocessamento CEC reutiliza captura bruta, preserva perfis especiais/status e é idempotente", async (t) => {
+  const shiftDate = new Date("2026-10-07T00:00:00Z");
+  const ids = ["short", "full", "extra", "ra", "onboarding", "bilingual"];
+  const profiles = ids.map(id => employee(id, { lob: { name: "CEC" }, skill: ({ ra: "RA", onboarding: "Onboarding", bilingual: "Bilingual" } as Row)[id] ?? null }));
+  const schedules = ids.map(id => ({ ...slot(id, "PRESENTE"), date: shiftDate }));
+  const records = ids.map(id => ({ id: `record-${id}`, employeeId: id, scheduleId: `slot-${id}`, date: shiftDate,
+    adjustedHours: null, actualHours: 8, effectiveHours: 8, differenceMinutes: 0, status: "OK", source: "captura-horas" }));
+  const pending = { ...divergence("short", 6 * hour), date: shiftDate, lob: "CEC", proposedHours: 8 };
+  const f = fixture(t, { employeeProfile: profiles, schedule: schedules, workHourRecord: records, workHourCaptureDivergence: [pending] });
+  const durations: Row = { short: 6, full: 7.5, extra: 8, ra: 6, onboarding: 6, bilingual: 6 };
+  const sources = ids.map(id => ({ recordId: `record-${id}`, capturedMs: durations[id] * hour }));
+  const result = await reprocessCecCaptureHours(f.tx as any, "wfm", sources);
+  assert.equal(result.processed, 3); assert.equal(result.skipped, 3);
+  assert.equal(result.pendingOvertime, 1); assert.equal(result.divergencesUpdated, 1);
+  assert.deepEqual(f.state.workHourRecord.map(r => [r.actualHours, r.effectiveHours]), [[6.5,6.5],[8,8],[8.5,8],[8,8],[8,8],[8,8]]);
+  assert.equal(f.state.workHourOvertimeReview[0].excessHours, 0.5);
+  assert.equal(f.state.workHourAdherenceJustification[0].sourceDurationMs, 6 * hour);
+  assert.equal(f.state.workHourCaptureDivergence[0].proposedHours, 6.5);
+  assert.equal(f.state.workHourCaptureDivergence[0].status, "PENDING");
+  assert.deepEqual(f.state.schedule, schedules);
+  const counts = [f.state.workHourRecord.length, f.state.workHourOvertimeReview.length, f.state.workHourAdherenceJustification.length, f.state.workHourHistory.length];
+  const again = await reprocessCecCaptureHours(f.tx as any, "wfm", sources);
+  assert.equal(again.changed, 0); assert.equal(again.divergencesUpdated, 0);
+  assert.deepEqual([f.state.workHourRecord.length, f.state.workHourOvertimeReview.length, f.state.workHourAdherenceJustification.length, f.state.workHourHistory.length], counts);
+});
+
+test("reprocessamento CEC recusa fontes duplicadas e anteriores ao corte antes de gravar", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("agent", { lob: { name: "CEC" } })], schedule: [slot("agent", "PRESENTE")],
+    workHourRecord: [{ id: "old", employeeId: "agent", scheduleId: "slot-agent", date, adjustedHours: null, source: "captura-horas" }] });
+  const source = { recordId: "old", capturedMs: 6 * hour };
+  await assert.rejects(() => reprocessCecCaptureHours(f.tx as any, "wfm", [source,source]), /duplicado/);
+  await assert.rejects(() => reprocessCecCaptureHours(f.tx as any, "wfm", [source]), /inválida/);
+  assert.equal(mutations(f.calls).length, 0);
+});
+
+for (const operationalDay of ["2026-10-06", "2026-10-07"]) {
+  test(`importação CEC noturna respeita Shift Date ${operationalDay}, inclusive na revisão manual`, async (t) => {
+    const d = new Date(`${operationalDay}T00:00:00Z`);
+    const f = fixture(t, { employeeProfile: [employee("agent", { lob: { name: "CEC" } })],
+      schedule: [{ ...slot("agent", "PRESENTE"), date: d }] });
+    f.capture("agent", 6, operationalDay);
+    await commitCaptureWorkHoursImport(actor, { shiftDate: operationalDay });
+    assert.equal(f.state.workHourRecord[0].actualHours, operationalDay < "2026-10-07" ? 8 : 6.5);
+    assert.equal(f.state.workHourRecord[0].date.toISOString().slice(0,10), operationalDay);
+    await commitCaptureWorkHoursImport(actor, { shiftDate: operationalDay, confirmReprocessing: true });
+    assert.equal(f.state.workHourRecord.length,1);
+    assert.equal(f.state.workHourRecord[0].actualHours, operationalDay < "2026-10-07" ? 8 : 6.5);
+  });
+}

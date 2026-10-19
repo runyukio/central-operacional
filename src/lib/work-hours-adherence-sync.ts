@@ -33,7 +33,7 @@ export async function syncWorkHourAdherence(tx: Prisma.TransactionClient, input:
   const sameValidatedDuration = Boolean(existing && existing.status !== "CANCELLED" && !input.sourceChanged
     && existing.sourceDurationMs === durationMs && existing.scheduleId === schedule.id && existing.supervisorId === employee.supervisorId);
   if (sameValidatedDuration && existing?.status === "JUSTIFIED") return;
-  const classification = calculateOperationalHours(0, { lob: employee.lob.name, legacySkill: employee.skill,
+  const classification = calculateOperationalHours(0, { shiftDate: date, lob: employee.lob.name, legacySkill: employee.skill,
     skillNames: employee.skillAssignments?.map((item) => item.skill.name) }).classificationLabel;
   const values = { scheduleId: schedule.id, supervisorId: employee.supervisorId, lob: employee.lob.name, classification,
     plannedStart: schedule.startsAt, plannedEnd: schedule.endsAt, sourceDurationMs: durationMs };

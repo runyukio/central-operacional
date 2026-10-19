@@ -12,6 +12,7 @@ const original = { id: "slot", employeeId: employee.id, date, lobId: "ads", shif
 const edit = { employeeId: employee.id, date: "2026-09-23", shift: "Manhã", startsAt: "08:00", endsAt: "17:00", status: "Escalado" };
 
 function fixture(t: TestContext, grid = false) {
+  mockPrismaDelegate(t, "auditLog", { findMany: async () => [] });
   mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", status: "ACTIVE", role: { name: "WFM" }, employeeProfile: null }) });
   const people = mockPrismaDelegate(t, "employeeProfile", { findUnique: async () => employee, count: async () => grid ? 1 : 0, findMany: async () => grid ? [{ id: employee.id }] : [] });
   mockPrismaDelegate(t, "schedule", { findUnique: async () => structuredClone(original), count: async () => grid ? 1 : 0, findMany: async () => grid ? [structuredClone(original)] : [] });
