@@ -3,6 +3,7 @@ export const LOW_ADHERENCE_THRESHOLD_MS = (7 * 60 + 30) * 60 * 1000;
 export const STANDARD_CAPTURE_BONUS_MS = 30 * 60 * 1000;
 export const STANDARD_OPERATIONAL_DAY_MS = 8 * 60 * 60 * 1000;
 export const CAPTURE_OVERTIME_THRESHOLD_MS = STANDARD_OPERATIONAL_DAY_MS + 10 * 60 * 1000;
+export const CEC_STANDARD_HOURS_SHIFT_DATE = "2026-10-07";
 
 export type OperationalHourRule = "RA_ONBOARDING" | "BILINGUAL" | "CEC_COMMENTS" | "STANDARD";
 export type CaptureImportDecision = "AUTOMATIC" | "DIVERGENCE" | "IGNORE";
@@ -22,6 +23,8 @@ export type CaptureDivergenceReason =
   | "SCHEDULE_STATUS_REVIEW";
 
 export type OperationalClassificationInput = {
+  // The operational shift date, never the capture timestamp after midnight.
+  shiftDate?: string | Date | null;
   lob?: string | null;
   legacySkill?: string | null;
   skillNames?: Array<string | null | undefined>;
@@ -81,7 +84,10 @@ export function resolveOperationalHourRule(input: OperationalClassificationInput
   if (skills.has("BILINGUE") || skills.has("BILINGUAL")) {
     return { rule: "BILINGUAL", classificationLabel: "Bilíngue" };
   }
-  if (lob === "CEC") return { rule: "CEC_COMMENTS", classificationLabel: "CEC" };
+  const shiftDate = input.shiftDate instanceof Date ? input.shiftDate.toISOString().slice(0, 10) : input.shiftDate;
+  if (lob === "CEC" && shiftDate && shiftDate < CEC_STANDARD_HOURS_SHIFT_DATE) {
+    return { rule: "CEC_COMMENTS", classificationLabel: "CEC" };
+  }
   if (lob === "COMMENTS") return { rule: "CEC_COMMENTS", classificationLabel: "COMMENTS" };
   return { rule: "STANDARD", classificationLabel: input.lob?.trim() || "Demais agentes" };
 }

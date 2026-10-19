@@ -18,6 +18,7 @@ import { ADHERENCE_SUMMARY_SUPERVISORS, buildAdherenceSummary, type AdherenceSum
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
+  CEC_STANDARD_HOURS_SHIFT_DATE,
   CAPTURE_DIVERGENCE_ACTIONS,
   captureDivergenceActionLabel,
   captureDivergenceReasonLabel,
@@ -29,6 +30,7 @@ import {
   type CaptureDivergenceReason,
   type OperationalHourCalculation
 } from "@/lib/work-hours-capture-integration-core";
+import { isWorkHoursAllowedForSchedule } from "@/lib/work-hours-rules";
 
 export type CaptureImportFilters = {
   shiftDate?: string;
@@ -365,7 +367,7 @@ export async function listCaptureWorkHourDivergences(actor: Actor, filters: Capt
       classification: classificationFor(record.employee as CaptureImportEmployee).classificationLabel,
       scheduleStatus: scheduleStatusLabel(record.schedule?.status ?? "SEM_ESCALA"),
       capturedDuration: formatDuration(record.sourceDurationMs),
-      proposedHours: formatHours(calculateOperationalHours(record.sourceDurationMs ?? 0, classificationInput(record.employee as CaptureImportEmployee)).operationalHours),
+      proposedHours: formatHours(calculateOperationalHours(record.sourceDurationMs ?? 0, classificationInput(record.employee as CaptureImportEmployee, record.date)).operationalHours),
       reasons: jsonStringArray(record.reasons).map((reason) => captureDivergenceReasonLabel(reason as CaptureDivergenceReason)),
       actions: CAPTURE_DIVERGENCE_ACTIONS.map((value) => ({ value, label: captureDivergenceActionLabel(value) })),
       supervisor: record.employee.supervisor?.fullName ?? "Sem supervisor",
@@ -463,7 +465,7 @@ export async function applyCaptureWorkHourDivergenceDecisions(
             newHours = null;
             newStatus = target;
           } else {
-            const calculation = calculateOperationalHours(divergence.sourceDurationMs ?? 0, classificationInput(employee));
+            const calculation = calculateOperationalHours(divergence.sourceDurationMs ?? 0, classificationInput(employee, divergence.date));
             const proposal = proposalFromDivergence(divergence, employee, schedule, calculation, "PRESENTE");
             const savedHours = await saveValidatedAttendance(tx, { proposal, actorId: authorization.user.id, actionSource: "MANUAL", currentRecord: current });
             if (savedHours.review?.status === "PENDING") { overtimeReviewsPending += 1; validationHours += savedHours.review.excessHours; }
@@ -908,7 +910,7 @@ function buildProposal(
   capturedMs: number | null
 ): CaptureImportProposal {
   const decision = evaluateCaptureImport({ scheduleExists: Boolean(schedule), scheduleStatus: schedule?.status, capturedMs });
-  const calculation = calculateOperationalHours(capturedMs ?? 0, classificationInput(employee));
+  const calculation = calculateOperationalHours(capturedMs ?? 0, classificationInput(employee, date));
   const dateKey = formatDate(date);
   return {
     reconciliationKey: reconciliationKey(employee.id, dateKey, slotKey),
@@ -1111,6 +1113,60 @@ async function saveValidatedAttendance(
   }
   await upsertLowAdherence(tx, proposal, input.actorId, Boolean(current));
   return { record: saved, changed: !unchanged, review };
+}
+
+// Reprice existing validated captures without re-evaluating presence or importing
+// a different capture. The caller supplies the raw duration retained in history.
+// Run in a Serializable transaction; existing employee/date and reconciliation
+// keys are reused by the same writer used by ordinary imports.
+export async function reprocessCecCaptureHours(
+  tx: Prisma.TransactionClient,
+  actorId: string,
+  sources: Array<{ recordId: string; capturedMs: number }>
+) {
+  if (new Set(sources.map((source) => source.recordId)).size !== sources.length) throw new Error("Registro duplicado no reprocessamento CEC.");
+  const records = await tx.workHourRecord.findMany({
+    where: { id: { in: sources.map((source) => source.recordId) } },
+    include: { employee: { include: captureEmployeeInclude }, schedule: true }
+  });
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const proposals = sources.map((source) => {
+    const record = byId.get(source.recordId);
+    if (!record || record.source !== "captura-horas" || formatDate(record.date) < CEC_STANDARD_HOURS_SHIFT_DATE
+      || record.employee.lob.name !== "CEC" || !Number.isSafeInteger(source.capturedMs) || source.capturedMs <= 0) {
+      throw new Error(`Fonte inválida para reprocessamento CEC: ${source.recordId}`);
+    }
+    const employee = record.employee as CaptureImportEmployee;
+    const calculation = calculateOperationalHours(source.capturedMs, classificationInput(employee, record.date));
+    if (calculation.rule !== "STANDARD" || !isCaptureImportEligible(employee, formatDate(record.date))
+      || !record.schedule || record.schedule.deletedAt || !isWorkHoursAllowedForSchedule(record.schedule)) return null;
+    if (record.adjustedHours !== null) throw new Error(`Registro CEC possui ajuste manual: ${record.id}`);
+    return { record, proposal: proposalFromDivergence({
+      reconciliationKey: record.captureReconciliationKey ?? reconciliationKey(employee.id, formatDate(record.date), record.schedule.id),
+      slotKey: record.schedule.id, date: record.date, sourceDurationMs: source.capturedMs, scheduleStatus: record.schedule.status
+    }, employee, record.schedule, calculation, record.schedule.status) };
+  });
+  const result = { processed: 0, changed: 0, skipped: 0, pendingOvertime: 0, divergencesUpdated: 0 };
+  for (const item of proposals) {
+    if (!item) { result.skipped += 1; continue; }
+    const saved = await saveValidatedAttendance(tx, { proposal: item.proposal, actorId, actionSource: "AUTOMATIC", currentRecord: item.record });
+    result.processed += 1;
+    if (saved.changed) result.changed += 1;
+    if (saved.review?.status === "PENDING") result.pendingOvertime += 1;
+  }
+  const divergences = await tx.workHourCaptureDivergence.findMany({
+    where: { lob: "CEC", date: { gte: dateFromKey(CEC_STANDARD_HOURS_SHIFT_DATE) } },
+    include: { employee: { include: captureEmployeeInclude }, schedule: true }
+  });
+  for (const divergence of divergences) {
+    if (divergence.sourceDurationMs === null || !isCaptureImportEligible(divergence.employee, formatDate(divergence.date))
+      || isProtectedCaptureScheduleStatus(divergence.schedule?.status)) continue;
+    const calculation = calculateOperationalHours(divergence.sourceDurationMs, classificationInput(divergence.employee as CaptureImportEmployee, divergence.date));
+    if (calculation.rule !== "STANDARD" || calculation.operationalHours === divergence.proposedHours) continue;
+    await tx.workHourCaptureDivergence.update({ where: { id: divergence.id }, data: { proposedHours: calculation.operationalHours } });
+    result.divergencesUpdated += 1;
+  }
+  return result;
 }
 
 async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: CaptureImportProposal, actorId: string, hadOperationalHours: boolean) {
@@ -1351,8 +1407,9 @@ function proposalFromDivergence(
   };
 }
 
-function classificationInput(employee: CaptureImportEmployee) {
+function classificationInput(employee: CaptureImportEmployee, shiftDate?: Date) {
   return {
+    shiftDate,
     lob: employee.lob.name,
     legacySkill: employee.skill,
     // Classification depends on the set of skills, never the database relation order.

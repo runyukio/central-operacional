@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { historicalSupervisorFilter, loadSupervisionTransfers, scheduleSupervisorNames, type SupervisedSlot } from "@/lib/schedule-supervision-history";
 import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
 import { scheduleDisplayLabel, scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import { resolveScheduleStatusFilter, validScheduleSlotCountFilter } from "@/lib/schedule-slot-filter";
@@ -548,6 +549,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         select: {
         id: true,
         employeeId: true,
+        supervisorId: true,
         lobId: true,
         date: true,
         startsAt: true,
@@ -597,6 +599,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       })
       : [];
     markPhase("scheduleRowsMs");
+    const gridSupervisorNames = await scheduleSupervisorNames(scheduleRows);
     const slotLobIds = Array.from(new Set(scheduleRows.flatMap((schedule) => schedule.lobId ? [schedule.lobId] : [])));
     const slotLobs = slotLobIds.length
       ? await prisma.lob.findMany({ where: { id: { in: slotLobIds } }, select: { id: true, name: true } })
@@ -657,7 +660,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         wb: employee.wbLogin,
         email: employee.user?.email ?? "",
         lob: employee.lob.name,
-        supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+        supervisor: resolveSupervisorName(schedules[schedules.length - 1], gridSupervisorNames),
         shift: cleanShiftName(employee.shift.name) || "Sem turno",
         schedule: employee.scheduleType,
         status: employee.operationalStatus,
@@ -1713,6 +1716,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
       orderBy: [{ date: "asc" }, { employee: { fullName: "asc" } }]
     });
 
+    const exportSupervisorNames = await scheduleSupervisorNames(schedules);
     const employeeIds = Array.from(new Set(schedules.map((schedule) => schedule.employeeId)));
     const fallbackWorkHours = employeeIds.length
       ? await prisma.workHourRecord.findMany({
@@ -1756,7 +1760,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
         schedule.startsAt ?? "",
         schedule.endsAt ?? "",
         schedule.employee.lob.name,
-        schedule.employee.supervisor?.fullName ?? "Sem supervisor",
+        resolveSupervisorName(schedule, exportSupervisorNames),
         workHour ? formatWorkHours(workHour.effectiveHours ?? workHour.actualHours) : "Não lançado",
         schedule.status === "FALTA_JUSTIFICADA" ? "Justificada" : schedule.status === "FALTA_INJUSTIFICADA" ? "Injustificada" : isPendingJustificationForSchedule(schedule.status, attendance) ? "Sem justificativa" : "",
         scheduleDisplayLabel(attendanceReasonForSchedule(schedule.status, attendance)),
@@ -1958,7 +1962,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       orderBy: [{ date: "desc" }, { employee: { fullName: "asc" } }],
       take: includeJustified || reasonFilter ? 5000 : 5000
     });
-    const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
+    const supervisorNameById = await scheduleSupervisorNames(schedules);
     const justifiedByNameById = await userNameMap(schedules.map((schedule) => schedule.attendanceRecords[0]?.justifiedById));
     const activeSchedules = schedules.filter((schedule) => {
       const record = schedule.attendanceRecords[0];
@@ -3181,7 +3185,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
     attendanceRecordByScheduleId.set(record.scheduleId, record);
   });
-  const supervisorNameById = await supervisorNameMap(schedules.flatMap((schedule) => [schedule.supervisorId, schedule.employee.supervisorId]));
+  const supervisorNameById = await scheduleSupervisorNames(schedules);
   const justifiedByNameById = await userNameMap(attendanceRecords.map((record) => record.justifiedById));
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
@@ -3455,7 +3459,7 @@ async function calculateRecurringAbsences(period?: { start: Date; end: Date } | 
     if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
     attendanceRecordByScheduleId.set(record.scheduleId, record);
   });
-  const supervisorNameById = await supervisorNameMap(schedules.flatMap((schedule) => [schedule.supervisorId, schedule.employee.supervisorId]));
+  const supervisorNameById = await scheduleSupervisorNames(schedules);
   const schedulesByEmployee = schedules.reduce<Map<string, typeof schedules>>((acc, schedule) => {
     if (!isActiveEmployeeStatus(schedule.employee.operationalStatus)) return acc;
     const current = acc.get(schedule.employee.id) ?? [];
@@ -3929,13 +3933,15 @@ async function listAttritionTerminations(period: NonNullable<ReturnType<typeof r
   }));
 }
 
-function resolveSupervisorName(schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null }, supervisorNameById?: Map<string, string>) {
+function resolveSupervisorName(schedule: SupervisedSlot, supervisorNameById?: Map<string, string>) {
+  const historicalName = schedule.id ? supervisorNameById?.get(`schedule:${schedule.id}`) : null;
+  if (historicalName) return historicalName;
   const supervisorId = schedule.supervisorId ?? schedule.employee?.supervisorId;
   return (supervisorId ? supervisorNameById?.get(supervisorId) : "") || schedule.employee?.supervisor?.fullName?.trim() || "Sem supervisor";
 }
 
 function resolveAbsSupervisorName(
-  schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null },
+  schedule: SupervisedSlot,
   record?: { isJustified: boolean; absenceReason: string | null; justifiedById?: string | null } | null,
   supervisorNameById?: Map<string, string>,
   justifiedByNameById?: Map<string, string>
@@ -4190,18 +4196,11 @@ async function scheduleSupervisorFilter(value?: string | null): Promise<Prisma.S
   const raw = value?.trim();
   if (!raw || raw === "Todos") return null;
   if (isNoSupervisorFilter(raw)) return { supervisorId: null, employee: { supervisorId: null } };
-
-  const supervisors = await prisma.employeeProfile.findMany({
-    where: { fullName: { contains: raw, mode: "insensitive" } },
-    select: { id: true }
-  });
-  const ids = supervisors.map((supervisor) => supervisor.id);
-  return {
-    OR: [
-      ...(ids.length ? [{ supervisorId: { in: ids } }] : []),
-      { employee: { supervisor: { fullName: { contains: raw, mode: "insensitive" } } } }
-    ]
-  };
+  const [supervisors, transfers] = await Promise.all([
+    prisma.employeeProfile.findMany({ where: { fullName: { contains: raw, mode: "insensitive" } }, select: { id: true } }),
+    loadSupervisionTransfers()
+  ]);
+  return historicalSupervisorFilter(supervisors.map((supervisor) => supervisor.id), transfers);
 }
 
 function calendarCells(year: number, month: number) {

@@ -16,7 +16,7 @@ test("valida o excedente depois das regras somente acima de 8h10, mantendo a bas
     assert.equal(result.effectiveHours, effectiveHours); assert.equal(result.validationHours, validationHours);
   }
   for (const lob of ["ADS", "CEC", "COMMENTS"]) {
-    const bonus = lob === "ADS" ? 30 * 60_000 : 0;
+    const bonus = lob !== "COMMENTS" ? 30 * 60_000 : 0;
     const boundary = (8 * 60 + 10) * 60_000 - bonus;
     for (const offset of [-1, 0]) {
       const result = captureOvertimeOutcome(source(boundary + offset, lob));
@@ -27,7 +27,7 @@ test("valida o excedente depois das regras somente acima de 8h10, mantendo a bas
     assert.ok(Math.abs(result.validationHours - (10 * 60_000 + 1) / 3_600_000) < 1e-12);
   }
   for (const skill of ["RA", "Onboarding", "Bilíngue"]) assert.equal(captureOvertimeOutcome(source(10 * 3_600_000, "ADS", skill)).validationHours, 0);
-  for (const lob of ["CEC", "COMMENTS"]) assert.equal(captureOvertimeOutcome(source(9 * 3_600_000, lob)).validationHours, 1);
+  for (const lob of ["CEC", "COMMENTS"]) assert.equal(captureOvertimeOutcome(source(9 * 3_600_000, lob)).validationHours, lob === "CEC" ? 1.5 : 1);
 });
 
 test("decisão só é reutilizada na mesma origem e nunca após cancelamento", () => {

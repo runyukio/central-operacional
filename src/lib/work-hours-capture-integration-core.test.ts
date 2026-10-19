@@ -99,12 +99,12 @@ test("10. Bilíngue com 10:30 limita a 8:00 sem extra", () => {
   assert.deepEqual([result.operationalHours, result.overtimeHours], [8, 0]);
 });
 
-test("11. CEC com 5:00 recebe 8:00", () => {
-  assert.equal(calculateOperationalHours(5 * hour, { lob: "CEC" }).operationalHours, 8);
+test("11. CEC anterior a 07/10 com 5:00 preserva 8:00", () => {
+  assert.equal(calculateOperationalHours(5 * hour, { lob: "CEC", shiftDate: "2026-10-06" }).operationalHours, 8);
 });
 
-test("12. CEC com 10:30 mantém 10:30 e 2:30 extras", () => {
-  const result = calculateOperationalHours(10.5 * hour, { lob: "CEC" });
+test("12. CEC anterior a 07/10 mantém 10:30 e 2:30 extras", () => {
+  const result = calculateOperationalHours(10.5 * hour, { lob: "CEC", shiftDate: "2026-10-06" });
   assert.deepEqual([result.operationalHours, result.overtimeHours], [10.5, 2.5]);
 });
 
@@ -136,11 +136,11 @@ test("18. horas calculadas exatamente 7:30 não geram pendência", () => {
   assert.equal(shouldCreateLowAdherence(LOW_ADHERENCE_THRESHOLD_MS), false);
 });
 
-test("19. CEC e RA calculadas em oito não pedem justificativa pela captura curta", () => {
+test("19. CEC histórica e RA preservam oito horas para captura curta", () => {
   const captured = 5 * hour;
-  assert.equal(calculateOperationalHours(captured, { lob: "CEC" }).operationalHours, 8);
+  assert.equal(calculateOperationalHours(captured, { lob: "CEC", shiftDate: "2026-10-06" }).operationalHours, 8);
   assert.equal(calculateOperationalHours(captured, { skillNames: ["RA"] }).operationalHours, 8);
-  assert.equal(shouldCreateLowAdherence(calculateOperationalHours(captured, { lob: "CEC" }).operationalMs), false);
+  assert.equal(shouldCreateLowAdherence(calculateOperationalHours(captured, { lob: "CEC", shiftDate: "2026-10-06" }).operationalMs), false);
   assert.equal(shouldCreateLowAdherence(calculateOperationalHours(captured, { skillNames: ["RA"] }).operationalMs), false);
 });
 
@@ -173,7 +173,7 @@ test("23. cálculo repetido é idempotente e não duplica os 30 minutos", () => 
 });
 
 test("24. um único resultado calculado alimenta Horas Operacionais e Cronograma", () => {
-  const calculation = calculateOperationalHours(10 * hour + 31 * minute, { lob: "CEC" });
+  const calculation = calculateOperationalHours(10 * hour + 31 * minute, { lob: "CEC", shiftDate: "2026-10-06" });
   const workHours = calculation.operationalHours;
   const scheduleCell = calculation.operationalHours;
   assert.equal(workHours, scheduleCell);
@@ -181,4 +181,26 @@ test("24. um único resultado calculado alimenta Horas Operacionais e Cronograma
 
 test("prioridade fixa aplica RA antes de bilíngue e CEC", () => {
   assert.equal(resolveOperationalHourRule({ lob: "CEC", skillNames: ["Bilíngue", "RA"] }).rule, "RA_ONBOARDING");
+});
+
+for (const captured of [6, 7, 7.5, 8, 9]) {
+  test(`CEC desde 07/10: captura ${captured} contabiliza ${captured + 0.5}, igual a ADS/VIDEO`, () => {
+    for (const shiftDate of ["2026-10-07", "2026-10-19", "2026-11-01"]) {
+      const cec = calculateOperationalHours(captured * hour, { lob: "CEC", shiftDate });
+      for (const lob of ["ADS", "VIDEO"]) {
+        const standard = calculateOperationalHours(captured * hour, { lob, shiftDate });
+        assert.equal(cec.rule, standard.rule);
+        assert.equal(cec.operationalMs, standard.operationalMs);
+        assert.equal(cec.overtimeMs, standard.overtimeMs);
+      }
+    }
+  });
+}
+test("CEC usa Shift Date inclusive e mantém as exceções de perfis e COMMENTS", () => {
+  assert.equal(calculateOperationalHours(6 * hour, { lob: "CEC", shiftDate: new Date("2026-10-06T00:00:00Z") }).operationalHours, 8);
+  assert.equal(calculateOperationalHours(6 * hour, { lob: "CEC", shiftDate: new Date("2026-10-07T00:00:00Z") }).operationalHours, 6.5);
+  assert.equal(calculateOperationalHours(6 * hour, { lob: "CEC" }).operationalHours, 6.5);
+  for (const skill of ["RA", "Onboarding"]) assert.equal(calculateOperationalHours(6 * hour, { lob: "CEC", shiftDate: "2026-10-07", legacySkill: skill }).operationalHours, 8);
+  assert.equal(calculateOperationalHours(6 * hour, { lob: "CEC", shiftDate: "2026-10-07", skillNames: ["Bilíngue"] }).operationalHours, 6);
+  assert.equal(calculateOperationalHours(6 * hour, { lob: "COMMENTS", shiftDate: "2026-10-07" }).operationalHours, 8);
 });
