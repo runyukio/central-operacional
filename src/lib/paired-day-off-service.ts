@@ -11,6 +11,12 @@ import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 
 export const PAIRED_SWAP_TYPE = "Troca Casada";
 export const PAIRED_SWAP_KIND = "PAIRED_DAY_OFF_SWAP";
+const pairedSwapFinalRoles = ["ADMIN", "WFM"];
+
+export function canApprovePairedSwapFinal(role: string) {
+  return pairedSwapFinalRoles.includes(normalizeRole(role));
+}
+
 export class PairedSwapError extends Error {}
 
 const include = {
@@ -176,7 +182,7 @@ function pairedSwapDecision(payload: SwapPayload, userId: string, requesterId: s
   const normalized = normalizeRole(role);
   const authorized = payload.stage === "PARTNER" ? userId === payload.partnerUserId
     : payload.stage === "SUPERVISOR" ? userId === supervisorId && normalized === "SUPERVISOR"
-    : payload.stage === "WFM" && normalized === "WFM";
+    : payload.stage === "WFM" && canApprovePairedSwapFinal(role);
   if (!authorized) throw new PairedSwapError("Sem permissão para decidir nesta etapa da troca casada.");
   if (status === "Recusado") return "REJECT";
   if (status !== "Aprovado") throw new PairedSwapError("Use aceitar ou recusar na etapa atual da troca casada.");
@@ -219,7 +225,7 @@ export async function updatePairedSwap(actor: Actor, userId: string, id: string,
         if (!payload.partnerAcceptedAt || !payload.requesterAcceptedAt) throw new PairedSwapError("Os dois parceiros precisam aceitar antes do supervisor.");
         payload.supervisorApprovedAt = now; payload.supervisorApprovedById = userId; payload.stage = "WFM";
         nextStatus = "EM_ANALISE"; action = "Aprovação do supervisor";
-        const wfm = await tx.user.findMany({ where: { status: "ACTIVE", role: { name: "WFM" } }, select: { id: true } });
+        const wfm = await tx.user.findMany({ where: { status: "ACTIVE", role: { name: { in: pairedSwapFinalRoles } } }, select: { id: true } });
         recipients.push(...wfm.map(row => row.id));
       } else {
         if (!payload.partnerAcceptedAt || !payload.requesterAcceptedAt || !payload.supervisorApprovedAt || payload.supervisorApprovedById !== supervisorId) throw new PairedSwapError("A troca precisa dos dois aceites e da aprovação do supervisor antes do WFM.");
