@@ -8,6 +8,26 @@ import {
   resolveEmployeeBillingStaffRateRule
 } from "./billing-rate-rules";
 
+test("tarifa de Gerente preserva oito casas decimais em todos os turnos", () => {
+  assert.deepEqual(BILLING_STAFF_RATE_DEFAULTS.MANAGER, { day: 102.27272727, night: 102.27272727 });
+  for (const roleTitle of ["Gerente", " GERENTE ", "Manager"]) {
+    for (const skill of ["Manager", "", "RTA", "Bilingual"]) {
+      const resolved = resolveEmployeeBillingStaffRateRule({ roleTitle, skill });
+      assert.equal(resolved?.rule.skillKey, "manager");
+      assert.equal(resolved?.source, "Cargo/Função");
+      for (const shift of ["MANHA", "TARDE", "NOITE"] as const) {
+        assert.equal(resolveEmployeeBillingStaffRateKey({ roleTitle, skill }, shift)?.rateKey, shift === "NOITE" ? "STAFF_MANAGER_NIGHT_RATE" : "STAFF_MANAGER_DAY_RATE");
+      }
+    }
+  }
+});
+
+test("a tarifa de Gerente exige o cargo e não se aplica somente pela skill Manager", () => {
+  for (const roleTitle of ["Outro", "Agente", "Supervisor"]) {
+    assert.equal(resolveEmployeeBillingStaffRateRule({ roleTitle, skill: "Manager" }), null);
+  }
+});
+
 test("mantém as tarifas de RH com oito casas decimais", () => {
   assert.deepEqual(BILLING_STAFF_RATE_DEFAULTS.HR, {
     day: 25.56818182,

@@ -67,6 +67,8 @@ const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
 const PROJECTABLE_SCHEDULE_STATUSES = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"]);
 
 const DEFAULT_RATE_CONFIGS = [
+  { key: "STAFF_MANAGER_DAY_RATE", label: "Gerente Manhã/Tarde", value: BILLING_STAFF_RATE_DEFAULTS.MANAGER.day, group: "STAFF", skillKey: "manager", displayName: "Gerente", shiftBucket: "DIA" },
+  { key: "STAFF_MANAGER_NIGHT_RATE", label: "Gerente Noite", value: BILLING_STAFF_RATE_DEFAULTS.MANAGER.night, group: "STAFF", skillKey: "manager", displayName: "Gerente", shiftBucket: "NOITE" },
   { key: "BILINGUAL_HOURLY_RATE", label: "Bilingual", value: 62.5, group: "SPECIAL", displayName: "Bilingual" },
   { key: "RA_HOURLY_RATE", label: "RA", value: 14.2, group: "SPECIAL", displayName: "RA" },
   { key: "ASSISTANT_HOURLY_RATE", label: "Assistant", value: 17.04, group: "SPECIAL", displayName: "Assistant" },
@@ -2864,30 +2866,33 @@ async function listBillingRateConfigs() {
 }
 
 function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): BillingRateResolution {
-  const skill = normalizeComparableJobTitle(employee.skill);
-  if (skill.includes("bilingual") || skill.includes("bilingue")) {
-    return {
-      hourlyRate: rates.BILINGUAL_HOURLY_RATE,
-      billingRule: "BILINGUAL",
-      billingRuleLabel: "Bilingual",
-      billingRateSource: "Skill Bilingual"
-    };
-  }
-  if (skill === "ra") {
-    return {
-      hourlyRate: rates.RA_HOURLY_RATE,
-      billingRule: "RA",
-      billingRuleLabel: "RA",
-      billingRateSource: "Skill RA"
-    };
-  }
-  if (isAssistantSkill(employee.skill)) {
-    return {
-      hourlyRate: rates.ASSISTANT_HOURLY_RATE,
-      billingRule: "ASSISTANT",
-      billingRuleLabel: "Assistant",
-      billingRateSource: "Skill Assistant"
-    };
+  // Gerente is a role-based rate, regardless of the employee's operational skill.
+  if (resolveEmployeeBillingStaffRateRule(employee)?.rule.skillKey !== "manager") {
+    const skill = normalizeComparableJobTitle(employee.skill);
+    if (skill.includes("bilingual") || skill.includes("bilingue")) {
+      return {
+        hourlyRate: rates.BILINGUAL_HOURLY_RATE,
+        billingRule: "BILINGUAL",
+        billingRuleLabel: "Bilingual",
+        billingRateSource: "Skill Bilingual"
+      };
+    }
+    if (skill === "ra") {
+      return {
+        hourlyRate: rates.RA_HOURLY_RATE,
+        billingRule: "RA",
+        billingRuleLabel: "RA",
+        billingRateSource: "Skill RA"
+      };
+    }
+    if (isAssistantSkill(employee.skill)) {
+      return {
+        hourlyRate: rates.ASSISTANT_HOURLY_RATE,
+        billingRule: "ASSISTANT",
+        billingRuleLabel: "Assistant",
+        billingRateSource: "Skill Assistant"
+      };
+    }
   }
 
   const shiftBucket = officialShiftBucket(employee.shift?.name);
