@@ -71,6 +71,28 @@ test("September manual closure allows Cauã and Gabriel after termination withou
     }
   }
 });
+test("October manual closure allows only Jessica's October 2026 invoice without NF or Omie", async () => {
+  const allowed = scenario("wb_jessicam", "ADMIN", "Desligado");
+  const result = await allowed.run("2026-10");
+  assert.equal(result.data.status, "FECHADO");
+  assert.equal(result.data.omie.status, "NOT_SENT");
+  assert.equal(allowed.saves.length, 1);
+  assert.equal(allowed.saves[0].cycle, "cycle-2026-10");
+  assert.equal(allowed.audits.length, 1);
+  assert.equal(allowed.audits[0].data.newValue.fiscalInvoiceExemptionReason, "WB_MONTH_EXCEPTION");
+  assert.equal(allowed.audits[0].data.newValue.referenceMonth, "2026-10");
+  assert.equal(allowed.audits[0].data.newValue.fiscalInvoiceRequired, false);
+  assert.equal(allowed.audits[0].data.newValue.omieSendRequired, false);
+  for (const month of ["2026-09", "2026-11", "2027-10"]) {
+    const denied = scenario("wb_jessicam", "ADMIN", "Desligado");
+    assert.equal((await denied.run(month)).status, 400);
+    assert.equal(denied.saves.length, 0);
+    assert.equal(denied.audits.length, 0);
+  }
+  const other = scenario("wb_outro", "ADMIN", "Desligado");
+  assert.equal((await other.run("2026-10")).status, 400);
+  assert.equal(other.saves.length, 0);
+});
 test("partner exception does not grant billing administration permissions", async () => {
   for (const role of ["COLABORADOR", "SUPERVISOR", "FINANCEIRO", "WFM"]) {
     const denied = scenario("wb_diorgenes", role);
@@ -82,8 +104,8 @@ test("Billing detail uses the selected month to bypass the NF modal only for the
   const variable = component.node.body!.statements.filter(ts.isVariableStatement).flatMap((s) => [...s.declarationList.declarations]).find((v) => v.name.getText(component.source) === "finalizesWithoutFiscalInvoice");
   assert.ok(variable?.initializer);
   const evaluate = new Function("invoice", "referenceMonth", "resolveBillingManualClosureWithoutFiscalInvoiceReason", `return (${variable.initializer.getText(component.source)});`);
-  for (const wbLogin of ["wb_diorgenes", "wb_stephaniet", "wb_cauar", "wb_gabrielh", "wb_outro"]) for (const month of ["2026-08", "2026-09", "2026-10", "2027-08"]) {
-    const authorizedMonth = ["wb_diorgenes", "wb_stephaniet"].includes(wbLogin) ? "2026-08" : ["wb_cauar", "wb_gabrielh"].includes(wbLogin) ? "2026-09" : null;
+  for (const wbLogin of ["wb_diorgenes", "wb_stephaniet", "wb_cauar", "wb_gabrielh", "wb_jessicam", "wb_outro"]) for (const month of ["2026-08", "2026-09", "2026-10", "2026-11", "2027-08", "2027-10"]) {
+    const authorizedMonth = ["wb_diorgenes", "wb_stephaniet"].includes(wbLogin) ? "2026-08" : ["wb_cauar", "wb_gabrielh"].includes(wbLogin) ? "2026-09" : wbLogin === "wb_jessicam" ? "2026-10" : null;
     assert.equal(evaluate({ wbLogin, employeeStatus: "Ativo", finalAmount: 1000 }, month, resolveBillingManualClosureWithoutFiscalInvoiceReason), month === authorizedMonth);
   }
 });
