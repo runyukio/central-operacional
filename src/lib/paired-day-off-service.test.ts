@@ -3,12 +3,13 @@ import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
 import { createPairedSwap, updatePairedSwap, validatePairedDates, listPairedSwapPartners, PAIRED_SWAP_KIND } from "./paired-day-off-service";
-import { createOperationalRequest, getOperationalRequest, listOperationalRequests, type CreateRequestInput } from "./request-service";
+import { createOperationalRequest, getOperationalRequest, listOperationalRequests, updateOperationalRequestStatus, type CreateRequestInput } from "./request-service";
 
 const requesterActor = { email: "requester@test.invalid", name: "Ana", role: "COLABORADOR" as const };
 const partnerActor = { email: "partner@test.invalid", name: "Bia", role: "COLABORADOR" as const };
 const supervisorActor = { email: "supervisor@test.invalid", name: "Supervisor", role: "SUPERVISOR" as const };
 const wfmActor = { email: "wfm@test.invalid", name: "WFM", role: "WFM" as const };
+const adminActor = { email: "admin@test.invalid", name: "Admin", role: "ADMIN" as const };
 const current = "2026-11-10", desired = "2026-11-12";
 const input: CreateRequestInput = { type: "Troca Casada", title: "Troca Casada", description: "Compromisso", justification: "Compromisso", priority: "Média" as const,
   dayOffKind: PAIRED_SWAP_KIND, partnerEmployeeId: "partner", acknowledgement: true, currentDayOffDate: current, desiredDayOffDate: desired };
@@ -96,6 +97,103 @@ test("two acceptances, responsible supervisor and WFM precede atomic schedule tr
   assert.equal(state.audits.filter(row => row.entity === "Schedule").length, 4);
   await assert.rejects(updatePairedSwap(wfmActor, "wfm-user", "swap", "Aprovado"), /encerrada/);
 });
+
+test("admin sees and executes final approval through the request service after both acceptances and supervisor approval", async t => {
+  const { state } = fixture(t);
+  await createPairedSwap("requester-user", input);
+  const original = structuredClone(state.schedules);
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "admin-user", name: "Admin", email: adminActor.email, role: { name: "ADMIN" }, status: "ACTIVE", employeeProfile: null }) });
+  mockPrismaDelegate(t, "request", { findFirst: async () => state.request, findMany: async () => [state.request], count: async () => 1, groupBy: async () => [] });
+  mockPrismaDelegate(t, "employeeProfile", { findMany: async () => [] });
+  for (const stage of ["PARTNER", "SUPERVISOR"]) {
+    assert.equal(state.request.payload.stage, stage);
+    const detail = await getOperationalRequest(adminActor, "swap");
+    assert.ok(detail);
+    assert.equal(detail.canPartnerAccept, false);
+    assert.equal(detail.canSupervisorStep, false);
+    assert.equal(detail.canWfmFinal, false);
+    await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Aprovado"), /Sem permissão/);
+    assert.deepEqual(state.schedules, original);
+    if (stage === "PARTNER") await updatePairedSwap(partnerActor, "partner-user", "swap", "Aprovado");
+  }
+  await updatePairedSwap(supervisorActor, "supervisor-user", "swap", "Aprovado");
+  const detail = await getOperationalRequest(adminActor, "swap");
+  assert.ok(detail);
+  assert.equal(detail.status, "Em análise");
+  assert.equal(detail.canWfmFinal, true);
+  assert.equal((await listOperationalRequests(adminActor)).data[0].canWfmFinal, true);
+  const result = await updateOperationalRequestStatus(adminActor, "swap", "Aprovado");
+  assert.ok(result && result !== "FORBIDDEN" && "data" in result, JSON.stringify(result));
+  assert.equal(result.scheduleUpdated, true);
+  assert.equal(result.persisted, true);
+  assert.equal(result.data.canWfmFinal, false);
+  assert.equal(state.request.status, "APROVADO");
+  assert.equal(state.request.payload.stage, "DONE");
+  assert.equal(state.request.payload.scheduleApplicationStatus, "APPLIED");
+  assert.equal(state.request.payload.wfmApprovedById, "admin-user");
+  assert.ok(state.request.payload.wfmApprovedAt);
+  assert.ok(state.audits.some(row => row.entity === "Request" && row.action === "APROVACAO" && row.actorId === "admin-user"));
+  assert.deepEqual(state.schedules.map(row => [row.status, row.startsAt, row.endsAt]), [
+    ["TROCA_APROVADA", "22:00", "08:00"], ["FOLGA_APROVADA", null, null], ["FOLGA_APROVADA", null, null], ["TROCA_APROVADA", "23:00", "08:00"]
+  ]);
+  assert.equal(state.histories.length, 4);
+  assert.ok(state.histories.every(row => row.changedById === "admin-user"));
+  await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Aprovado"), /encerrada/);
+});
+
+test("admin can reject at the final stage with a reason and without changing schedules", async t => {
+  const { state } = fixture(t);
+  await createPairedSwap("requester-user", input);
+  await updatePairedSwap(partnerActor, "partner-user", "swap", "Aprovado");
+  await updatePairedSwap(supervisorActor, "supervisor-user", "swap", "Aprovado");
+  const original = structuredClone(state.schedules);
+  await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Recusado"), /motivo/);
+  const result = await updatePairedSwap(adminActor, "admin-user", "swap", "Recusado", "Datas indisponíveis");
+  assert.equal(result.scheduleUpdated, false);
+  assert.equal(state.request.status, "RECUSADO");
+  assert.equal(state.request.payload.scheduleApplicationStatus, "NOT_APPLIED");
+  assert.deepEqual(state.schedules, original);
+  assert.equal(state.histories.length, 0);
+});
+
+test("admin final approval preserves required acceptances, responsible supervisor and schedule validation", async t => {
+  const { state } = fixture(t);
+  await createPairedSwap("requester-user", input);
+  await updatePairedSwap(partnerActor, "partner-user", "swap", "Aprovado");
+  await updatePairedSwap(supervisorActor, "supervisor-user", "swap", "Aprovado");
+  const payload = structuredClone(state.request.payload);
+  const original = structuredClone(state.schedules);
+  for (const patch of [{ requesterAcceptedAt: null }, { partnerAcceptedAt: null }, { supervisorApprovedAt: null }, { supervisorApprovedById: "unrelated-supervisor" }]) {
+    state.request.payload = { ...payload, ...patch };
+    await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Aprovado"), /dois aceites/);
+    assert.deepEqual(state.schedules, original);
+  }
+  state.request.payload = payload;
+  state.schedules[1].startsAt = "23:30";
+  await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Aprovado"), /cronograma mudou/);
+  assert.equal(state.request.status, "EM_ANALISE");
+  assert.equal(state.histories.length, 0);
+});
+
+for (const role of ["COLABORADOR", "SUPERVISOR", "GESTOR"] as const) {
+  test(`${role} cannot perform WFM final approval or rejection`, async t => {
+    const { state } = fixture(t);
+    await createPairedSwap("requester-user", input);
+    await updatePairedSwap(partnerActor, "partner-user", "swap", "Aprovado");
+    await updatePairedSwap(supervisorActor, "supervisor-user", "swap", "Aprovado");
+    const actor = { ...requesterActor, role };
+    mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "requester-user", name: "Ana", email: actor.email, role: { name: role }, status: "ACTIVE", employeeProfile: null }) });
+    mockPrismaDelegate(t, "request", { findFirst: async () => state.request });
+    const detail = await getOperationalRequest(actor, "swap");
+    assert.ok(detail);
+    assert.equal(detail.canWfmFinal, false);
+    for (const status of ["Aprovado", "Recusado"] as const) {
+      await assert.rejects(updatePairedSwap(actor, "requester-user", "swap", status, "Motivo"), /Sem permissão/);
+    }
+    assert.equal(state.request.status, "EM_ANALISE");
+    assert.equal(state.histories.length, 0);
+  });
+}
 
 test("cross-LOB, cross-shift, self, inactive and reversed days are rejected without creating a request", async t => {
   const { state, profiles } = fixture(t);
