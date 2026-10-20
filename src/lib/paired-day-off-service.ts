@@ -176,7 +176,7 @@ function pairedSwapDecision(payload: SwapPayload, userId: string, requesterId: s
   const normalized = normalizeRole(role);
   const authorized = payload.stage === "PARTNER" ? userId === payload.partnerUserId
     : payload.stage === "SUPERVISOR" ? userId === supervisorId && normalized === "SUPERVISOR"
-    : payload.stage === "WFM" && normalized === "WFM";
+    : payload.stage === "WFM" && ["ADMIN", "WFM"].includes(normalized);
   if (!authorized) throw new PairedSwapError("Sem permissão para decidir nesta etapa da troca casada.");
   if (status === "Recusado") return "REJECT";
   if (status !== "Aprovado") throw new PairedSwapError("Use aceitar ou recusar na etapa atual da troca casada.");
