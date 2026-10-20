@@ -1,6 +1,10 @@
 import { normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 
 export const BILLING_STAFF_RATE_DEFAULTS = {
+  MANAGER: {
+    day: 102.27272727,
+    night: 102.27272727
+  },
   HR: {
     day: 25.56818182,
     night: 29.40340909
@@ -12,6 +16,7 @@ export const BILLING_STAFF_RATE_DEFAULTS = {
 } as const;
 
 export const BILLING_STAFF_RATE_RULES = [
+  { skillKey: "manager", displayName: "Gerente", dayKey: "STAFF_MANAGER_DAY_RATE", nightKey: "STAFF_MANAGER_NIGHT_RATE", aliases: ["gerente", "manager"] },
   { skillKey: "coordinator", displayName: "Coordinator", dayKey: "STAFF_COORDINATOR_DAY_RATE", nightKey: "STAFF_COORDINATOR_NIGHT_RATE", aliases: ["coordinator", "coordenador", "coordenadora"] },
   { skillKey: "it_team", displayName: "TI", dayKey: "STAFF_IT_TEAM_DAY_RATE", nightKey: "STAFF_IT_TEAM_NIGHT_RATE", aliases: ["it team", "it", "ti", "logistica/ti", "logistica ti"] },
   { skillKey: "quality_analyst", displayName: "Quality Analyst", dayKey: "STAFF_QUALITY_ANALYST_DAY_RATE", nightKey: "STAFF_QUALITY_ANALYST_NIGHT_RATE", aliases: ["quality analyst", "quality", "qa", "analista de qualidade", "qualidade"] },
@@ -41,10 +46,12 @@ export function resolveEmployeeBillingStaffRateRule(employee: { skill?: string |
   rule: BillingStaffRateRule;
   source: BillingStaffRateSource;
 } | null {
-  const skillRule = resolveBillingStaffRateRule(employee.skill);
-  if (skillRule) return { rule: skillRule, source: "Skill" };
-
   const roleTitleRule = resolveBillingStaffRateRule(employee.roleTitle);
+  if (roleTitleRule?.skillKey === "manager") return { rule: roleTitleRule, source: "Cargo/Função" };
+
+  const skillRule = resolveBillingStaffRateRule(employee.skill);
+  if (skillRule && skillRule.skillKey !== "manager") return { rule: skillRule, source: "Skill" };
+
   if (roleTitleRule && STAFF_ROLE_TITLE_FALLBACK_KEYS.has(roleTitleRule.skillKey)) {
     return { rule: roleTitleRule, source: "Cargo/Função" };
   }
