@@ -22,6 +22,22 @@ export async function loadVolumeForecastRange(lob: VolumeForecastLob, requestedD
   const end = new Date(forecastDateAdd(lastCutoff, 1));
   const queueIds = volumeForecastQueueIds(lob);
   if (!queueIds.length) throw new Error("LOB sem de/para para forecast de volume.");
+  // One ADS training snapshot per Brazil day, shared across consumers/ranges.
+  // Do not key by the live source fingerprint: an import later today updates
+  // actuals, but may only train the reference issued on the next calendar day.
+  const dailyReference = lob === "ADS" && dates.some(date => date >= today)
+    ? await unstable_cache(async () => {
+      const rows = await prisma.$queryRaw<Array<{ at: Date; input: number }>>(Prisma.sql`
+        SELECT date_trunc('hour',p."bzTime") AS at,SUM(p."inputCount")::double precision AS input
+        FROM "PerformanceQueueVolumeRecord" p LEFT JOIN "PerformanceImportBatch" b ON b.id=p."importBatchId"
+        WHERE p."queueId" IN (${Prisma.join(queueIds)})
+          AND p."bzTime">=${new Date(forecastDateAdd(today, -142))} AND p."bzTime"<${new Date(today)}
+          AND p."inputCount">=0 AND (p."importBatchId" IS NULL OR b.status='SUCCESS')
+        GROUP BY 1 ORDER BY 1
+      `);
+      return rows.map(row => ({ at: new Date(row.at).toISOString(), input: row.input }));
+    }, ["ads-daily-forecast-reference", VOLUME_FORECAST_VERSION, today, queueIds.join(",")], { revalidate: false })()
+    : null;
   const predicate = Prisma.sql`p."queueId" IN (${Prisma.join(queueIds)}) AND p."bzTime">=${start} AND p."bzTime"<${end} AND p."inputCount">=0 AND (p."importBatchId" IS NULL OR b.status='SUCCESS')`;
   const [source] = await prisma.$queryRaw<Array<{ rows: string; updated: string | null; input: string }>>(Prisma.sql`
     SELECT COUNT(*)::text AS rows,MAX(p."updatedAt")::text AS updated,COALESCE(SUM(p."inputCount"),0)::text AS input
@@ -37,10 +53,12 @@ export async function loadVolumeForecastRange(lob: VolumeForecastLob, requestedD
       GROUP BY 1 ORDER BY 1
     `);
     const engine = createVolumeForecastEngine(rows, lob);
-    const points = dates.flatMap((date) => engine.predictDay(date, date < today ? date : today));
+    const referenceEngine = dailyReference !== null ? createVolumeForecastEngine(dailyReference, lob) : engine;
+    const points = dates.flatMap((date) => date < today ? engine.predictDay(date, date) : referenceEngine.predictDay(date, today));
     const latest = engine.actuals.at(-1);
-    const lastComplete = completeForecastDays(rows).filter(day => day.date < today).at(-1)?.at ?? null;
-    const evaluation = withEvaluation && lastComplete !== null ? evaluateVolumeForecast(engine, forecastDates(new Date(lastComplete - 6 * 86400000).toISOString().slice(0, 10), new Date(lastComplete).toISOString().slice(0, 10))) : null;
+    const lastComplete = completeForecastDays(dailyReference ?? rows).filter(day => day.date < today).at(-1)?.at ?? null;
+    const lastEvaluationDay = completeForecastDays(rows).filter(day => day.date < today).at(-1)?.at ?? null;
+    const evaluation = withEvaluation && lastEvaluationDay !== null ? evaluateVolumeForecast(engine, forecastDates(new Date(lastEvaluationDay - 6 * 86400000).toISOString().slice(0, 10), new Date(lastEvaluationDay).toISOString().slice(0, 10))) : null;
     return {
       points, actuals: engine.actuals.filter((r) => dates.includes(r.at.toISOString().slice(0, 10))).map((r) => ({ at: r.at.toISOString(), input: r.input, complete: true, source: "Performance" as const })),
       latestVolumeAt: latest?.at.toISOString() ?? null, updatedAt: source?.updated ? new Date(source.updated).toISOString() : null,
