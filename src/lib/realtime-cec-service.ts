@@ -5,6 +5,7 @@ import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { fetchRealtimeCecFromFreshdesk, getCurrentCecCycle } from "@/lib/realtime-cec-freshdesk";
+import { groupRealtimeCycles, selectRealtimeCycle, type RealtimeCycleGrouping } from "@/lib/realtime-hourly-cycles";
 
 const cecRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 const saoPauloTimeZone = "America/Sao_Paulo";
@@ -206,7 +207,7 @@ async function refreshRealtimeCecFromFreshdeskUncached() {
   return { ...imported, refreshed: true };
 }
 
-export async function getRealtimeCecReport(actor: Actor, options: { cycleDownload?: string; forceRefresh?: boolean } = {}) {
+export async function getRealtimeCecReport(actor: Actor, options: { cycleDownload?: string; forceRefresh?: boolean; cycleGrouping?: RealtimeCycleGrouping } = {}) {
   if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
@@ -223,7 +224,7 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
 
   // Historic cycles need only the stored aggregate + compact agent list, not
   // hundreds of full ticket arrays. Missing legacy aggregates retain a fallback.
-  const snapshots = await prisma.$queryRaw<Array<{
+  const allSnapshots = await prisma.$queryRaw<Array<{
     id: string; cycleDownload: string; importedAt: Date; totalBacklog: number;
     rawData: Prisma.JsonValue;
   }>>(Prisma.sql`
@@ -235,7 +236,9 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
     WHERE "importedAt" >= ${realtimeCecRetentionCutoff()} AND "source" = ${cecCpdSource}
     ORDER BY "cycleDownload" DESC, "importedAt" DESC LIMIT 200
   `);
-  const selected = resolveSelectedSnapshot(snapshots, options.cycleDownload);
+  const snapshots = groupRealtimeCycles(allSnapshots.map((snapshot) => ({ ...snapshot, value: snapshot.cycleDownload })), options.cycleGrouping);
+  const selected = resolveSelectedSnapshot(snapshots, options.cycleGrouping === "hour"
+    ? selectRealtimeCycle(snapshots, options.cycleDownload, options.cycleGrouping) : options.cycleDownload);
   const previous = selected ? snapshots.find((snapshot) => snapshot.cycleDownload < selected.cycleDownload) ?? null : null;
   const details = selected ? await prisma.realTimeCecSnapshot.findMany({
     where: { id: { in: [selected.id, ...(previous ? [previous.id] : [])] } }

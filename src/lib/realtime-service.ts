@@ -23,6 +23,7 @@ import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
 import { buildRealtimePresenceFallbackRows } from "@/lib/realtime-presence-fallback";
 import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
+import { groupRealtimeCycles, selectRealtimeCycle, type RealtimeCycleGrouping } from "@/lib/realtime-hourly-cycles";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
@@ -35,6 +36,7 @@ export type RealTimeImportInput = {
 };
 
 export type RealtimeSnapshotOptions = {
+  cycleGrouping?: RealtimeCycleGrouping;
   cycleDownload?: string;
   view?: "agents" | "queues" | "both";
 };
@@ -274,12 +276,12 @@ const realtimeRawDeleteLimit = Number.isFinite(configuredRealtimeRawDeleteLimit)
   : 10_000;
 
 const getCachedQueueRealtimeView = unstable_cache(
-  async (cycleDownload: string) => buildQueueRealtimeView({ cycleDownload: cycleDownload || undefined }),
+  async (cycleDownload: string, cycleGrouping: RealtimeCycleGrouping) => buildQueueRealtimeView({ cycleDownload: cycleDownload || undefined, cycleGrouping }),
   ["realtime-queue-view-v1"],
   { revalidate: 60, tags: ["realtime-queue-view"] }
 );
 const getCachedAgentRealtimeView = unstable_cache(
-  async (cycleDownload: string) => buildAgentRealtimeView({ cycleDownload: cycleDownload || undefined }),
+  async (cycleDownload: string, cycleGrouping: RealtimeCycleGrouping) => buildAgentRealtimeView({ cycleDownload: cycleDownload || undefined, cycleGrouping }),
   ["realtime-agent-view-v1"],
   { revalidate: 60, tags: ["realtime-agent-view"] }
 );
@@ -660,8 +662,8 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
   }
 
   const [queueRealtime, agentRealtime] = await Promise.all([
-    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : getCachedQueueRealtimeView(options.cycleDownload ?? ""),
-    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : getCachedAgentRealtimeView(options.cycleDownload ?? "")
+    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : getCachedQueueRealtimeView(options.cycleDownload ?? "", options.cycleGrouping ?? "original"),
+    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : getCachedAgentRealtimeView(options.cycleDownload ?? "", options.cycleGrouping ?? "original")
   ]);
 
   const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
@@ -1766,7 +1768,7 @@ export async function listRealtimeImports(actor: Actor) {
 
 export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQuery): Promise<XlsxExportPayload | { error: string; status: number }> {
   const exportView = query.view === "queues" ? "queues" : "both";
-  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload, view: exportView });
+  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload, cycleGrouping: query.cycleGrouping, view: exportView });
   if ("error" in snapshot && snapshot.error) return { error: snapshot.error, status: snapshot.status ?? 400 };
   const snapshotData = "data" in snapshot ? snapshot.data : null;
   if (!snapshotData) return { error: "Não foi possível exportar Real Time.", status: 500 };
@@ -2285,17 +2287,15 @@ function compareRealtimeCyclesDesc(a: RealtimeCycleOption, b: RealtimeCycleOptio
   return b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value);
 }
 
-function formatRealtimeCycleOptions(cycleOptions: RealtimeCycleOption[]) {
-  return cycleOptions
-    .sort(compareRealtimeCyclesDesc)
+function formatRealtimeCycleOptions(cycleOptions: RealtimeCycleOption[], grouping?: RealtimeCycleGrouping) {
+  return groupRealtimeCycles(cycleOptions, grouping)
+    .sort(grouping === "hour" ? (a, b) => b.value.localeCompare(a.value) : compareRealtimeCyclesDesc)
     .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
 }
 
-function resolveSelectedRealtimeCycle(cycleOptions: RealtimeCycleOption[], requestedCycle?: string) {
+function resolveSelectedRealtimeCycle(cycleOptions: RealtimeCycleOption[], requestedCycle?: string, grouping?: RealtimeCycleGrouping) {
   if (!cycleOptions.length) return { selectedCycle: "", previousCycle: "", selectedIndex: -1 };
-  const selectedCycle = requestedCycle && cycleOptions.some((cycle) => cycle.value === requestedCycle)
-    ? requestedCycle
-    : cycleOptions[0].value;
+  const selectedCycle = selectRealtimeCycle(cycleOptions, requestedCycle, grouping);
   const selectedIndex = cycleOptions.findIndex((cycle) => cycle.value === selectedCycle);
   return {
     selectedCycle,
@@ -2416,11 +2416,11 @@ function buildQueueRealtimeViewFromSummaryRows(
   const rawCycles = cycleOptions?.length
     ? cycleOptions
     : Array.from(cycleMap.values()).sort(compareRealtimeCyclesDesc);
-  const cycles = formatRealtimeCycleOptions(rawCycles);
+  const cycles = formatRealtimeCycleOptions(rawCycles, options.cycleGrouping);
 
   if (!cycles.length) return emptyQueueRealtimeView();
 
-  const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
+  const selectedCycle = selectRealtimeCycle(cycles, options.cycleDownload, options.cycleGrouping);
   const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const latestRowsByCycle = new Map<string, QueueSummaryReadRow[]>();
@@ -2594,8 +2594,8 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
 
   if (!batches.length) return emptyQueueRealtimeView();
 
-  const cycleOptions = buildRealtimeCycleOptionsFromBatches(batches, "queueRows");
-  const { selectedCycle: viewSelectedCycle, previousCycle: viewPreviousCycle } = resolveSelectedRealtimeCycle(cycleOptions, options.cycleDownload);
+  const cycleOptions = groupRealtimeCycles(buildRealtimeCycleOptionsFromBatches(batches, "queueRows"), options.cycleGrouping);
+  const { selectedCycle: viewSelectedCycle, previousCycle: viewPreviousCycle } = resolveSelectedRealtimeCycle(cycleOptions, options.cycleDownload, options.cycleGrouping);
   const batchIds = selectRealtimeBatchIdsForView(cycleOptions, viewSelectedCycle, viewPreviousCycle);
   const summaryRows = await prisma.realTimeQueueCycleSummary.findMany({
     where: { batchId: { in: batchIds } },
@@ -2683,13 +2683,11 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
     }
   });
 
-  const cycles = Array.from(cycleMap.values())
-    .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value))
-    .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
+  const cycles = formatRealtimeCycleOptions(Array.from(cycleMap.values()), options.cycleGrouping);
 
   if (!cycles.length) return emptyQueueRealtimeView();
 
-  const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
+  const selectedCycle = selectRealtimeCycle(cycles, options.cycleDownload, options.cycleGrouping);
   const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const groupedByCycle = new Map<string, QueueCycleRow[]>();
@@ -2788,11 +2786,11 @@ async function buildAgentRealtimeViewFromSummaryRows(
   const rawCycles = cycleOptions?.length
     ? cycleOptions
     : Array.from(cycleMap.values()).sort(compareRealtimeCyclesDesc);
-  const cycles = formatRealtimeCycleOptions(rawCycles);
+  const cycles = formatRealtimeCycleOptions(rawCycles, options.cycleGrouping);
 
   if (!cycles.length) return emptyAgentRealtimeView();
 
-  const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
+  const selectedCycle = selectRealtimeCycle(cycles, options.cycleDownload, options.cycleGrouping);
   const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const latestRowsByCycle = new Map<string, AgentSummaryReadRow[]>();
@@ -3023,8 +3021,8 @@ async function buildAgentRealtimeView(options: RealtimeSnapshotOptions) {
 
   if (!batches.length) return emptyAgentRealtimeView();
 
-  const cycleOptions = buildRealtimeCycleOptionsFromBatches(batches, "agentRows");
-  const { selectedCycle: viewSelectedCycle, previousCycle: viewPreviousCycle } = resolveSelectedRealtimeCycle(cycleOptions, options.cycleDownload);
+  const cycleOptions = groupRealtimeCycles(buildRealtimeCycleOptionsFromBatches(batches, "agentRows"), options.cycleGrouping);
+  const { selectedCycle: viewSelectedCycle, previousCycle: viewPreviousCycle } = resolveSelectedRealtimeCycle(cycleOptions, options.cycleDownload, options.cycleGrouping);
   const batchIds = selectRealtimeBatchIdsForView(cycleOptions, viewSelectedCycle, viewPreviousCycle);
   const summaryRows = await prisma.realTimeAgentCycleSummary.findMany({
     where: { batchId: { in: batchIds } },
@@ -3129,13 +3127,11 @@ async function buildAgentRealtimeView(options: RealtimeSnapshotOptions) {
     }
   });
 
-  const cycles = Array.from(cycleMap.values())
-    .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value))
-    .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
+  const cycles = formatRealtimeCycleOptions(Array.from(cycleMap.values()), options.cycleGrouping);
 
   if (!cycles.length) return emptyAgentRealtimeView();
 
-  const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
+  const selectedCycle = selectRealtimeCycle(cycles, options.cycleDownload, options.cycleGrouping);
   const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const groupedByCycle = new Map<string, AgentCycleRow[]>();

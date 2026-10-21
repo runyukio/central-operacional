@@ -12,6 +12,7 @@ export async function GET(request: Request) {
   const view = searchParams.get("view");
   const result = await exportRealtimeAgents(actor, {
     cycleDownload: searchParams.get("cycleDownload") ?? undefined,
+    cycleGrouping: searchParams.get("cycleGrouping") === "hour" ? "hour" : "original",
     view: view === "agents" || view === "queues" || view === "both" ? view : undefined,
     search: searchParams.get("search"),
     crossingStatus: searchParams.get("crossingStatus"),

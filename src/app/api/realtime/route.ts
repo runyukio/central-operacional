@@ -11,6 +11,7 @@ export async function GET(request: Request) {
   const view = url.searchParams.get("view");
   const result = await getRealtimeSnapshot(actor, {
     cycleDownload: url.searchParams.get("cycleDownload") ?? undefined,
+    cycleGrouping: url.searchParams.get("cycleGrouping") === "hour" ? "hour" : "original",
     view: view === "agents" || view === "queues" || view === "both" ? view : undefined
   });
   if ("error" in result) {

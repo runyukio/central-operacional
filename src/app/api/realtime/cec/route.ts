@@ -11,6 +11,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const result = await getRealtimeCecReport(actor, {
     cycleDownload: url.searchParams.get("cycleDownload") ?? undefined,
+    cycleGrouping: url.searchParams.get("cycleGrouping") === "hour" ? "hour" : "original",
     forceRefresh: url.searchParams.get("force") === "true"
   });
   if ("error" in result) {

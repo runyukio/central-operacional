@@ -490,7 +490,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     else setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams();
+      const params = new URLSearchParams({ cycleGrouping: "hour" });
       if (cycle) params.set("cycleDownload", cycle);
       params.set("view", view);
       const response = await fetch(`/api/realtime?${params.toString()}`, { cache: "no-store", signal: controller.signal });
@@ -532,7 +532,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     setCecLoading(true);
     setCecError("");
     try {
-      const params = new URLSearchParams();
+      const params = new URLSearchParams({ cycleGrouping: "hour" });
       if (cycle) params.set("cycleDownload", cycle);
       if (force) params.set("force", "true");
       const response = await fetch(`/api/realtime/cec?${params.toString()}`, { cache: "no-store" });
@@ -862,7 +862,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
-            {useEnglishChrome ? "Cycle" : "Ciclo"}
+            {useEnglishChrome ? "Hourly cycle" : "Ciclo por hora"}
             <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={(cycle) => changeCycle(cycle)} />
           </label>
           <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1724,8 +1724,9 @@ function RealtimeCyclePicker({
       <button type="button" onClick={() => setOpen((current) => !current)} className="premium-control flex h-11 w-full items-center justify-between gap-2 px-3 text-left text-sm font-extrabold text-navy-950">
         <span className="flex min-w-0 items-center gap-2">
           <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
-          <span className="truncate">{selected ? `${formatDateShort(selected.date)} - ${selected.timeLabel}` : "Selecione um ciclo"}</span>
+          <span className="truncate">{selected ? `${formatDateShort(selected.date)} - ${selected.timeLabel.slice(0, 2)}:00` : "Selecione um ciclo"}</span>
         </span>
+        <span className="shrink-0 text-[11px] font-bold text-muted">Atualização {selected?.timeLabel ?? "—"}</span>
         <span className="text-xs font-black text-muted">{open ? "▲" : "▼"}</span>
       </button>
       {open ? (
@@ -1773,7 +1774,7 @@ function RealtimeCyclePicker({
             </div>
           </div>
           <div className="border-t border-slate-100 bg-slate-50 p-3 md:border-l md:border-t-0">
-            <p className="mb-2 text-xs font-black uppercase tracking-wide text-muted">Horários disponíveis</p>
+            <p className="mb-2 text-xs font-black uppercase tracking-wide text-muted">Ciclos por hora</p>
             <div className="max-h-[340px] space-y-1 overflow-y-auto pr-1">
               {selectedDayCycles.map((cycle) => (
                 <button
@@ -1785,8 +1786,8 @@ function RealtimeCyclePicker({
                   }}
                   className={cn("w-full rounded-2xl px-3 py-2 text-left text-sm font-black transition", value === cycle.value ? "bg-blue-600 text-white" : "bg-white hover:bg-blue-50 hover:text-blue-700")}
                 >
-                  <span className="block">{cycle.timeLabel}</span>
-                  <span className={cn("text-[11px] font-bold", value === cycle.value ? "text-blue-100" : "text-muted")}>{cycle.rows} linha(s)</span>
+                  <span className="block">{cycle.timeLabel.slice(0, 2)}:00</span>
+                  <span className={cn("text-[11px] font-bold", value === cycle.value ? "text-blue-100" : "text-muted")}>Atualização {cycle.timeLabel} · {cycle.rows} linha(s)</span>
                 </button>
               ))}
               {!selectedDayCycles.length ? <p className="rounded-2xl bg-white px-3 py-6 text-center text-sm font-bold text-muted">Nenhum ciclo neste dia.</p> : null}
@@ -4763,7 +4764,7 @@ function formatSlaTargetLabel(value: string) {
 }
 
 function buildAgentQueryParams(cycleDownload: string, filters: AgentFilters) {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ cycleGrouping: "hour" });
   if (cycleDownload) params.set("cycleDownload", cycleDownload);
   Object.entries(filters).forEach(([key, value]) => {
     if (value) params.set(key, value);
@@ -4772,7 +4773,7 @@ function buildAgentQueryParams(cycleDownload: string, filters: AgentFilters) {
 }
 
 function buildQueueQueryParams(cycleDownload: string, filters: QueueFilters) {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ cycleGrouping: "hour" });
   if (cycleDownload) params.set("cycleDownload", cycleDownload);
   Object.entries(filters).forEach(([key, value]) => {
     if (value) params.set(`queue${key[0].toUpperCase()}${key.slice(1)}`, value);
