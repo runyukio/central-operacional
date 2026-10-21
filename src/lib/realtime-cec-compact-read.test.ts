@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { prisma } from "./prisma";
+import { mockPrismaDelegate } from "./prisma-test-delegate";
 import { getRealtimeCecReport } from "./realtime-cec-service";
 
 test("CEC read fetches tickets only for selected/previous cycles and keeps historic CPD", async () => {
@@ -29,4 +30,25 @@ test("CEC read fetches tickets only for selected/previous cycles and keeps histo
     prisma.$queryRaw = rawQuery;
     prisma.realTimeCecSnapshot.findMany = findMany;
   }
+});
+
+test("hourly CEC reads keep the last snapshot per hour and compare distinct hours", async (t) => {
+  const summaries = ["2026-10-21 10:00", "2026-10-21 09:30", "2026-10-21 09:00", "2026-10-20 23:30"].map((cycleDownload, index) => ({
+    id: `snapshot-${index}`, cycleDownload, importedAt: new Date(`${cycleDownload.replace(" ", "T")}:00-03:00`),
+    fileName: "sample.csv", source: "freshdesk-cec-cpd-hourly", generatedDate: null, totalBacklog: 10 - index,
+    rawData: { agents: [{ agentName: "A", cpd: 10 - index }], tickets: [{ ticket: "t1", agentName: "A" }] }
+  }));
+  t.mock.method(prisma, "$queryRaw", async () => summaries);
+  mockPrismaDelegate(t, "realTimeCecSnapshot", { findMany: async (args: any) => {
+    assert.deepEqual(args.where.id.in, ["snapshot-1", "snapshot-3"]);
+    return summaries.filter((snapshot) => args.where.id.in.includes(snapshot.id));
+  } });
+  const result = await getRealtimeCecReport({ email: "admin@example.invalid", name: "Admin", role: "ADMIN" }, {
+    cycleGrouping: "hour", cycleDownload: "2026-10-21 09:00"
+  });
+  assert.ok("data" in result && result.data);
+  assert.equal(result.data.selectedCycle, "2026-10-21 09:30");
+  assert.equal(result.data.previousCycle, "2026-10-20 23:30");
+  assert.deepEqual(result.data.cycles.map((cycle) => cycle.value), ["2026-10-21 10:00", "2026-10-21 09:30", "2026-10-20 23:30"]);
+  assert.deepEqual(result.data.history.map((row) => row.totalCpd), [7, 9, 10]);
 });
