@@ -27,6 +27,7 @@ import {
   isReportOnlineHeadcountRow
 } from "@/lib/realtime-report-headcount";
 import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
+import { forecastComparisonPoints } from "@/lib/volume-forecast-comparison";
 import { cn } from "@/lib/utils";
 import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
@@ -693,7 +694,8 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
           .then(async (response) => {
             const json = await response.json();
             if (!response.ok) throw new Error(json?.message || json?.error || "Forecast indisponível.");
-            return (json.series?.find((series: { lob: string }) => series.lob === executiveLob)?.points ?? []) as PerformanceForecastTrendRow[];
+            const series = json.series?.find((series: { lob: string }) => series.lob === executiveLob);
+            return forecastComparisonPoints<PerformanceForecastTrendRow>(series);
           }),
         fetch(`/api/staff-coverage?${requiredParams.toString()}`, { cache: "no-store", signal: controller.signal })
           .then(async (response) => {

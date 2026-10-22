@@ -23,7 +23,7 @@ export {
   operationalForecastToday,
   type VolumeObservation,
 } from "./volume-forecast-time";
-export const VOLUME_FORECAST_VERSION = "volume-v5-ads-robust-prior-online";
+export const VOLUME_FORECAST_VERSION = "volume-v6-ads-daily-reference-online";
 export type VolumeModel = string;
 export type VolumeForecastPoint = {
   dateKey: string;
