@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
 import { canAccessRealtimeHoursActivity } from "@/lib/realtime-hours-permissions";
-import { getWorkstationActivity } from "@/lib/workstation-activity-service";
+import { getWorkstationActivityQuery } from "@/lib/workstation-activity-query";
 
 export const dynamic = "force-dynamic";
 
@@ -16,17 +16,26 @@ export async function GET(request: Request) {
     }, { status: 403 });
   }
 
-  const url = new URL(request.url);
-  const result = await getWorkstationActivity(actor, {
-    date: url.searchParams.get("date"),
-    search: url.searchParams.get("search"),
-    sourceType: url.searchParams.get("sourceType"),
-    domain: url.searchParams.get("domain"),
-    employeeId: url.searchParams.get("employeeId"),
-    limit: url.searchParams.get("limit")
-  });
+  try {
+    const url = new URL(request.url);
+    const result = await getWorkstationActivityQuery(actor, {
+      date: url.searchParams.get("date"),
+      search: url.searchParams.get("search"),
+      sourceType: url.searchParams.get("sourceType"),
+      domain: url.searchParams.get("domain"),
+      employeeId: url.searchParams.get("employeeId"),
+      limit: url.searchParams.get("limit")
+    });
 
-  return NextResponse.json(result, {
-    status: "status" in result && typeof result.status === "number" ? result.status : 200
-  });
+    return NextResponse.json(result, {
+      status: "status" in result && typeof result.status === "number" ? result.status : 200
+    });
+  } catch (error) {
+    console.error("[realtime-hours/activity] falha ao consultar atividade", error);
+    return NextResponse.json({
+      success: false,
+      error: "Não foi possível consultar a atividade das estações.",
+      message: "Não foi possível consultar a atividade das estações."
+    }, { status: 500 });
+  }
 }
