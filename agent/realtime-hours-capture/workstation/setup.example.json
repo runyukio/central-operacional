@@ -1,0 +1,16 @@
+{
+  "cloudUrl": "https://eastriverbrasil.com",
+  "cloudToken": "SUBSTITUIR_PELO_TOKEN_DO_AGENT",
+  "wbLogin": "",
+  "employeeId": "",
+  "heartbeatSeconds": 120,
+  "activeThresholdSeconds": 300,
+  "activityEnabled": true,
+  "captureDomains": true,
+  "activitySampleSeconds": 5,
+  "activityUploadSeconds": 60,
+  "activityMaxSegmentSeconds": 3600,
+  "identitySource": "windows_user",
+  "identityConfidence": "MEDIUM",
+  "removeSetupAfterInstall": true
+}
