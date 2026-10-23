@@ -1,7 +1,7 @@
 CREATE SCHEMA IF NOT EXISTS "agent_activity";
 REVOKE ALL ON SCHEMA "agent_activity" FROM PUBLIC;
 
-CREATE TABLE "agent_activity"."WorkstationActivitySegment" (
+CREATE TABLE IF NOT EXISTS "agent_activity"."WorkstationActivitySegment" (
   "id" TEXT NOT NULL,
   "eventId" TEXT NOT NULL,
   "source" TEXT NOT NULL DEFAULT 'direct-windows-agent',
@@ -32,19 +32,19 @@ CREATE TABLE "agent_activity"."WorkstationActivitySegment" (
     CHECK ("endedAt" > "startedAt")
 );
 
-CREATE INDEX "WorkstationActivitySegment_employeeId_startedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_employeeId_startedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("employeeId", "startedAt");
-CREATE INDEX "WorkstationActivitySegment_wbLogin_startedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_wbLogin_startedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("wbLogin", "startedAt");
-CREATE INDEX "WorkstationActivitySegment_hostname_startedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_hostname_startedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("hostname", "startedAt");
-CREATE INDEX "WorkstationActivitySegment_domain_startedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_domain_startedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("domain", "startedAt");
-CREATE INDEX "WorkstationActivitySegment_sourceType_startedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_sourceType_startedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("sourceType", "startedAt");
-CREATE INDEX "WorkstationActivitySegment_startedAt_endedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_startedAt_endedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("startedAt", "endedAt");
-CREATE INDEX "WorkstationActivitySegment_endedAt_idx"
+CREATE INDEX IF NOT EXISTS "WorkstationActivitySegment_endedAt_idx"
   ON "agent_activity"."WorkstationActivitySegment"("endedAt");
 
 ALTER TABLE "agent_activity"."WorkstationActivitySegment" ENABLE ROW LEVEL SECURITY;
