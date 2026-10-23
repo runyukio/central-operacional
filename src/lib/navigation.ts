@@ -10,7 +10,11 @@ import {
   normalizeRole,
   type PermissionUser
 } from "@/lib/permissions";
-import { canAccessOwnRealtimeHours, canAccessRealtimeHoursCapture } from "@/lib/realtime-hours-permissions";
+import {
+  canAccessOwnRealtimeHours,
+  canAccessRealtimeHoursActivity,
+  canAccessRealtimeHoursCapture
+} from "@/lib/realtime-hours-permissions";
 import { isRetiredFeaturePath } from "@/lib/retired-features";
 
 export type NavItem = {
@@ -26,6 +30,7 @@ export type NavSection = {
 };
 
 const personalRoles = rolesWithCapability("PERSONAL");
+const workstationActivityRoles: AppRole[] = ["ADMIN", "GESTOR", "COORDENADOR", "GERENTE", "SUPERVISOR", "WFM"];
 const shiftReportRoles = Array.from(new Set([
   ...rolesWithCapability("SHIFT_REPORT_SUBMIT"),
   ...rolesWithCapability("SHIFT_REPORT_VIEW")
@@ -38,6 +43,7 @@ export const navSections: NavSection[] = [
       { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: rolesWithCapability("CENTRAL") },
       { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: rolesWithCapability("REALTIME_QUEUES") },
       { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: rolesWithCapability("CAPTURE") },
+      { label: "Atividade de Estação", href: "/captura-horas/atividade", icon: "MonitorCog", roles: workstationActivityRoles },
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") },
       { label: "Meus Dados", href: "/performance/meus-dados", icon: "ChartNoAxesCombined", roles: personalRoles }
@@ -90,6 +96,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
   return navItems.filter((item) => {
     if (item.href === "/meu-espaco") return canAccessMeuEspaco(permissionUser);
+    if (item.href === "/captura-horas/atividade") return canAccessRealtimeHoursActivity(permissionUser);
     if (item.href === "/captura-horas") return canAccessRealtimeHoursCapture(permissionUser);
     if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
@@ -142,6 +149,12 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return personalRoles.includes(normalizedRole);
   if (pathname === "/minhas-horas" || pathname.startsWith("/minhas-horas/") || pathname === "/api/realtime-hours/me" || pathname.startsWith("/api/realtime-hours/me/")) return canAccessOwnRealtimeHours(permissionUser);
   if (pathname === "/real-time" || pathname.startsWith("/real-time/") || pathname === "/api/realtime" || pathname.startsWith("/api/realtime/")) return canAccessRealTimeQueues(permissionUser);
+  if (
+    pathname === "/captura-horas/atividade"
+    || pathname.startsWith("/captura-horas/atividade/")
+    || pathname === "/api/realtime-hours/activity"
+    || pathname.startsWith("/api/realtime-hours/activity/")
+  ) return canAccessRealtimeHoursActivity(permissionUser);
   if (pathname === "/captura-horas" || pathname.startsWith("/captura-horas/")) return canAccessRealtimeHoursCapture(permissionUser);
 
   const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
