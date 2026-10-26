@@ -188,8 +188,25 @@ export async function updatePairedSwap(actor: Actor, userId: string, id: string,
     await lock(tx);
     const request = await tx.request.findUniqueOrThrow({ where: { id }, include });
     if (request.deletedAt) throw new PairedSwapError("Solicitação não encontrada.");
-    if (["APROVADO", "RECUSADO", "CANCELADO", "CONCLUIDO"].includes(request.status)) throw new PairedSwapError("Esta troca casada já foi encerrada.");
     const payload = request.payload as unknown as SwapPayload;
+    if (status === "Concluído" && request.status === "APROVADO") {
+      if (!["ADMIN", "WFM"].includes(normalizeRole(actor.role))) throw new PairedSwapError("Sem permissão para concluir esta troca casada.");
+      if (payload.stage !== "DONE" || payload.scheduleApplicationStatus !== "APPLIED") throw new PairedSwapError("A troca casada precisa estar aplicada aos cronogramas antes da conclusão.");
+      // The approval already applied all four schedule changes. Closure only records the administrative status.
+      const action = "Conclusão administrativa da troca casada";
+      const saved = await tx.request.update({ where: { id }, data: {
+        status: "CONCLUIDO",
+        history: { create: { actorId: userId, action, from: request.status, to: "CONCLUIDO", reason } }
+      }, include });
+      await tx.auditLog.create({ data: {
+        actorId: userId, action: "EDICAO", entity: "Request", entityId: id, reason: reason?.trim() || action,
+        previousValue: { status: request.status, stage: payload.stage, scheduleApplicationStatus: payload.scheduleApplicationStatus },
+        newValue: { status: "CONCLUIDO", stage: payload.stage, scheduleApplicationStatus: payload.scheduleApplicationStatus }
+      } });
+      await notify(tx, saved, [request.requesterId, payload.partnerUserId], `${saved.code}: ${action}.`);
+      return { request: saved, scheduleUpdated: false };
+    }
+    if (["APROVADO", "RECUSADO", "CANCELADO", "CONCLUIDO"].includes(request.status)) throw new PairedSwapError("Esta troca casada já foi encerrada.");
     const supervisorId = status === "Cancelado" && request.requesterId === userId || status === "Recusado" && payload.stage === "PARTNER" ? "" : await supervisorUserId(tx, request.employee?.supervisorId ?? null);
     const decision = pairedSwapDecision(payload, userId, request.requesterId, actor.role, supervisorId, status);
     if (decision === "REJECT" && !reason?.trim()) throw new PairedSwapError("Informe o motivo da recusa.");
