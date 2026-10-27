@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const extensionId = "blaplnkbihmcjplmgeaendjndidbppfo";
+const extensionId = "dchmgegaidpaimhadfacbejjjamkaeah";
 const version = "1.0.0";
 const packageUrl = "https://eastriverbrasil.com/api/realtime-hours/edge-extension/package";
 
