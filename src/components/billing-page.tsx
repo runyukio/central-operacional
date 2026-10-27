@@ -4,7 +4,7 @@ import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClientRequestGate } from "@/lib/client-request-gate";
-import { CheckCircle2, CircleDollarSign, Clock3, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Clock3, Download, Eye, EyeOff, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import {
   BillingFiscalInvoiceUpload,
@@ -130,6 +130,7 @@ type BillingPayload = {
     }>;
     adjustments: Array<{
       id: string;
+      hidden: boolean;
       type: string;
       description: string;
       observation: string;
@@ -421,6 +422,14 @@ export function BillingPage() {
     await postBilling({ action: "delete-adjustment", id: adjustment.id }, "Ajuste manual excluído.");
   }
 
+  async function toggleAdjustmentVisibility(adjustment: BillingPayload["data"]["adjustments"][number]) {
+    await postBilling({
+      action: "set-adjustment-visibility",
+      id: adjustment.id,
+      hidden: !adjustment.hidden
+    }, adjustment.hidden ? "Ajuste reexibido na lista." : "Ajuste ocultado da lista. O valor continua no total do billing.");
+  }
+
   async function setEmployeeInvoiceFinalized(
     invoice: BillingPayload["data"]["invoices"][number],
     finalized: boolean,
@@ -679,7 +688,7 @@ export function BillingPage() {
                       result={bulkAdjustmentResult}
                       onUpload={uploadBulkAdjustments}
                     />
-                    <AdjustmentsTable rows={data.adjustments} saving={saving} onEdit={setEditingAdjustment} onDelete={deleteAdjustment} />
+                    <AdjustmentsTable rows={data.adjustments} saving={saving} onEdit={setEditingAdjustment} onDelete={deleteAdjustment} onToggleVisibility={toggleAdjustmentVisibility} />
                     <AdjustmentRequestsTable rows={data.adjustmentRequests} />
                   </div>
                 ) : null}
@@ -1409,45 +1418,72 @@ function AdjustmentsTable({
   rows,
   saving,
   onEdit,
-  onDelete
+  onDelete,
+  onToggleVisibility
 }: {
   rows: BillingPayload["data"]["adjustments"];
   saving: boolean;
   onEdit: (row: BillingPayload["data"]["adjustments"][number]) => void;
   onDelete: (row: BillingPayload["data"]["adjustments"][number]) => void | Promise<void>;
+  onToggleVisibility: (row: BillingPayload["data"]["adjustments"][number]) => void | Promise<void>;
 }) {
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenCount = rows.filter((row) => row.hidden).length;
+  const visibleRows = rows.filter((row) => showHidden || !row.hidden);
   return (
-    <Table
-      columns={["Tipo", "Descrição", "Observação", "Parceiro", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
-      rows={rows.map((row) => [
-        row.type,
-        row.description,
-        row.observation || "-",
-        row.employeeName || "-",
-        row.lob || "-",
-        formatCurrency(row.amount),
-        row.createdBy || "-",
-        row.createdAt,
-        <div key={`${row.id}-actions`} className="flex items-center gap-2">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => onEdit(row)}
-            className="premium-control inline-flex h-8 items-center justify-center gap-1.5 px-2 text-xs font-black leading-none text-blue-700 disabled:opacity-50"
-          >
-            <Pencil className="h-3.5 w-3.5" /> Editar
-          </button>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void onDelete(row)}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 text-xs font-black leading-none text-red-700 disabled:opacity-50"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Excluir
-          </button>
-        </div>
-      ])}
-    />
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs font-semibold text-muted">Ocultar uma linha mantém o ajuste no total do billing.</p>
+        <label className="inline-flex items-center gap-2 text-xs font-bold text-navy-950">
+          <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} />
+          Mostrar ocultos ({hiddenCount})
+        </label>
+      </div>
+      <Table
+        columns={["Tipo", "Descrição", "Observação", "Parceiro", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
+        rows={visibleRows.map((row) => [
+          row.type,
+          <span key={`${row.id}-description`}>
+            {row.description}
+            {row.hidden ? <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-bold text-slate-600">Oculto</span> : null}
+          </span>,
+          row.observation || "-",
+          row.employeeName || "-",
+          row.lob || "-",
+          formatCurrency(row.amount),
+          row.createdBy || "-",
+          row.createdAt,
+          <div key={`${row.id}-actions`} className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void onToggleVisibility(row)}
+              aria-label={`${row.hidden ? "Reexibir" : "Ocultar"} ajuste ${row.description} de ${row.employeeName || row.lob || "todo o ciclo"}`}
+              className="premium-control inline-flex h-8 items-center justify-center gap-1.5 px-2 text-xs font-black leading-none text-blue-700 disabled:opacity-50"
+            >
+              {row.hidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {row.hidden ? "Reexibir" : "Ocultar"}
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => onEdit(row)}
+              className="premium-control inline-flex h-8 items-center justify-center gap-1.5 px-2 text-xs font-black leading-none text-blue-700 disabled:opacity-50"
+            >
+              <Pencil className="h-3.5 w-3.5" /> Editar
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void onDelete(row)}
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 text-xs font-black leading-none text-red-700 disabled:opacity-50"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Excluir
+            </button>
+          </div>
+        ])}
+      />
+    </div>
   );
 }
 
