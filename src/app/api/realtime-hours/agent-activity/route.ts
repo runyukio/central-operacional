@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { validateRealtimeHoursAgentToken } from "@/lib/realtime-hours-service";
+import { validateRealtimeHoursAgentToken } from "@/lib/realtime-hours-agent-auth";
 import { importWorkstationActivity } from "@/lib/workstation-activity-service";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +23,9 @@ export async function GET(request: Request) {
     success: true,
     service: "realtime-hours-agent-activity",
     maxBodyBytes,
-    capture: "domain-and-application-only"
+    capture: "domain-and-application-only",
+    tokenSource: tokenValidation.tokenSource,
+    migrationTokenExpiresAt: tokenValidation.migrationTokenExpiresAt
   });
 }
 
