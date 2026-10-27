@@ -1,5 +1,5 @@
 <#
-Central Operacional - Realtime Hours Workstation Agent 0.4.0
+Central Operacional - Realtime Hours Workstation Agent 0.5.1
 
 Runs silently in the interactive Windows session and sends:
 - workstation presence/idle heartbeat;
@@ -11,7 +11,7 @@ full URL, query string or browser title are persisted or uploaded.
 
 [CmdletBinding()]
 param(
-  [ValidateSet("Daemon", "Once", "Flush")]
+  [ValidateSet("Daemon", "Once", "Flush", "Diagnose")]
   [string]$Mode = "Once",
   [string]$ConfigPath = ""
 )
@@ -20,7 +20,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-$AgentVersion = "0.4.0"
+$AgentVersion = "0.5.1"
 $DefaultRoot = Join-Path $env:ProgramData "CentralOperacional\RealtimeHoursAgent"
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $DefaultRoot "config.json" }
 $RootDir = Split-Path -Parent $ConfigPath
@@ -33,6 +33,8 @@ $LogPath = Join-Path $LogDir "agent.log"
 $script:CurrentSegment = $null
 $script:UiAutomationReady = $null
 $script:AgentMutex = $null
+$script:LastDomainCaptureWarningAt = [datetime]::MinValue
+$script:LastDomainCaptureDiagnostics = @{ status = "not-run"; windowElements = 0; processElements = 0; processId = 0 }
 
 function Initialize-AgentFolders {
   foreach ($path in @($RootDir, $QueueDir, $ActivityQueueDir, $FailedDir, $ActivityFailedDir, $LogDir)) {
@@ -189,7 +191,7 @@ function Test-SessionUnlocked {
 }
 
 function Get-ForegroundWindowInfo {
-  $result = @{ handle = [IntPtr]::Zero; processName = ""; title = "" }
+  $result = @{ handle = [IntPtr]::Zero; processId = 0; processName = ""; title = "" }
   try {
     Ensure-NativeMethods
     $handle = [RealtimeHours.NativeMethods]::GetForegroundWindow()
@@ -197,6 +199,7 @@ function Get-ForegroundWindowInfo {
     $result.handle = $handle
     [uint32]$processId = 0
     [RealtimeHours.NativeMethods]::GetWindowThreadProcessId($handle, [ref]$processId) | Out-Null
+    $result.processId = [int]$processId
     if ($processId -gt 0) {
       $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
       if ($process) { $result.processName = [string]$process.ProcessName }
@@ -232,33 +235,178 @@ function Test-PrivateBrowserWindow {
   return $Title -match "(?i)(inprivate|incognito|anonimo|anônimo|navegacao privada|navegação privada|private browsing)"
 }
 
-function Get-BrowserAddressValue {
-  param([IntPtr]$WindowHandle)
-  if ($WindowHandle -eq [IntPtr]::Zero -or -not (Ensure-UiAutomation)) { return "" }
+function Get-AutomationElementText {
+  param([object]$Element)
+  if ($null -eq $Element) { return "" }
+
   try {
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle($WindowHandle)
-    if ($null -eq $root) { return "" }
-    $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList @(
-      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-      [System.Windows.Automation.ControlType]::Edit
-    )
-    $elements = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
-    $maximum = [Math]::Min($elements.Count, 80)
-    for ($index = 0; $index -lt $maximum; $index++) {
-      $element = $elements.Item($index)
-      $automationId = [string]$element.Current.AutomationId
-      $name = [string]$element.Current.Name
-      $isAddressControl =
-        $automationId -match "(?i)(address|urlbar|omnibox|location)" -or
-        $name -match "(?i)(address and search bar|search or enter|search with .* or enter|barra de endere|endereco e pesquisa|endereço e pesquisa|pesquisar ou inserir|campo de endereco|campo de endereço)"
-      if (-not $isAddressControl) { continue }
-      try {
-        $pattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $value = [string]$pattern.Current.Value
-        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
-      } catch {}
+    $patternObject = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$patternObject)) {
+      $value = [string]([System.Windows.Automation.TextPattern]$patternObject).DocumentRange.GetText(2048)
+      if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
     }
   } catch {}
+
+  try {
+    $patternObject = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$patternObject)) {
+      $value = [string]([System.Windows.Automation.ValuePattern]$patternObject).Current.Value
+      if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    }
+  } catch {}
+
+  try {
+    $patternObject = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern, [ref]$patternObject)) {
+      $value = [string]([System.Windows.Automation.LegacyIAccessiblePattern]$patternObject).Current.Value
+      if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    }
+  } catch {}
+
+  return ""
+}
+
+function Get-AddressElementScore {
+  param([object]$Element, [double]$WindowTop = 0)
+
+  try { $automationId = [string]$Element.Current.AutomationId } catch { $automationId = "" }
+  try { $name = [string]$Element.Current.Name } catch { $name = "" }
+  try { $accessKey = [string]$Element.Current.AccessKey } catch { $accessKey = "" }
+  try { $className = [string]$Element.Current.ClassName } catch { $className = "" }
+  try { $controlType = [string]$Element.Current.ControlType.ProgrammaticName } catch { $controlType = "" }
+  try { $isOffscreen = [bool]$Element.Current.IsOffscreen } catch { $isOffscreen = $false }
+  try { $isPassword = [bool]$Element.Current.IsPassword } catch { $isPassword = $false }
+  try { $bounds = $Element.Current.BoundingRectangle } catch { $bounds = $null }
+
+  if ($isPassword) { return -1000 }
+
+  $score = 0
+  if ($automationId -match "(?i)^(addressEditBox|urlbar-input|omnibox|location)$") { $score += 240 }
+  elseif ($automationId -match "(?i)(address|urlbar|omnibox|location|url)") { $score += 150 }
+
+  if ($accessKey -match "(?i)(Ctrl\+L|Alt\+D|Ctrl\+E|F6)") { $score += 150 }
+
+  if ($name -match "(?i)(address and search bar|search or enter web address|search with .* or enter address|barra de endere[cç]os?( e pesquisa| e busca)?|endere[cç]o e pesquisa|pesquisar ou inserir endere[cç]o|campo de endere[cç]o|barra de navega[cç][aã]o|url bar|location bar|omnibox)") {
+    $score += 140
+  }
+
+  if ($className -match "(?i)(omnibox|address|urlbar|location)") { $score += 100 }
+  if ($controlType -match "(?i)(Edit|Document|ComboBox)") { $score += 25 }
+
+  if ($null -ne $bounds) {
+    try {
+      if ($bounds.Width -ge 180) { $score += 10 }
+      if ($WindowTop -ge 0 -and $bounds.Top -ge $WindowTop -and $bounds.Top -le ($WindowTop + 220)) { $score += 30 }
+    } catch {}
+  }
+
+  if ($isOffscreen) { $score -= 120 }
+  return $score
+}
+
+function Select-BrowserAddressValue {
+  param(
+    [object]$Elements,
+    [double]$WindowTop = 0,
+    [int]$MaximumElements = 1200
+  )
+
+  if ($null -eq $Elements) { return "" }
+  try { $count = [int]$Elements.Count } catch { return "" }
+  $maximum = [Math]::Min($count, $MaximumElements)
+  $bestScore = -1
+  $bestValue = ""
+
+  for ($index = 0; $index -lt $maximum; $index++) {
+    try { $element = $Elements.Item($index) } catch { continue }
+    $score = Get-AddressElementScore -Element $element -WindowTop $WindowTop
+    if ($score -lt 80) { continue }
+
+    $value = Get-AutomationElementText -Element $element
+    if ([string]::IsNullOrWhiteSpace($value)) { continue }
+
+    $domain = Get-SanitizedDomain -AddressValue $value
+    if ([string]::IsNullOrWhiteSpace($domain)) { continue }
+
+    $score += 100
+    if ($score -gt $bestScore) {
+      $bestScore = $score
+      $bestValue = $value
+    }
+  }
+
+  return $bestValue
+}
+
+function Get-BrowserAddressValue {
+  param(
+    [IntPtr]$WindowHandle,
+    [int]$ProcessId = 0
+  )
+
+  $script:LastDomainCaptureDiagnostics = @{ status = "starting"; windowElements = 0; processElements = 0; processId = $ProcessId }
+  if ($WindowHandle -eq [IntPtr]::Zero) {
+    $script:LastDomainCaptureDiagnostics.status = "no-window"
+    return ""
+  }
+  if (-not (Ensure-UiAutomation)) {
+    $script:LastDomainCaptureDiagnostics.status = "uia-unavailable"
+    return ""
+  }
+
+  $windowElementCount = 0
+  $processElementCount = 0
+  try {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($WindowHandle)
+    if ($null -ne $root) {
+      try { $windowTop = [double]$root.Current.BoundingRectangle.Top } catch { $windowTop = 0 }
+      $windowElements = $root.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )
+      try { $windowElementCount = [int]$windowElements.Count } catch {}
+      $script:LastDomainCaptureDiagnostics.windowElements = $windowElementCount
+      $value = Select-BrowserAddressValue -Elements $windowElements -WindowTop $windowTop
+      if (-not [string]::IsNullOrWhiteSpace($value)) {
+        $script:LastDomainCaptureDiagnostics.status = "found-window"
+        return $value
+      }
+    }
+
+    if ($ProcessId -gt 0) {
+      $processCondition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList @(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        $ProcessId
+      )
+      $processElements = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        $processCondition
+      )
+      try { $processElementCount = [int]$processElements.Count } catch {}
+      $script:LastDomainCaptureDiagnostics.processElements = $processElementCount
+      $value = Select-BrowserAddressValue -Elements $processElements -WindowTop 0 -MaximumElements 1800
+      if (-not [string]::IsNullOrWhiteSpace($value)) {
+        $script:LastDomainCaptureDiagnostics.status = "found-process"
+        return $value
+      }
+    }
+  } catch {
+    if (((Get-Date) - $script:LastDomainCaptureWarningAt).TotalMinutes -ge 5) {
+      Write-AgentLog -Level "WARN" -Message ("Falha na leitura da barra de enderecos via UI Automation. {0}" -f $_.Exception.Message)
+      $script:LastDomainCaptureWarningAt = Get-Date
+    }
+    $script:LastDomainCaptureDiagnostics.status = "error"
+    return ""
+  }
+
+  $script:LastDomainCaptureDiagnostics.status = "not-found"
+  if (((Get-Date) - $script:LastDomainCaptureWarningAt).TotalMinutes -ge 5) {
+    Write-AgentLog -Level "WARN" -Message (
+      "Navegador detectado, mas a barra de enderecos nao foi localizada. windowElements={0}; processElements={1}; processId={2}" -f
+      $windowElementCount, $processElementCount, $ProcessId
+    )
+    $script:LastDomainCaptureWarningAt = Get-Date
+  }
   return ""
 }
 
@@ -293,7 +441,7 @@ function Get-ActivityContext {
       return @{ sourceType = "PRIVATE"; applicationName = $processName; domain = ""; idleSeconds = $idleSeconds }
     }
     if (Get-ConfigBool -Config $Config -Key "captureDomains" -DefaultValue $true) {
-      $domain = Get-SanitizedDomain -AddressValue (Get-BrowserAddressValue -WindowHandle ([IntPtr]$window.handle))
+      $domain = Get-SanitizedDomain -AddressValue (Get-BrowserAddressValue -WindowHandle ([IntPtr]$window.handle) -ProcessId ([int]$window.processId))
       if (-not [string]::IsNullOrWhiteSpace($domain)) {
         return @{ sourceType = "WEB"; applicationName = $processName; domain = $domain; idleSeconds = $idleSeconds }
       }
@@ -526,5 +674,23 @@ Initialize-AgentFolders
 switch ($Mode) {
   "Daemon" { Start-Daemon }
   "Flush" { Flush-AllQueues -Config (Get-Config) }
+  "Diagnose" {
+    $config = Get-Config
+    $context = Get-ActivityContext -Config $config
+    [pscustomobject]@{
+      AgentVersion = $AgentVersion
+      Computer = $env:COMPUTERNAME
+      WindowsUser = Get-WindowsUserName
+      SourceType = [string]$context.sourceType
+      ApplicationName = [string]$context.applicationName
+      Domain = [string]$context.domain
+      IdleSeconds = [int]$context.idleSeconds
+      UiAutomationAvailable = Ensure-UiAutomation
+      DomainCaptureStatus = [string]$script:LastDomainCaptureDiagnostics.status
+      WindowElements = [int]$script:LastDomainCaptureDiagnostics.windowElements
+      ProcessElements = [int]$script:LastDomainCaptureDiagnostics.processElements
+      BrowserProcessId = [int]$script:LastDomainCaptureDiagnostics.processId
+    } | Format-List
+  }
   default { Send-Once }
 }
