@@ -131,7 +131,7 @@ export function WorkstationActivityPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Atividade de Sites e Aplicativos"
+        title="Atividades"
         description="Visão operacional dos domínios e aplicativos ativos nas estações monitoradas."
         icon={Activity}
         actions={

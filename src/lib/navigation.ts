@@ -43,7 +43,7 @@ export const navSections: NavSection[] = [
       { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: rolesWithCapability("CENTRAL") },
       { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: rolesWithCapability("REALTIME_QUEUES") },
       { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: rolesWithCapability("CAPTURE") },
-      { label: "Atividade de Estação", href: "/captura-horas/atividade", icon: "MonitorCog", roles: workstationActivityRoles },
+      { label: "Atividades", href: "/captura-horas/atividade", icon: "MonitorCog", roles: workstationActivityRoles },
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") },
       { label: "Meus Dados", href: "/performance/meus-dados", icon: "ChartNoAxesCombined", roles: personalRoles }
