@@ -89,11 +89,20 @@ func ReadFresh(dir, browser string, now time.Time, maxAge time.Duration) (Browse
 	}
 	result.Browser = NormalizeBrowser(result.Browser)
 	result.Domain = domain.NormalizeHost(result.Domain)
-	if result.Browser != browser || !result.Focused || result.Private || result.Domain == "" || result.CapturedAt.IsZero() {
+	if result.Browser != browser || !result.Focused || result.CapturedAt.IsZero() {
 		return result, false, nil
 	}
 	age := now.UTC().Sub(result.CapturedAt.UTC())
 	if age < -5*time.Second || age > maxAge {
+		return result, false, nil
+	}
+	// A fresh private state is valid even without a domain. The caller must
+	// classify it as PRIVATE and never persist the URL or hostname.
+	if result.Private {
+		result.Domain = ""
+		return result, true, nil
+	}
+	if result.Domain == "" {
 		return result, false, nil
 	}
 	return result, true, nil

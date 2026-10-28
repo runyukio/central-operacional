@@ -31,7 +31,7 @@ var (
 	procOpenProcess               = kernel32.NewProc("OpenProcess")
 	procCloseHandle               = kernel32.NewProc("CloseHandle")
 	procQueryFullProcessImageName = kernel32.NewProc("QueryFullProcessImageNameW")
-	procGetTickCount64            = kernel32.NewProc("GetTickCount64")
+	procGetTickCount              = kernel32.NewProc("GetTickCount")
 )
 
 func Snapshot() (Foreground, error) {
@@ -55,8 +55,10 @@ func idleDuration() time.Duration {
 	if ok == 0 {
 		return 0
 	}
-	ticks, _, _ := procGetTickCount64.Call()
-	elapsed := uint64(ticks) - uint64(info.DwTime)
+	ticks, _, _ := procGetTickCount.Call()
+	// LASTINPUTINFO uses a 32-bit tick count. Unsigned subtraction intentionally
+	// wraps at ~49.7 days and remains correct across the Windows tick rollover.
+	elapsed := uint32(ticks) - info.DwTime
 	return time.Duration(elapsed) * time.Millisecond
 }
 

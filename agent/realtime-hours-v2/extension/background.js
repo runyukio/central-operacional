@@ -46,7 +46,7 @@ async function publishState() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
+  chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });
   void publishState();
 });
 chrome.runtime.onStartup.addListener(() => void publishState());

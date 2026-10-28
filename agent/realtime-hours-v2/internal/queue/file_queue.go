@@ -44,6 +44,39 @@ func (q Queue) Enqueue(kind string, payload any) (string, error) {
 	return path, nil
 }
 
+func (q Queue) Upsert(kind, key string, payload any) (string, error) {
+	if strings.TrimSpace(kind) == "" {
+		return "", fmt.Errorf("queue kind is required")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", fmt.Errorf("queue key is required")
+	}
+	for _, char := range key {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return "", fmt.Errorf("queue key contains unsupported characters")
+		}
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode queue payload: %w", err)
+	}
+	dir := filepath.Join(q.Root, kind)
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		return "", fmt.Errorf("create queue directory: %w", err)
+	}
+	path := filepath.Join(dir, key+".json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o660); err != nil {
+		return "", fmt.Errorf("write queue item: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return "", fmt.Errorf("commit queue item: %w", err)
+	}
+	return path, nil
+}
+
 func (q Queue) List(kind string, limit int) ([]Item, error) {
 	dir := filepath.Join(q.Root, kind)
 	entries, err := os.ReadDir(dir)
