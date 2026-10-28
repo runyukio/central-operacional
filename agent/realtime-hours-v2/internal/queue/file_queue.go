@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/fileutil"
 )
 
 type Item struct {
@@ -38,7 +40,7 @@ func (q Queue) Enqueue(kind string, payload any) (string, error) {
 	if err := os.WriteFile(tmp, data, 0o660); err != nil {
 		return "", fmt.Errorf("write queue item: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fileutil.Replace(tmp, path); err != nil {
 		return "", fmt.Errorf("commit queue item: %w", err)
 	}
 	return path, nil
@@ -71,7 +73,7 @@ func (q Queue) Upsert(kind, key string, payload any) (string, error) {
 	if err := os.WriteFile(tmp, data, 0o660); err != nil {
 		return "", fmt.Errorf("write queue item: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fileutil.Replace(tmp, path); err != nil {
 		return "", fmt.Errorf("commit queue item: %w", err)
 	}
 	return path, nil

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/fileutil"
 	"strings"
 	"time"
 )
@@ -91,7 +93,7 @@ func Save(path string, cfg Config) error {
 	if err := os.WriteFile(tmp, data, 0o640); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fileutil.Replace(tmp, path); err != nil {
 		return fmt.Errorf("replace config: %w", err)
 	}
 	return nil

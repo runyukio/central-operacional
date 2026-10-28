@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"unsafe"
+
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/fileutil"
 )
 
 type dataBlob struct {
@@ -37,7 +39,7 @@ func ProtectAndWrite(path string, plain []byte) error {
 	if err := os.WriteFile(tmp, protected, 0o600); err != nil {
 		return fmt.Errorf("write protected secret: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fileutil.Replace(tmp, path); err != nil {
 		return fmt.Errorf("replace protected secret: %w", err)
 	}
 	return nil
@@ -69,7 +71,7 @@ func protect(plain []byte) ([]byte, error) {
 	if ok == 0 {
 		return nil, fmt.Errorf("CryptProtectData failed: %v", callErr)
 	}
-	defer procLocalFree.Call(uintptr(unsafe.Pointer(output.pbData)))
+	defer procLocalFree.Call(uintptr(unsafe.Pointer(&output.pbData)))
 	return append([]byte(nil), unsafe.Slice(output.pbData, output.cbData)...), nil
 }
 
@@ -91,6 +93,6 @@ func unprotect(protected []byte) ([]byte, error) {
 	if ok == 0 {
 		return nil, fmt.Errorf("CryptUnprotectData failed: %v", callErr)
 	}
-	defer procLocalFree.Call(uintptr(unsafe.Pointer(output.pbData)))
+	defer procLocalFree.Call(uintptr(unsafe.Pointer(&output.pbData)))
 	return append([]byte(nil), unsafe.Slice(output.pbData, output.cbData)...), nil
 }

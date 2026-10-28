@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/fileutil"
+
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/domain"
 )
 
@@ -65,7 +67,7 @@ func Write(dir string, state BrowserState) error {
 	if err := os.WriteFile(tmp, data, 0o660); err != nil {
 		return fmt.Errorf("write browser state: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fileutil.Replace(tmp, path); err != nil {
 		return fmt.Errorf("replace browser state: %w", err)
 	}
 	return nil
