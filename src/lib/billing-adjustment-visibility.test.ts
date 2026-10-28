@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
-import { canManageBilling } from "./billing-permissions";
 import { normalizeComparableJobTitle } from "./job-title-normalization";
 
 const source = ts.createSourceFile("billing-service.ts", readFileSync(new URL("./billing-service.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
@@ -18,68 +17,34 @@ function loadFunctions(names: string[], context: Record<string, unknown>) {
   }).outputText, context);
 }
 
-// Exercise actual service functions without database, storage or Omie IO.
-function visibilityScenario(role: string | null = "ADMIN", exists = true) {
-  const row = { id: "adjustment", hiddenAt: null as Date | null, amount: 2500, type: "Correção", deletedAt: null };
-  const writes: any[] = [], audits: any[] = [];
-  let transactions = 0;
-  const tx = {
-    billingAdjustment: {
-      findFirst: async ({ where }: any) => { assert.equal(where.deletedAt, null); return exists ? { ...row } : null; },
-      findMany: async ({ where }: any) => {
-        assert.equal("hiddenAt" in where, false, "a lista deve permitir consultar os ocultos");
-        return [{ ...row }];
-      },
-      update: async ({ data }: any) => { writes.push(data); Object.assign(row, data); return row; }
-    },
-    auditLog: { create: async ({ data }: any) => { audits.push(data); return data; } }
-  };
-  const { setBillingAdjustmentVisibility: run, listCycleAdjustments: list } = loadFunctions([
-    "setBillingAdjustmentVisibility", "requireBillingManagement", "billingPermissionIdentity", "listCycleAdjustments", "mapAdjustment"
+test("listas excluem o ajuste oculto no servidor e preservam os demais", async () => {
+  const rows = [
+    { id: "hidden", amount: 2500, hiddenAt: new Date(), employeeId: "ana" },
+    { id: "same-value", amount: 2500, hiddenAt: null, employeeId: "ana" },
+    { id: "other", amount: 100, hiddenAt: null, employeeId: "other" }
+  ];
+  const queries: any[] = [];
+  const { listCycleAdjustments, listEmployeeBillingAdjustmentDetails } = loadFunctions([
+    "listCycleAdjustments", "listEmployeeBillingAdjustmentDetails", "mapAdjustment"
   ], {
-    findActiveUser: async () => role ? { id: "actor", role: { name: role } } : null,
-    canManageBilling, AuditAction: { EDICAO: "EDICAO" },
-    formatDateTime: () => "27/10/2026 11:53",
-    prisma: { billingAdjustment: tx.billingAdjustment, $transaction: async (fn: (value: unknown) => Promise<unknown>) => { transactions++; return fn(tx); } }
+    prisma: { billingAdjustment: { findMany: async ({ where }: any) => {
+      queries.push(where);
+      assert.equal(where.deletedAt, null);
+      assert.equal(where.hiddenAt, null);
+      return rows.filter((row) => row.hiddenAt === where.hiddenAt);
+    } } },
+    formatDateTime: () => "28/10/2026"
   });
-  return { row, writes, audits, list: () => list("cycle"), transactions: () => transactions, run: (hidden: unknown, id = row.id) => run({ email: "admin@example.com" }, { id, hidden }) };
-}
-
-test("oculta e reexibe com auditoria, alterando somente a visibilidade", async () => {
-  const state = visibilityScenario();
-  assert.equal((await state.run(true)).data.hidden, true);
-  assert.ok(state.row.hiddenAt);
-  assert.deepEqual(Object.keys(state.writes[0]), ["hiddenAt"]);
-  assert.equal(state.row.amount, 2500);
-  assert.equal((await state.list())[0].hidden, true, "nova leitura mantém a linha oculta");
-  assert.equal(state.row.deletedAt, null);
-  assert.equal(state.audits[0].actorId, "actor");
-  assert.equal(state.audits[0].previousValue.hidden, false);
-  assert.equal(state.audits[0].newValue.hidden, true);
-  await state.run(true);
-  assert.equal(state.writes.length, 1, "repetir ocultação não altera nem audita de novo");
-  assert.equal((await state.run(false)).data.hidden, false);
-  assert.equal(state.row.hiddenAt, null);
-  assert.equal((await state.list())[0].hidden, false);
-  assert.equal(state.audits[1].newValue.hidden, false);
-  assert.equal(state.row.amount, 2500);
-});
-
-test("exige gestão de Billing e rejeita IDs ausentes e visibilidade inválida", async () => {
-  for (const role of [null, "COLABORADOR", "SUPERVISOR", "FINANCEIRO", "WFM"]) {
-    const state = visibilityScenario(role);
-    assert.equal((await state.run(true)).status, role ? 403 : 401);
-    assert.equal(state.transactions(), 0);
+  for (const list of [
+    () => listCycleAdjustments("cycle"),
+    () => listCycleAdjustments("cycle", new Set(["ana"])),
+    () => listEmployeeBillingAdjustmentDetails("cycle", "ana", "lob")
+  ]) {
+    const result = await list();
+    assert.deepEqual(Array.from(result, (row: any) => row.id), ["same-value", "other"]);
+    assert.equal(rows[0].amount, 2500);
   }
-  const state = visibilityScenario();
-  for (const invalid of ["true", "false", 0, 1, null, undefined]) {
-    assert.equal((await state.run(invalid)).status, 400);
-  }
-  assert.equal((await state.run(true, " ")).status, 400);
-  assert.equal(state.transactions(), 0);
-  const missing = visibilityScenario("ADMIN", false);
-  assert.equal((await missing.run(true)).status, 404);
-  assert.equal(missing.writes.length, 0);
+  assert.equal(queries[1].OR[0].employeeId.in[0], "ana", "preserva a restrição do time");
 });
 
 test("ajuste de R$ 2.500 permanece no cálculo individual e consolidado quando oculto", async () => {

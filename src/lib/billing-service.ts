@@ -2173,40 +2173,6 @@ export async function updateBillingAdjustment(actor: Actor, input: {
   return { data: mapAdjustment(updated) };
 }
 
-export async function setBillingAdjustmentVisibility(actor: Actor, input: { id: string; hidden: boolean }) {
-  const user = await findActiveUser(actor.email);
-  const denied = requireBillingManagement(user);
-  if (denied) return denied;
-  if (!input.id?.trim()) return { error: "Ajuste obrigatório para alterar a visibilidade.", status: 400 };
-  if (typeof input.hidden !== "boolean") return { error: "Visibilidade do ajuste inválida.", status: 400 };
-
-  // Visibility can change even for finalized invoices: no financial fields change.
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.billingAdjustment.findFirst({
-      where: { id: input.id, deletedAt: null }
-    });
-    if (!existing) return { error: "Ajuste de Billing não encontrado.", status: 404 };
-    if (Boolean(existing.hiddenAt) === input.hidden) return { data: { id: existing.id, hidden: input.hidden } };
-
-    await tx.billingAdjustment.update({
-      where: { id: existing.id },
-      data: { hiddenAt: input.hidden ? new Date() : null }
-    });
-    await tx.auditLog.create({
-      data: {
-        actorId: user!.id,
-        action: AuditAction.EDICAO,
-        entity: "BillingAdjustment",
-        entityId: existing.id,
-        reason: input.hidden ? "Ajuste ocultado da lista de Billing" : "Ajuste reexibido na lista de Billing",
-        previousValue: { hidden: Boolean(existing.hiddenAt) },
-        newValue: { hidden: input.hidden }
-      }
-    });
-    return { data: { id: existing.id, hidden: input.hidden } };
-  });
-}
-
 export async function deleteBillingAdjustment(actor: Actor, input: { id: string }) {
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
@@ -3273,7 +3239,7 @@ async function listCycleAdjustments(billingCycleId: string, employeeIds?: Set<st
     }
     : {};
   const rows = await prisma.billingAdjustment.findMany({
-    where: { billingCycleId, deletedAt: null, ...employeeWhere },
+    where: { billingCycleId, deletedAt: null, hiddenAt: null, ...employeeWhere },
     include: { employee: true, lob: true, createdBy: true },
     orderBy: { createdAt: "desc" }
   });
@@ -3347,6 +3313,7 @@ async function listEmployeeBillingAdjustmentDetails(cycleId: string, employeeId:
     where: {
       billingCycleId: cycleId,
       deletedAt: null,
+      hiddenAt: null,
       OR: [
         { employeeId },
         { employeeInvoice: { employeeId } },
@@ -3858,7 +3825,6 @@ function mapAdjustment(row: Prisma.BillingAdjustmentGetPayload<{ include: { empl
   const withRelations = row as Prisma.BillingAdjustmentGetPayload<{ include: { employee: true; lob: true; createdBy: true } }>;
   return {
     id: row.id,
-    hidden: Boolean(row.hiddenAt),
     referenceMonth: row.referenceMonth,
     type: row.type,
     description: row.description,

@@ -8,7 +8,6 @@ import {
   getBillingDashboard,
   releaseEmployeeBillingInvoiceForReview,
   saveBillingRates,
-  setBillingAdjustmentVisibility,
   setEmployeeBillingInvoiceFinalized,
   setEmployeeBillingInvoicePaid,
   supervisorReviewInvoiceAdjustment,
@@ -84,9 +83,6 @@ export async function POST(request: Request) {
       break;
     case "delete-adjustment":
       result = await deleteBillingAdjustment(actor, { id: String(body.id ?? "") });
-      break;
-    case "set-adjustment-visibility":
-      result = await setBillingAdjustmentVisibility(actor, { id: String(body.id ?? ""), hidden: body.hidden });
       break;
     case "set-employee-invoice-finalized":
       result = await setEmployeeBillingInvoiceFinalized(actor, {
