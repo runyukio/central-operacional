@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Central Operacional - Atividade de Navegador",
+  "version": "1.0.0",
+  "description": "Envia somente o dominio da aba ativa para o agente local da Central Operacional.",
+  "permissions": ["tabs", "windows", "alarms", "nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "minimum_chrome_version": "120",
+  "update_url": "https://eastriverbrasil.com/api/realtime-hours/v2/extension/update"
+}

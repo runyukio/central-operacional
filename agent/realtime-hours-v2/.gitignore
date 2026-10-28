@@ -1,0 +1,5 @@
+dist/
+*.exe
+*.zip
+*.crx
+*.pem
