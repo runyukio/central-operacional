@@ -8,16 +8,23 @@ import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import type { SpaceResults } from "@/lib/meu-espaco-contract";
 import { loadCecFrtDays } from "@/lib/cec-frt-service";
 import { addCecFrt } from "@/lib/cec-frt";
-import { isSpaceMaterialSkill, type SpaceKpiId } from "@/lib/meu-espaco-targets";
+import { isSpaceMaterialSkill } from "@/lib/meu-espaco-targets";
 
 type ProductionDay = { employeeId: string; day: Date; output: number; ahtSubmit: number; duration: number; active: boolean; updatedAt: Date;
   latencyMinutesSum?: number; latencySubmits?: number; commentsLatencyMinutesSum?: number; commentsLatencySubmits?: number };
 type QualityDay = { employeeId: string; supervisorId: string; qualityDay: Date; correct: number; total: number; updatedAt: Date };
 const iso = (date: Date) => date.toISOString().slice(0, 10);
 
-export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchParams, coverageMetric?: SpaceKpiId): Promise<SpaceResults> {
-  const period = spacePeriod(query), start = spaceDate(period.startDate), end = new Date(+spaceDate(period.endDate) + 86_400_000);
-  const employees = scope.employees.filter((employee) => !query.get("lob") || spaceLobFamily(employee.lob.name) === query.get("lob"));
+type ResultsEmployee = Pick<MeuEspacoScope["employees"][number], "id" | "fullName" | "wbLogin" | "skill" | "lob" | "supervisorId" | "supervisor">;
+
+export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchParams): Promise<SpaceResults> {
+  return loadTeamPerformanceResults(scope.employees, spacePeriod(query), query.get("lob"));
+}
+
+// Shared calculations; callers resolve their active user and authorized employee IDs.
+export async function loadTeamPerformanceResults(sourceEmployees: ResultsEmployee[], period: SpaceResults["period"], lob?: string | null): Promise<SpaceResults> {
+  const start = spaceDate(period.startDate), end = new Date(+spaceDate(period.endDate) + 86_400_000);
+  const employees = sourceEmployees.filter((employee) => !lob || spaceLobFamily(employee.lob.name) === lob);
   const ids = employees.map((employee) => employee.id);
   if (!ids.length) return { period, groups: [], partners: [], supervisors: [] };
   const cecIds = employees.filter((employee) => spaceLobFamily(employee.lob.name) === "CEC").map((employee) => employee.id);
@@ -84,7 +91,6 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
     if (!groups.has(lob)) groups.set(lob, { metric: emptySpaceMetric(), daily: new Map(), employees: 0, productionPartners: new Set(), qualityPartners: new Set(), schedulePartners: new Set(), frtPartners: new Set(), productionLatest: null, qualityLatest: null, scheduleLatest: null, frtLatest: null, updatedAt: null });
     groups.get(lob)!.employees++;
   }
-  const sourceMetrics = new Map<string, { employeeId: string; date: string; metric: MetricAccumulator }>();
   function targets(employeeId: string, date: string, updatedAt: Date | null, source: "production" | "quality" | "schedule" | "frt") {
     const employee = byEmployee.get(employeeId)!;
     const group = groups.get(spaceLobFamily(employee.employee.lob.name))!;
@@ -93,11 +99,6 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
     if (!group[`${source}Latest`] || date > group[`${source}Latest`]!) group[`${source}Latest`] = date;
     if (updatedAt && (!group.updatedAt || updatedAt.toISOString() > group.updatedAt)) group.updatedAt = updatedAt.toISOString();
     const result = [employee.metric, group.metric, group.daily.get(date)!, supervisors.get(employee.employee.supervisorId!)!.groups.get(spaceLobFamily(employee.employee.lob.name))!];
-    if (coverageMetric) {
-      const key = `${employeeId}:${date}`;
-      if (!sourceMetrics.has(key)) sourceMetrics.set(key, { employeeId, date, metric: emptySpaceMetric() });
-      result.push(sourceMetrics.get(key)!.metric);
-    }
     return result;
   }
   for (const row of production) {
@@ -125,10 +126,7 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
   for (const row of cecFrt) if (row.employeeId && byEmployee.has(row.employeeId)) {
     for (const target of targets(row.employeeId, iso(row.day), row.updatedAt, "frt")) addCecFrt(target.cecFrt, row);
   }
-  return { period, ...(coverageMetric ? { sourceMetricDays: [...sourceMetrics.values()].flatMap((row) => {
-    const weight = finishSpaceMetric(row.metric, spaceLobFamily(byEmployee.get(row.employeeId)!.employee.lob.name)).weights?.[coverageMetric];
-    return weight && weight.denominator > 0 ? [{ employeeId: row.employeeId, date: row.date, weight }] : [];
-  }) } : {}), supervisors: [...supervisors].map(([id, supervisor]) => ({ id, name: supervisor.name,
+  return { period, supervisors: [...supervisors].map(([id, supervisor]) => ({ id, name: supervisor.name,
     groups: [...supervisor.groups].map(([lob, metric]) => ({ lob, metric: finishSpaceMetric(metric, lob) })) })),
     groups: [...groups.entries()].map(([lob, group]) => ({ lob, teamSize: group.employees, metric: finishSpaceMetric(group.metric, lob),
     daily: [...group.daily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, metric: finishSpaceMetric(value, lob) })),

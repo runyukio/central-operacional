@@ -39,7 +39,6 @@
 :global(.dark) .inlineTarget[data-status="met"] { color: #6ee7b7; }
 :global(.dark) .inlineTarget[data-status="missed"] { color: #fca5a5; }
 .compactFilters { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
-.glideHero { border-left: 4px solid #2563eb; }
 .views { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .view { justify-content: flex-start; padding: 14px; min-width: 0; }
 .metric { --metric-color: var(--space-accent); position: relative; min-width: 0; overflow: hidden; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--space-panel); text-align: left; }

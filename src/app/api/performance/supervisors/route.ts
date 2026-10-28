@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getApiActor } from "@/lib/api-actor";
 import {
   getPerformanceSupervisorsDashboard,
+  getPerformanceSupervisorAgentsDashboard,
   PerformanceError,
   type PerformanceSupervisorsQuery
 } from "@/lib/performance-service";
@@ -17,7 +18,9 @@ export async function GET(request: Request) {
       startDate: url.searchParams.get("startDate") ?? undefined,
       endDate: url.searchParams.get("endDate") ?? undefined
     };
-    return NextResponse.json(await getPerformanceSupervisorsDashboard(await getApiActor(), query));
+    const actor = await getApiActor(), supervisorId = url.searchParams.get("supervisorId");
+    const result = supervisorId ? await getPerformanceSupervisorAgentsDashboard(actor, supervisorId, query) : await getPerformanceSupervisorsDashboard(actor, query);
+    return NextResponse.json(result, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });

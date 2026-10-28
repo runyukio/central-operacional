@@ -27,7 +27,6 @@ export type SpaceMetric = {
   productionDays: number; agentDays: number; qualitySamples: number; planned: number; absences: number;
 };
 export type SpaceResults = {
-  sourceMetricDays?: Array<{ employeeId: string; date: string; weight: import("@/lib/meu-espaco-targets").MetricWeight }>;
   period: SpacePeriod;
   supervisors: Array<{ id: string; name: string; groups: Array<{ lob: string; metric: SpaceMetric }> }>;
   groups: Array<{ lob: string; teamSize: number; metric: SpaceMetric; daily: Array<{ date: string; metric: SpaceMetric }>;

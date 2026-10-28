@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import dynamic from "next/dynamic";
 import { compareSpaceValues } from "@/lib/meu-espaco-order";
 import { SpaceSortHeader } from "./sort-header";
 import { SpaceTargetCard, SpaceTargetInline } from "./target-card";
-const SpaceGlideTab = dynamic(() => import("./glide-path").then((m) => m.SpaceGlideTab), { ssr: false, loading: () => <p className="p-5 text-muted">Carregando Glide path…</p> });
 import type { SpaceMetric, SpaceResults } from "@/lib/meu-espaco-contract";
 import { dateLabel, number, SpaceButtons, SpaceCard, tableClass } from "./shared";
 import { formatLatencyDisplay } from "@/lib/latency-display";
@@ -52,9 +50,7 @@ export function SupervisorLatency({ groups }: { groups: SpaceResults["supervisor
   return <div className="space-y-1 text-xs">{applicable.map(({ lob, metric }) => lob === "CEC" ? <div key={lob}><p>SLA Normal: <strong>{number(metric.cecFrt?.normalSla ?? null, "%")}</strong></p><p>SLA P0 + HM: <strong>{number(metric.cecFrt?.urgentSla ?? null, "%")}</strong></p></div> : <div key={lob}><p><span className="text-muted">{lob === "TNS" ? "Vídeo · 15 min" : "ADS"}: </span><strong>{formatLatencyDisplay(metric.latencyMinutes, lob)}</strong></p>{lob === "TNS" ? <p><span className="text-muted">Comments: </span><strong>{formatLatencyDisplay(metric.commentsLatencyMinutes, "COMMENTS")}</strong></p> : null}</div>)}</div>;
 }
 
-export function SpaceResultsTab({ data, supervisorId = "", view = "dashboard", onViewChange }: { data: SpaceResults; supervisorId?: string; view?: string; onViewChange?: (view: string) => void }) {
-  const [employeeId, setEmployeeId] = useState("");
-  function changeView(next: string) { onViewChange?.(next); }
+export function SpaceResultsTab({ data }: { data: SpaceResults }) {
   const [sort, setSort] = useState("name"), [direction, setDirection] = useState<"asc" | "desc">("asc");
   function onSort(key: string) { setDirection(sort === key && direction === "asc" ? "desc" : "asc"); setSort(key); }
   const [search, setSearch] = useState("");
@@ -66,15 +62,12 @@ export function SpaceResultsTab({ data, supervisorId = "", view = "dashboard", o
     const value = (row: typeof a) => sort === "name" ? row.name : sort === "skill" ? row.skill : metricColumns(row.lob, true).find((col) => col.key === sort)?.value(row.metric);
     return compareSpaceValues(value(a), value(b), direction) || a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id);
   });
-  const navigation = <SpaceButtons label="Visão dos resultados" value={view} onChange={changeView} options={[{ id: "dashboard", label: "Dashboard" }, { id: "glide", label: "Glide path" }]} />;
-  if (view === "glide") return <div className="space-y-4">{navigation}<SpaceGlideTab key={supervisorId} supervisorId={supervisorId} lobs={data.groups.map((g) => g.lob).filter((lob) => ["ADS", "TNS", "CEC"].includes(lob))} partners={data.partners} employeeId={employeeId} onEmployeeChange={setEmployeeId} teamLabel={data.supervisors.length === 1 ? `Time de ${data.supervisors[0].name}` : "Todos os times selecionados"} /></div>;
   return <div className="space-y-6">
-    {navigation}
     <SpaceButtons label="Operação dos resultados" value={lob} onChange={setSelectedLob} options={[{ id: "", label: "Todas as operações" }, ...data.groups.map((group) => ({ id: group.lob, label: group.lob }))]} />
     <TeamMetricCards data={visibleData} />
     <section className="card overflow-hidden" aria-label="Latência ponderada por supervisor"><div className="p-4"><h3 className="font-extrabold">Latência ponderada por supervisor</h3><p className="mt-1 text-xs text-muted">Mesmo período e operação selecionados · composição atual do time</p></div><div className="overflow-x-auto"><table className={tableClass}><thead><tr><th>Supervisor</th><th>Latência ponderada</th></tr></thead><tbody>{data.supervisors.filter((row) => row.groups.some((group) => !lob || group.lob === lob)).map((row) => <tr key={row.id}><td className="font-bold">{row.name}</td><td><SupervisorLatency groups={row.groups.filter((group) => !lob || group.lob === lob)} /></td></tr>)}</tbody></table></div></section>
     <section className="card overflow-hidden" aria-label="Resultados por parceiro"><div className="flex flex-wrap items-center justify-between gap-3 p-4"><h3 className="font-extrabold">Resultado por parceiro</h3><label className="text-xs text-muted">Buscar parceiro<input className="premium-control ml-2 p-2 text-sm" placeholder="Nome ou WB" value={search} onChange={(event) => setSearch(event.target.value)} /></label></div>
-      {visibleData.groups.map((group) => <div key={group.lob} className="overflow-x-auto"><h4 className="px-4 py-2 text-sm font-bold">{group.lob}</h4><table className={tableClass}><thead><tr><SpaceSortHeader label="Parceiro / WB" column="name" sort={sort} direction={direction} onSort={onSort} /><SpaceSortHeader label="Skill principal" column="skill" sort={sort} direction={direction} onSort={onSort} /><MetricHeaders lob={group.lob} individual sort={sort} direction={direction} onSort={onSort} /></tr></thead><tbody>{sortedPartners.filter((row) => row.lob === group.lob).map((row) => <tr key={row.id}><td><button type="button" className="font-bold text-blue-600 hover:underline" title="Ver Glide path deste parceiro" onClick={() => { setEmployeeId(row.id); changeView("glide"); }}>{row.name}</button><p className="text-xs text-muted">{row.wbLogin}</p></td><td>{row.skill}</td><MetricCells metric={row.metric} lob={row.lob} individual /></tr>)}</tbody></table></div>)}
+      {visibleData.groups.map((group) => <div key={group.lob} className="overflow-x-auto"><h4 className="px-4 py-2 text-sm font-bold">{group.lob}</h4><table className={tableClass}><thead><tr><SpaceSortHeader label="Parceiro / WB" column="name" sort={sort} direction={direction} onSort={onSort} /><SpaceSortHeader label="Skill principal" column="skill" sort={sort} direction={direction} onSort={onSort} /><MetricHeaders lob={group.lob} individual sort={sort} direction={direction} onSort={onSort} /></tr></thead><tbody>{sortedPartners.filter((row) => row.lob === group.lob).map((row) => <tr key={row.id}><td><span className="font-bold">{row.name}</span><p className="text-xs text-muted">{row.wbLogin}</p></td><td>{row.skill}</td><MetricCells metric={row.metric} lob={row.lob} individual /></tr>)}</tbody></table></div>)}
       {!partners.length ? <p className="p-6 text-center text-muted">Nenhum parceiro encontrado.</p> : null}
     </section>
     {visibleData.groups.map((group) => <section key={group.lob} className="card overflow-hidden" aria-label={`Evolução diária ${group.lob}`}>
