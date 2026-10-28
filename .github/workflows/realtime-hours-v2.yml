@@ -1,0 +1,96 @@
+name: Realtime Hours V2
+
+on:
+  pull_request:
+    paths:
+      - "agent/realtime-hours-v2/**"
+      - "src/lib/realtime-hours-v2/**"
+      - "src/app/api/realtime-hours/v2/**"
+      - "src/app/api/cron/realtime-hours-v2-maintenance/**"
+      - "prisma/migrations/*realtime_hours_v2*/**"
+      - "scripts/create-realtime-hours-v2-enrollment.ts"
+      - ".github/workflows/realtime-hours-v2.yml"
+  push:
+    branches:
+      - "work/rebuild-realtime-hours-v1"
+    paths:
+      - "agent/realtime-hours-v2/**"
+      - "src/lib/realtime-hours-v2/**"
+      - "src/app/api/realtime-hours/v2/**"
+      - "src/app/api/cron/realtime-hours-v2-maintenance/**"
+      - "prisma/migrations/*realtime_hours_v2*/**"
+      - "scripts/create-realtime-hours-v2-enrollment.ts"
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent/realtime-hours-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: agent/realtime-hours-v2/go.mod
+      - name: Unit tests
+        run: go test -race ./...
+      - name: Go vet
+        run: go vet ./...
+      - name: Windows build
+        run: |
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H=windowsgui" -o dist/RealtimeHoursAgentV2.exe ./cmd/realtime-hours-agent
+      - name: Validate extension JavaScript
+        run: node --check extension/background.js
+      - name: Validate extension manifest
+        run: node -e 'JSON.parse(require("fs").readFileSync("extension/manifest.json","utf8"))'
+      - name: Scan for embedded secrets
+        run: |
+          ./scripts/verify-no-secrets.sh .
+          ./scripts/verify-no-secrets.sh ../../src/lib/realtime-hours-v2
+          ./scripts/verify-no-secrets.sh ../../src/app/api/realtime-hours/v2
+          ./scripts/verify-no-secrets.sh ../../scripts/create-realtime-hours-v2-enrollment.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: realtime-hours-agent-v2-windows
+          path: agent/realtime-hours-v2/dist/RealtimeHoursAgentV2.exe
+          if-no-files-found: error
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Contract tests
+        run: npx tsx --test src/lib/realtime-hours-v2/auth.test.ts src/lib/realtime-hours-v2/contract.test.ts src/lib/realtime-hours-v2/request.test.ts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint V2 files
+        run: npx eslint src/lib/realtime-hours-v2 src/app/api/realtime-hours/v2 src/app/api/cron/realtime-hours-v2-maintenance scripts/create-realtime-hours-v2-enrollment.ts
+      - name: Production build
+        run: npm run build
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell installers
+        shell: pwsh
+        run: |
+          $files = @(
+            "agent/realtime-hours-v2/installer/Install-RealtimeHoursV2.ps1",
+            "agent/realtime-hours-v2/installer/Uninstall-RealtimeHoursV2.ps1"
+          )
+          foreach ($file in $files) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List
+              throw "PowerShell parser errors in $file"
+            }
+          }
