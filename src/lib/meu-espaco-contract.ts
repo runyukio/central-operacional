@@ -1,6 +1,7 @@
 export type SpacePeriod = { startDate: string; endDate: string };
 export type PendingKind = "absence" | "hours" | "overtime";
 export type SpacePending = {
+  canRespond?: boolean;
   oldestDate?: string | null;
   id: string; kind: PendingKind; date: string; employeeId: string; employeeName: string; wbLogin: string;
   lob: string; supervisorId: string | null; supervisor: string; pending: boolean; status: string;

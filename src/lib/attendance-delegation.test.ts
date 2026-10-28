@@ -57,7 +57,7 @@ test("only the explicitly authorized active manager profile receives the delegat
   assert.equal(hasOwnTeamAbsenceDelegation({ ...user, role: { name: "COLABORADOR" } }), false);
   assert.equal(hasOwnTeamAbsenceDelegation(null), false);
   assert.equal(canEditSchedule(actor), false, "no general schedule editing grant");
-  assert.equal(canJustifyAbsence(actor), false, "no broad attendance/hours justification grant");
+  assert.equal(canJustifyAbsence(actor), false, "no broad absence justification grant");
 });
 
 test("delegated manager justifies a direct-team absence with history and no time changes", async (t) => {

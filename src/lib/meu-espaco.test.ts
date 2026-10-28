@@ -27,10 +27,13 @@ beforeEach((t) => {
 });
 
 const user = (role: string) => ({ role, status: "ACTIVE" });
-for (const role of ["ADMIN", "WFM", "SUPERVISOR", "GESTOR", "COORDENADOR"]) {
-  test(`${role}: menu and every own API path accessible; reply differs from read`, () => {
+for (const role of ["ADMIN", "WFM", "SUPERVISOR", "GESTOR", "COORDENADOR", "GERENTE", "COORDINATOR", "MANAGER"]) {
+  test(`${role}: menu and every own API path accessible; can read and answer hour pending items`, () => {
     assert.equal(canAccessMeuEspaco(user(role)), true);
-    assert.equal(canRespondMeuEspaco(user(role)), !["GESTOR", "COORDENADOR"].includes(role));
+    assert.equal(canRespondMeuEspaco(user(role)), true);
+    assert.equal(canRespondMeuEspaco(user(role), "hours"), true);
+    assert.equal(canRespondMeuEspaco(user(role), "overtime"), true);
+    assert.equal(canRespondMeuEspaco(user(role), "absence"), ["ADMIN", "WFM", "SUPERVISOR"].includes(role));
     assert.equal(canAccessPathForRole("/api/meu-espaco/pendencias/hours/id", user(role)), true);
     assert.equal(getNavSections(user(role)).find((section) => section.label === "Rotina")?.items.some((item) => item.href === "/meu-espaco"), true);
   });
@@ -128,7 +131,7 @@ test("50-item keyset pagination has no offset and id-scoped histories fail close
   assert.equal(result.data.length, 50); assert.equal(result.hasMore, true); assert.ok(result.nextCursor);
   await assert.rejects(() => getSpacePendingItem(scope(), "hours", "outside"));
 });
-test("manager cannot mutate even when an item id and fabricated reply are supplied", async () => {
+test("a read-only scope cannot mutate even when an item id and fabricated reply are supplied", async () => {
   await assert.rejects(() => respondSpacePending(scope({ role: "GESTOR", canRespond: false }), "hours", "id", { justification: "texto" }), /somente à consulta/);
 });
 test("summary aggregates without a metric-month cutoff on open items, using local answer days", async (t) => {
@@ -435,4 +438,13 @@ test("absence answer reuses attendance classification and its original histories
   assert.equal(history[0].attendanceRecordId, "attendance"); assert.equal(audits[0].entity, "AttendanceRecord");
   assert.equal(record.evidenceUrl, "https://example.test/prior-evidence"); assert.equal(record.hasEvidence, true);
   assert.equal(record.notifiedWithin48h, false); assert.equal(result.data.notifiedWithin48h, false);
+});
+
+test("gestor recebe ação por ocorrência de horas, preservando a autorização específica das faltas", async (t) => {
+  t.mock.method(prisma.attendanceRecord, "groupBy", async () => []);
+  t.mock.method(prisma, "$queryRaw", async () => ["absence", "hours", "overtime"].map((kind) => ({ id: kind, kind, date: new Date("2026-09-01"), answeredAt: null, pending: true })));
+  const manager = scope({ role: "GESTOR", broad: true, supervisorId: null });
+  const result = await listSpacePending(manager, new URLSearchParams());
+  assert.deepEqual(result.data.map((item) => [item.kind, item.canRespond]), [["absence", false], ["hours", true], ["overtime", true]]);
+  await assert.rejects(() => respondSpacePending(manager, "absence", "absence", { justification: "texto" }), (error: any) => error.status === 403);
 });

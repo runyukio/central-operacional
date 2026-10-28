@@ -84,3 +84,14 @@ test("excedente mostra cálculo, 8h contabilizadas e botões de decisão só par
   const html = renderToStaticMarkup(createElement(compiledModule.exports.PendingDetail, { row: { ...row, pending: false, status: "REJECTED", justification: "Sessão indevida" }, supervisorId: "sup", canRespond: true, onAnswered: () => {} }));
   assert.ok(html.includes("Excedente recusado")); assert.ok(html.includes("Sessão indevida")); assert.ok(!html.includes("Aprovar excedente"));
 });
+
+test("autorização da ocorrência prevalece sobre a permissão geral de responder horas", () => {
+  for (const kind of ["absence", "hours", "overtime"]) {
+    const html = renderToStaticMarkup(createElement(compiledModule.exports.PendingDetail, {
+      row: { id: kind, kind, pending: true, status: "PENDING", evidenceUrl: "", canRespond: false },
+      supervisorId: "sup", canRespond: true, onAnswered: () => {}
+    }));
+    assert.doesNotMatch(html, /Enviar justificativa|Aprovar excedente|Recusar excedente/);
+    assert.match(html, /modo de consulta/);
+  }
+});

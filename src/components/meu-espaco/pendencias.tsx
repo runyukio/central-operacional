@@ -15,7 +15,8 @@ import type { SpacePending } from "@/lib/meu-espaco-contract";
 import { formatMinutesToHHMM } from "@/lib/work-hours-rules";
 import { dateLabel, SpaceButtons, SpaceLoad, useSpaceRead } from "./shared";
 
-function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: SpacePending; supervisorId: string; canRespond: boolean; onAnswered: (row: SpacePending) => void }) {
+function PendingDetail({ row, supervisorId, canRespond: canRespondToSpace, onAnswered }: { row: SpacePending; supervisorId: string; canRespond: boolean; onAnswered: (row: SpacePending) => void }) {
+  const canRespond = canRespondToSpace && row.canRespond !== false;
   const endpoint = `/api/meu-espaco/pendencias/${row.kind}/${encodeURIComponent(row.id)}?${new URLSearchParams({ supervisorId })}`;
   const history = useSpaceRead<{ history: Array<{ id: string; date: string; actor: string; text: string }> }>(endpoint);
   const [reason, setReason] = useState("");
