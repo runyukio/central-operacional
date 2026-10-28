@@ -57,7 +57,7 @@ func Default() Config {
 		UploadIntervalSeconds:     300,
 		IdleThresholdSeconds:      300,
 		MaxSegmentSeconds:         3600,
-		BrowserStateMaxAgeSeconds: 20,
+		BrowserStateMaxAgeSeconds: 45,
 	}
 }
 
