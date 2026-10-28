@@ -1,3 +1,4 @@
+import { normalizeRole } from "@/lib/permissions";
 import { createHash } from "node:crypto";
 import { CAPTURE_OVERTIME_THRESHOLD_MS } from "@/lib/work-hours-capture-integration-core";
 
@@ -36,5 +37,6 @@ export function overtimeStatusLabel(status?: string | null) {
 }
 
 export function canReviewOvertime(role: string, actorProfileId: string | null | undefined, supervisorId: string | null) {
-  return role === "ADMIN" || role === "WFM" || (role === "SUPERVISOR" && Boolean(actorProfileId) && actorProfileId === supervisorId);
+  const normalized = normalizeRole(role);
+  return ["ADMIN", "WFM", "GESTOR"].includes(normalized) || (normalized === "SUPERVISOR" && Boolean(actorProfileId) && actorProfileId === supervisorId);
 }

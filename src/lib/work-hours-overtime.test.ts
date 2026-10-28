@@ -52,10 +52,10 @@ test("nova tolerância cancela pendências antigas e preserva decisões já conc
   }
 });
 
-test("somente supervisor atribuído, WFM e Admin podem decidir", () => {
+test("supervisor atribuído, gestores, WFM e Admin podem decidir", () => {
   assert.equal(canReviewOvertime("SUPERVISOR", "mine", "mine"), true);
   assert.equal(canReviewOvertime("SUPERVISOR", "mine", "other"), false);
   assert.equal(canReviewOvertime("SUPERVISOR", null, null), false);
-  for (const role of ["GESTOR", "COORDENADOR", "COLABORADOR", "GLOBAL"]) assert.equal(canReviewOvertime(role, "mine", "mine"), false);
-  for (const role of ["ADMIN", "WFM"]) assert.equal(canReviewOvertime(role, null, null), true);
+  for (const role of ["COLABORADOR", "GLOBAL", "RH", "FINANCEIRO", "RTA", "UNKNOWN"]) assert.equal(canReviewOvertime(role, "mine", "mine"), false);
+  for (const role of ["ADMIN", "WFM", "GESTOR", "COORDENADOR", "GERENTE", "COORDINATOR", "MANAGER"]) assert.equal(canReviewOvertime(role, null, null), true);
 });

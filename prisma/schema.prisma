@@ -843,6 +843,7 @@ model BillingAdjustment {
   createdAt         DateTime                @default(now())
   updatedAt         DateTime                @updatedAt
   deletedAt         DateTime?
+  hiddenAt          DateTime?
 
   @@index([billingCycleId])
   @@index([employeeInvoiceId])

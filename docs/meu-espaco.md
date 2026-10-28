@@ -6,7 +6,7 @@ Página `/meu-espaco`, no menu Rotina. Não substitui Cronogramas, Performance o
 
 - A identidade e a role são relidas do usuário ativo no banco em todas as APIs.
 - SUPERVISOR: perfil vinculado obrigatório; o filtro de supervisor não pode selecionar outra pessoa.
-- GESTOR (inclui os aliases coordenador/gerente): consulta todos, sem responder.
+- GESTOR (inclui os aliases coordenador/gerente): consulta todos, justifica baixa aderência de horas e aprova/recusa excedentes de todas as equipes. Também justifica faltas das equipes consultadas pelo Meu Espaço. A liberação adicional é restrita ao perfil GESTOR ativo; a resposta da API informa `canRespond` por ocorrência.
 - WFM e ADMIN: consulta ampla; respostas continuam sujeitas às permissões e validações originais.
 - Outros perfis não recebem menu, página nem acesso direto às APIs.
 - Resultados e horas utilizam os parceiros classificados como agentes no cadastro atual e o vínculo atual `EmployeeProfile.supervisorId`. As regras de classificação de agente são as mesmas da Performance.
@@ -68,7 +68,11 @@ Respostas HTTP usam `private, no-store`. Abas carregam sob demanda, sem polling.
 - Testes de concorrência da lista: resposta antiga, carregamento concorrente, deduplicação, resposta durante paginação e recuperação de erro de rede.
 - Consultas SQL geradas pelos serviços executadas em modo somente leitura com um conjunto atual de parceiros, período 01–06/09/2026; totais diários reconciliados com os acumulados. Nenhuma justificativa real foi enviada.
 - EXPLAIN ANALYZE amostral: produção ~14 ms; resumo ~30 ms; primeira página ~21 ms. Tempos de banco, excluindo rede, autenticação e demais consultas; não constituem garantia de latência.
-- Verificação visual dos componentes reais em ambiente isolado com dados fictícios: claro/escuro, largura de 390 px, abas, consulta de horas, paginação, resposta sem recarregar a lista, falha de rede e modo consulta de gestor.
+- Verificação visual dos componentes reais em ambiente isolado com dados fictícios: claro/escuro, largura de 390 px, abas, consulta de horas, paginação, resposta sem recarregar a lista, falha de rede e modo consulta de gestor (validação original anterior à liberação de horas).
 - Testes completos, TypeScript e build de produção exigidos antes do commit.
 
-Não foram alterados dados históricos, automações, webhooks, premiações ou permissões das telas antigas. Publicação em produção é uma etapa separada.
+A liberação de horas do GESTOR utiliza a permissão específica `canJustifyWorkHourAdherence`, compartilhada com a consulta e a resposta de aderência em Horas Operacionais. A justificativa de faltas de outras equipes para GESTOR é habilitada apenas no fluxo do Meu Espaço, com contexto definido pelo servidor e validação do perfil ativo também dentro da transação. A API antiga mantém a delegação individual existente. Os aliases coordenador/gerente são normalizados também na aprovação de excedentes; supervisores continuam restritos ao responsável atribuído.
+
+Validação da liberação: 238 testes de permissões, serviços de horas, Meu Espaço, delegação de faltas e formulários; TypeScript, lint e build de produção. Os testes de escrita usam somente registros em memória. Não foram alterados dados históricos, automações, webhooks ou premiações. Publicação em produção é uma etapa separada.
+
+O Glide Path mensal foi removido do Meu Espaço, incluindo navegação, simulações e a consulta `/api/meu-espaco/glide`. O resultado do time e as metas atuais continuam disponíveis.

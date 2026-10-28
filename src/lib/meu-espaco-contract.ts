@@ -1,6 +1,7 @@
 export type SpacePeriod = { startDate: string; endDate: string };
 export type PendingKind = "absence" | "hours" | "overtime";
 export type SpacePending = {
+  canRespond?: boolean;
   oldestDate?: string | null;
   id: string; kind: PendingKind; date: string; employeeId: string; employeeName: string; wbLogin: string;
   lob: string; supervisorId: string | null; supervisor: string; pending: boolean; status: string;
@@ -26,7 +27,6 @@ export type SpaceMetric = {
   productionDays: number; agentDays: number; qualitySamples: number; planned: number; absences: number;
 };
 export type SpaceResults = {
-  sourceMetricDays?: Array<{ employeeId: string; date: string; weight: import("@/lib/meu-espaco-targets").MetricWeight }>;
   period: SpacePeriod;
   supervisors: Array<{ id: string; name: string; groups: Array<{ lob: string; metric: SpaceMetric }> }>;
   groups: Array<{ lob: string; teamSize: number; metric: SpaceMetric; daily: Array<{ date: string; metric: SpaceMetric }>;

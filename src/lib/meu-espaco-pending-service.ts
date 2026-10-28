@@ -5,7 +5,7 @@ import { isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
 import { isProtectedCaptureScheduleStatus } from "@/lib/work-hours-capture-integration-core";
 import { answerWorkHourAdherenceJustification } from "@/lib/work-hours-capture-integration-service";
 import { updateOperationalAttendance } from "@/lib/schedule-service";
-import { MeuEspacoError } from "@/lib/meu-espaco-access";
+import { canRespondMeuEspaco, MeuEspacoError } from "@/lib/meu-espaco-access";
 import { isCurrentSpacePartner } from "@/lib/meu-espaco-supervisors";
 import { decodeSpaceCursor, encodeSpaceCursor, pendingFingerprint, spaceDate, spacePendingFilters, spacePeriod, spaceToday } from "@/lib/meu-espaco-filters";
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
@@ -17,7 +17,7 @@ const absenceStatuses: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_
 const protectedStatuses = Object.values(ScheduleStatus).filter(isProtectedCaptureScheduleStatus);
 const inIds = (column: Prisma.Sql, ids: string[]) => ids.length ? Prisma.sql`${column} IN (${Prisma.join(ids)})` : Prisma.sql`FALSE`;
 type DbPending = Omit<SpacePending, "date" | "answeredAt"> & { date: Date; answeredAt: Date | null };
-const serialize = (row: DbPending): SpacePending => ({ ...row, date: row.date.toISOString().slice(0, 10), answeredAt: row.answeredAt?.toISOString() ?? null });
+const serialize = (row: DbPending, scope: MeuEspacoScope): SpacePending => ({ ...row, canRespond: scope.canRespond && canRespondMeuEspaco({ role: scope.role, status: scope.user.status }, row.kind), date: row.date.toISOString().slice(0, 10), answeredAt: row.answeredAt?.toISOString() ?? null });
 
 // One CTE supplies counts, the cursor feed and the item authorization check.
 // Reasons are normalized by the same existing input function, including legacy aliases.
@@ -120,7 +120,7 @@ export async function listSpacePending(scope: MeuEspacoScope, query: URLSearchPa
     ) SELECT * FROM filtered WHERE TRUE
       ${cursor ? filters.order === "asc" ? Prisma.sql`AND (date, kind, id) > (${cursor.date}::date, ${cursor.kind}, ${cursor.id})` : Prisma.sql`AND (date, kind, id) < (${cursor.date}::date, ${cursor.kind}, ${cursor.id})` : Prisma.empty}
     ORDER BY date ${filters.order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`}, kind ${filters.order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`}, id ${filters.order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`} LIMIT 51`);
-  const hasMore = rows.length > 50, data = rows.slice(0, 50).map(serialize), last = data.at(-1);
+  const hasMore = rows.length > 50, data = rows.slice(0, 50).map((row) => serialize(row, scope)), last = data.at(-1);
   return { data, hasMore, nextCursor: hasMore && last ? encodeSpaceCursor({ date: last.date, id: last.id, kind: last.kind, fingerprint }) : null };
 }
 
@@ -129,7 +129,7 @@ export async function getSpacePendingItem(scope: MeuEspacoScope, kind: string, i
   const source = await spacePendingSource(scope);
   const rows = await prisma.$queryRaw<DbPending[]>(Prisma.sql`${source} SELECT * FROM items WHERE kind=${kind} AND id=${id} LIMIT 1`);
   if (!rows[0]) throw new MeuEspacoError("Ocorrência indisponível ou fora da sua responsabilidade. Atualize a lista.", 404);
-  return serialize(rows[0]);
+  return serialize(rows[0], scope);
 }
 
 export async function getSpacePendingHistory(scope: MeuEspacoScope, kind: string, id: string) {
@@ -147,7 +147,7 @@ export async function getSpacePendingHistory(scope: MeuEspacoScope, kind: string
 }
 
 export async function respondSpacePending(scope: MeuEspacoScope, kind: string, id: string, input: { notifiedWithin48h?: boolean | null; justification?: string; reason?: string; reasonCategory?: string; evidenceUrl?: string; action?: "approve" | "reject"; version?: number; rejectionReason?: string }) {
-  if (!scope.canRespond) throw new MeuEspacoError("Seu perfil tem acesso somente à consulta neste espaço.", 403);
+  if (!scope.canRespond || !canRespondMeuEspaco({ role: scope.role, status: scope.user.status }, kind)) throw new MeuEspacoError("Seu perfil tem acesso somente à consulta neste espaço.", 403);
   if (kind === "overtime") {
     if (!input.action || input.version == null) throw new MeuEspacoError("Informe a decisão e a versão da revisão.");
     // Check the persisted revision even when a replacement removed it from the feed.
@@ -166,7 +166,7 @@ export async function respondSpacePending(scope: MeuEspacoScope, kind: string, i
     const attendance = await prisma.attendanceRecord.findFirst({ where: { scheduleId: id, employeeId: item.employeeId }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { id: true } });
     const result = await updateOperationalAttendance(scope.actor, { employeeId: item.employeeId, scheduleId: id, attendanceRecordId: attendance?.id,
       date: item.date, shift: schedule.shift?.name || schedule.employee.shift.name, status: schedule.status === "ERRO_ESCALA" ? "Erro de cronograma" : "Falta",
-      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, notifiedWithin48h: input.notifiedWithin48h, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl });
+      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, notifiedWithin48h: input.notifiedWithin48h, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl }, { source: "meu-espaco" });
     if ("error" in result) throw new MeuEspacoError(result.error || "Não foi possível responder.");
   }
   return { data: await getSpacePendingItem(scope, kind, id) };

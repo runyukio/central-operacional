@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildForecastDisplay, forecastCycleLabel, type ForecastDisplayRow, type ForecastPayload } from "@/lib/volume-forecast-display";
 import dynamic from "next/dynamic";
+import type { TeamWorkMetric } from "@/lib/team-work-metrics";
+import { formatMinutesToHHMM } from "@/lib/work-hours-rules";
+import { PerformanceSupervisorAgents } from "./performance-supervisor-agents";
 import {
   type LucideIcon,
   ArrowDown,
@@ -208,7 +211,7 @@ type PerformanceAgentsResponse = {
   agents: PerformanceAgentRow[];
 };
 
-type PerformanceSupervisorRow = {
+type PerformanceSupervisorRow = TeamWorkMetric & {
   supervisorId: string;
   supervisor: string;
   teamSize: number;
@@ -239,6 +242,7 @@ type PerformanceSupervisorsResponse = {
   dataRange: { startDate: string; endDate: string } | null;
   summary: Omit<PerformanceSupervisorRow, "supervisorId" | "supervisor"> & { supervisors: number };
   supervisors: PerformanceSupervisorRow[];
+  workWarnings: string[];
 };
 
 type QueueSortKey = "queue" | "input" | "submit" | "latency" | "aht" | "agents";
@@ -1245,12 +1249,13 @@ function SupervisorsView({
   onRefresh: () => void;
 }) {
   const summary = payload?.summary;
+  const [openedSupervisor, setOpenedSupervisor] = useState("");
   return (
     <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Consolidado por supervisor</h2>
-          <p className="mt-1 text-xs font-bold text-muted">ABS, attrition, humor, AHT/CPD e qualidade consolidados por time.</p>
+          <p className="mt-1 text-xs font-bold text-muted">Supervisores ativos: ABS, humor, AHT/CPD, qualidade, aderência e pontualidade. Clique no nome para abrir os agentes.</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SlicerGroup label="Visão">
@@ -1287,32 +1292,38 @@ function SupervisorsView({
           <StatCard title="Qualidade do time" value={formatQualityPercent(summary?.quality)} helper={`${formatNumber(summary?.qualityTotal ?? 0)} caso(s)`} icon={ShieldCheck} tone="green" />
         </div>
 
+        <details className="rounded-xl border border-border p-3 text-xs leading-6 text-muted"><summary className="cursor-pointer font-bold">Como ler horas e pontualidade</summary><p>Aderência: horas oficiais de cada dia, limitadas a 8h, divididas por 8h por dia com registro. Dias sem horas não viram zero; a cobertura aparece em cada linha. Horas extras não compensam déficits de outros dias.</p><p>Taxas: dias com atraso ou saída antecipada observados na Captura / dias com entrada ou saída observada. Considera qualquer diferença positiva em segundos, sem desconto de tolerância. Somente turnos encerrados entram nesses indicadores. Hora extra soma as horas oficiais acima do previsto, sem incluir excedentes em validação.</p></details>
+        {payload?.workWarnings.length ? <div role="status" className="rounded-xl border border-amber-300 p-3 text-sm">{payload.workWarnings.map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
         {loading && !payload ? <EmptyBox label="Carregando consolidado dos supervisores..." /> : (
           <div className="overflow-hidden rounded-xl border border-border bg-white">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
               <div>
                 <h3 className="text-sm font-black text-navy-950">Supervisores</h3>
-                <p className="mt-1 text-xs font-bold text-muted">{formatNumber(summary?.supervisors ?? 0)} supervisor(es) no período</p>
+                <p className="mt-1 text-xs font-bold text-muted">{formatNumber(summary?.supervisors ?? 0)} supervisor(es) ativo(s) no período</p>
               </div>
               {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-left text-sm">
+              <table className="w-full min-w-[1500px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                   <tr>
-                    <th className="px-4 py-3">Supervisor</th>
+                    <th className="sticky left-0 z-20 bg-slate-50 px-4 py-3">Supervisor</th>
                     <th className="px-3 py-3 text-right">Time</th>
                     <th className="px-3 py-3 text-right">ABS</th>
                     <th className="px-3 py-3 text-right">Attrition</th>
                     <th className="px-3 py-3 text-right">Humor</th>
                     <th className="px-3 py-3 text-right">AHT / CPD</th>
                     <th className="px-4 py-3 text-right">Qualidade</th>
+                    <th className="px-3 py-3 text-right">Aderência · 8h</th>
+                    <th className="px-3 py-3 text-right">Taxa de atraso</th>
+                    <th className="px-3 py-3 text-right">Taxa de saída antecipada</th>
+                    <th className="px-3 py-3 text-right">Hora extra</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70">
                   {(payload?.supervisors ?? []).map((row) => (
                     <tr key={row.supervisorId} className="odd:bg-white even:bg-slate-50/45 hover:bg-blue-50/50">
-                      <td className="px-4 py-3 font-black text-navy-950">{row.supervisor}</td>
+                      <td className="sticky left-0 z-10 bg-white px-4 py-3 font-black text-navy-950"><button type="button" disabled={loading} aria-expanded={openedSupervisor === row.supervisorId} aria-controls={`supervisor-agents-${row.supervisorId}`} onClick={() => setOpenedSupervisor((current) => current === row.supervisorId ? "" : row.supervisorId)} className="text-left font-black text-blue-600 underline-offset-2 hover:underline disabled:opacity-50">{row.supervisor}<span className="ml-2" aria-hidden>{openedSupervisor === row.supervisorId ? "−" : "+"}</span></button></td>
                       <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(row.teamSize)}</td>
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.absRate)} detail={`${formatNumber(row.absences)} / ${formatNumber(row.planned)}`} /></td>
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.attritionRate)} detail={`${formatNumber(row.terminations)} deslig.`} /></td>
@@ -1326,12 +1337,17 @@ function SupervisorsView({
                         />
                       </td>
                       <td className="px-4 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.quality)} detail={`${formatNumber(row.qualityTotal)} casos`} /></td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.adherenceRate)} detail={`${row.recordedDays}/${row.expectedDays} dias com horas`} /></td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.lateRate)} detail={`${row.lateEntries}/${row.observedEntries} entradas observadas`} /></td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.earlyRate)} detail={`${row.earlyExits}/${row.observedExits} saídas observadas`} /></td>
+                      <td className="px-3 py-3 text-right font-bold">{row.officialOvertimeHours == null ? "Sem dados" : formatMinutesToHHMM(row.officialOvertimeHours * 60)}</td>
                     </tr>
                   ))}
-                  {!payload?.supervisors.length ? <tr><td colSpan={7} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum supervisor encontrado para o período.</td></tr> : null}
+                  {!payload?.supervisors.length ? <tr><td colSpan={11} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum supervisor encontrado para o período.</td></tr> : null}
                 </tbody>
               </table>
             </div>
+            {openedSupervisor && payload && !loading && payload.supervisors.some((row) => row.supervisorId === openedSupervisor) ? <div id={`supervisor-agents-${openedSupervisor}`} className="border-t border-border bg-blue-50/20"><PerformanceSupervisorAgents key={`${openedSupervisor}:${payload.period.startDate}:${payload.period.endDate}`} supervisorId={openedSupervisor} period={payload.period} /></div> : null}
           </div>
         )}
       </div>
