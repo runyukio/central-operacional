@@ -16,3 +16,11 @@ A tabela mantém ABS, attrition, humor, AHT/CPD e qualidade e inclui aderência 
 A leitura é em lote por período, com IDs autorizados passados à Captura e sem consultas por agente/dia. Se a Captura falhar, as horas oficiais continuam disponíveis e as taxas ficam ausentes com aviso. Ressalvas dos arquivos de Captura são exibidas. O período máximo é de 366 dias. A API responde `private, no-store`.
 
 O detalhe carrega apenas ao expandir. A troca de período/supervisor descarta a resposta anterior e cancela a consulta; erros permitem tentar novamente. As tabelas rolam horizontalmente, mantendo os nomes visíveis.
+
+## Carregamento e agentes ativos
+
+O consolidado e o detalhe devolvem primeiro os indicadores de produção, ABS, humor, qualidade e horas oficiais. Pontualidade é consultada separadamente (`phase=work`); as células mostram carregamento e permitem nova tentativa em caso de falha, sem bloquear a tabela. `phase=base` não lê a Captura; a consulta sem fase mantém a resposta completa existente. Respostas continuam privadas e sem cache HTTP.
+
+A leitura de pontualidade usa somente identificação, turno, entrada e saída dos arquivos históricos. Mantém as mesmas verificações de integridade e reconstrói os dias sem arquivo válido pela Captura original. O cache temporário usa período e conjunto de agentes como chave.
+
+O detalhe e a busca mostram apenas agentes com cadastro Ativo/Active e, quando vinculada, conta ACTIVE sem exclusão. Agentes desligados ou inativos continuam compondo os resultados consolidados do período, inclusive horas oficiais e taxas de pontualidade. O filtro de supervisores ativos permanece.

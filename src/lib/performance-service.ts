@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { loadTeamWorkMetrics } from "@/lib/team-work-metrics-service";
 import { combineTeamWorkMetrics } from "@/lib/team-work-metrics";
-import { isActivePerformanceSupervisor } from "@/lib/performance-supervisors-scope";
+import { isActivePerformanceSupervisor, isVisiblePerformanceAgent } from "@/lib/performance-supervisors-scope";
 
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
@@ -179,6 +179,7 @@ export type PerformanceAgentsQuery = {
 };
 
 export type PerformanceSupervisorsQuery = {
+  includePunctuality?: boolean;
   view?: "monthly" | "weekly" | "daily";
   startDate?: string;
   endDate?: string;
@@ -1666,7 +1667,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
     `) : Promise.resolve([]),
-    loadTeamWorkMetrics(employees, period.start, period.end)
+    loadTeamWorkMetrics(employees, period.start, period.end, new Date(), query.includePunctuality !== false)
   ]);
   const tnsQualityRows = mergeSupervisorQualityDailyRows(
     tnsKapQualityDailyRows,
@@ -1839,24 +1840,43 @@ export async function getPerformanceSupervisorAgentsDashboard(actor: Actor, supe
   const start = parseDate(query.startDate), end = parseDate(query.endDate);
   if (!start || !end || start > end || (+end - +start) / 86400000 > 365) throw new PerformanceError("Informe um período válido de até 366 dias.", 400);
   const employees = (await prisma.employeeProfile.findMany({ where: { deletedAt: null, supervisorId },
-    select: { id: true, fullName: true, wbLogin: true, skill: true, roleTitle: true, supervisorId: true,
+    select: { id: true, fullName: true, wbLogin: true, skill: true, roleTitle: true, supervisorId: true, operationalStatus: true, user: { select: { status: true, deletedAt: true } },
       lob: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } } }
   })).filter((employee) => isAgentJobTitle(employee.roleTitle) && isActivePerformanceSupervisor(employee.supervisor));
   if (!employees.length) throw new PerformanceError("Nenhum agente encontrado para este supervisor.", 404);
   const ids = employees.map((employee) => employee.id);
+  const visibleIds = new Set(employees.filter(isVisiblePerformanceAgent).map((employee) => employee.id));
   const { loadTeamPerformanceResults } = await import("@/lib/meu-espaco-results-service");
   const [performance, moods, work] = await Promise.all([
     loadTeamPerformanceResults(employees, { startDate: formatDateKey(start), endDate: formatDateKey(end) }),
     prisma.employeeMoodRecord.groupBy({ by: ["employeeId"], where: { employeeId: { in: ids }, date: { gte: start, lte: end } }, _sum: { moodScore: true }, _count: { _all: true } }),
-    loadTeamWorkMetrics(employees, start, end)
+    loadTeamWorkMetrics(employees, start, end, new Date(), query.includePunctuality !== false)
   ]);
   const moodById = new Map(moods.map((row) => [row.employeeId, row]));
   return { supervisorId, supervisor: employees[0].supervisor?.fullName ?? "Supervisor", period: { startDate: formatDateKey(start), endDate: formatDateKey(end) },
-    workWarnings: work.warnings, agents: performance.partners.map((partner) => {
+    workWarnings: work.warnings, agents: performance.partners.filter((partner) => visibleIds.has(partner.id)).map((partner) => {
       const mood = moodById.get(partner.id), responses = mood?._count._all ?? 0;
       return { ...partner, moodAverage: responses ? round2((mood?._sum.moodScore ?? 0) / responses) : null, moodResponses: responses,
         work: work.byEmployee.get(partner.id) ?? combineTeamWorkMetrics([]) };
     }) };
+}
+
+export async function getPerformanceSupervisorsWorkMetrics(actor: Actor, query: PerformanceSupervisorsQuery, supervisorId?: string) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+  const start = parseDate(query.startDate), end = parseDate(query.endDate);
+  if (!start || !end || start > end || (+end - +start) / 86400000 > 365) throw new PerformanceError("Informe um período válido de até 366 dias.", 400);
+  if (supervisorId && supervisorId.length > 160) throw new PerformanceError("Supervisor inválido.", 400);
+  const employees = (await prisma.employeeProfile.findMany({ where: { deletedAt: null, supervisorId: supervisorId || { not: null } },
+    select: { id: true, wbLogin: true, roleTitle: true, supervisorId: true, operationalStatus: true, user: { select: { status: true, deletedAt: true } },
+      supervisor: { select: { operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } } }
+  })).filter((employee) => isAgentJobTitle(employee.roleTitle) && isActivePerformanceSupervisor(employee.supervisor));
+  if (supervisorId && !employees.length) throw new PerformanceError("Supervisor ativo não encontrado.", 404);
+  const work = await loadTeamWorkMetrics(employees, start, end);
+  const supervisorIds = [...new Set(employees.map((employee) => employee.supervisorId!))];
+  return { period: { startDate: formatDateKey(start), endDate: formatDateKey(end) }, workWarnings: work.warnings,
+    supervisors: supervisorIds.map((id) => ({ supervisorId: id, ...combineTeamWorkMetrics(employees.filter((employee) => employee.supervisorId === id).map((employee) => work.byEmployee.get(employee.id))) })),
+    agents: supervisorId ? employees.filter(isVisiblePerformanceAgent).map((employee) => ({ id: employee.id, work: work.byEmployee.get(employee.id) ?? combineTeamWorkMetrics([]) })) : [] };
 }
 
 function emptyPerformanceSupervisorsPayload(

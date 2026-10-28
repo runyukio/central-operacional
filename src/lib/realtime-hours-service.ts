@@ -1078,6 +1078,43 @@ async function loadRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions):
   return result;
 }
 
+export type RealtimeHoursPunctualityRow = { employeeId: string; data: string; slotId: string | null; entryAt: string | null; exitAt: string | null };
+type PunctualityRange = { rows: RealtimeHoursPunctualityRow[]; warnings: string[] };
+const punctualitySnapshotCache = createBoundedSnapshotCache<PunctualityRange>(15_000, 8);
+
+/** Same archive validation and raw reconstruction, without downloading archived segments. */
+export function getRealtimeHoursPunctualityRange(options: { dates: string[]; eligibleEmployeeIds: string[]; eligibleWbLogins: string[] }) {
+  const dates = [...new Set(options.dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)))].sort(), ids = [...new Set(options.eligibleEmployeeIds)].sort();
+  const logins = [...new Set(options.eligibleWbLogins.map(normalizeLogin))].sort();
+  if (!dates.length || !ids.length) return Promise.resolve({ rows: [], warnings: [] } as PunctualityRange);
+  const key = JSON.stringify([dates, ids, logins]);
+  return punctualitySnapshotCache.get(key, async () => {
+    const startedAt = Date.now();
+    const days = await prisma.realTimeHoursArchiveDay.findMany({ where: { dateKey: { in: dates } },
+      select: { dateKey: true, sourceFingerprint: true, sourceRecords: true } });
+    const fingerprints = await loadRealtimeHoursArchiveFingerprints(days.map((day) => day.dateKey));
+    const readable = days.filter((day) => canReadRealtimeHoursArchive(day, fingerprints.get(day.dateKey)));
+    const readableDates = readable.map((day) => day.dateKey), readableSet = new Set(readableDates), allowed = new Set(ids);
+    const rows = readableDates.length ? await prisma.$queryRaw<RealtimeHoursPunctualityRow[]>(Prisma.sql`
+      SELECT r.payload->>'employeeId' AS "employeeId", r.payload->>'data' AS data,
+        r.payload->>'slotId' AS "slotId", r.payload->>'entryAt' AS "entryAt", r.payload->>'exitAt' AS "exitAt"
+      FROM "RealTimeHoursArchiveRow" r WHERE r."dateKey" IN (${Prisma.join(readableDates)})
+        AND (r."employeeId" IN (${Prisma.join(ids)}) ${logins.length ? Prisma.sql`OR r."wbLoginNormalized" IN (${Prisma.join(logins)})` : Prisma.empty})
+        AND jsonb_typeof(r.payload->'key')='string' AND jsonb_typeof(r.payload->'segments')='array'
+    `) : [];
+    const warnings = readable.flatMap((day) => day.sourceRecords > (fingerprints.get(day.dateKey)?.preservedSourceRecords ?? 0)
+      ? [`${day.dateKey}: Histórico arquivado preservado: a base bruta legada está incompleta para recalcular este dia.`] : []);
+    const missing = dates.filter((date) => !readableSet.has(date));
+    for (let index = 0; index < missing.length; index += 4) {
+      const chunk = await Promise.all(missing.slice(index, index + 4).map((date) => getRealtimeHoursTimelineFromRaw({ date, eligibleEmployeeIds: ids, eligibleWbLogins: logins })));
+      for (const timeline of chunk) for (const row of timeline.rows) rows.push({ employeeId: row.employeeId, data: row.data, slotId: row.slotId, entryAt: row.entryAt, exitAt: row.exitAt });
+    }
+    const scopedRows = rows.filter((row) => allowed.has(row.employeeId));
+    logPerformanceMetric("realtime-hours.punctuality", startedAt, { days: dates.length, archivedDays: readable.length, rawDays: missing.length, rows: scopedRows.length });
+    return { rows: scopedRows, warnings };
+  });
+}
+
 export async function getRealtimeHoursTimelineRange(options: {
   dates: string[];
   employeeId?: string | null;
