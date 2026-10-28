@@ -259,7 +259,11 @@ export function AppShell({
 
   function navItemIsActive(item: NavigationItem) {
     if (item.href === "/meu-perfil" && pathname.startsWith("/perfil/")) return true;
-    return pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
+    const matches = pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(`${item.href}/`));
+    return matches && !navItems.some((other) =>
+      other.href.length > item.href.length
+      && (pathname === other.href || pathname.startsWith(`${other.href}/`))
+    );
   }
 
   function navSectionIsOpen(section: NavigationSection) {

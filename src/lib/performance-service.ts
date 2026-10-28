@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { loadTeamWorkMetrics } from "@/lib/team-work-metrics-service";
 import { combineTeamWorkMetrics } from "@/lib/team-work-metrics";
+import { isActivePerformanceSupervisor } from "@/lib/performance-supervisors-scope";
 
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
@@ -1525,9 +1526,9 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       terminationReason: true,
       supervisorId: true,
       lob: { select: { name: true } },
-      supervisor: { select: { fullName: true } }
+      supervisor: { select: { fullName: true, operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } }
     }
-  })).filter((employee) => isAgentJobTitle(employee.roleTitle));
+  })).filter((employee) => isAgentJobTitle(employee.roleTitle) && isActivePerformanceSupervisor(employee.supervisor));
 
   const employeeIds = employees.map((employee) => employee.id);
   const adsQualityEmployeeIds = employees
@@ -1839,8 +1840,8 @@ export async function getPerformanceSupervisorAgentsDashboard(actor: Actor, supe
   if (!start || !end || start > end || (+end - +start) / 86400000 > 365) throw new PerformanceError("Informe um período válido de até 366 dias.", 400);
   const employees = (await prisma.employeeProfile.findMany({ where: { deletedAt: null, supervisorId },
     select: { id: true, fullName: true, wbLogin: true, skill: true, roleTitle: true, supervisorId: true,
-      lob: { select: { name: true } }, supervisor: { select: { id: true, fullName: true } } }
-  })).filter((employee) => isAgentJobTitle(employee.roleTitle));
+      lob: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } } }
+  })).filter((employee) => isAgentJobTitle(employee.roleTitle) && isActivePerformanceSupervisor(employee.supervisor));
   if (!employees.length) throw new PerformanceError("Nenhum agente encontrado para este supervisor.", 404);
   const ids = employees.map((employee) => employee.id);
   const { loadTeamPerformanceResults } = await import("@/lib/meu-espaco-results-service");

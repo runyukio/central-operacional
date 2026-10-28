@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { importRealtimeHoursSnapshot, validateRealtimeHoursAgentToken } from "@/lib/realtime-hours-service";
+import { validateRealtimeHoursAgentToken } from "@/lib/realtime-hours-agent-auth";
+import { importRealtimeHoursSnapshot } from "@/lib/realtime-hours-service";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,9 @@ export async function GET(request: Request) {
   return NextResponse.json({
     success: true,
     service: "realtime-hours-agent",
-    maxBodyBytes
+    maxBodyBytes,
+    tokenSource: tokenValidation.tokenSource,
+    migrationTokenExpiresAt: tokenValidation.migrationTokenExpiresAt
   });
 }
 
@@ -75,8 +78,6 @@ export async function POST(request: Request) {
 
 function discardedAgentSnapshot(reason: string) {
   console.warn("[realtime-hours/agent-snapshot] snapshot descartado", { reason });
-  // Acknowledge permanent payload failures so older installed agents remove
-  // the file instead of replaying the same invalid request every minute.
   return NextResponse.json({
     success: true,
     accepted: false,

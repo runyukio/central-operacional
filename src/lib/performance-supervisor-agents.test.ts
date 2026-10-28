@@ -7,9 +7,9 @@ import { teamWorkData } from "./team-work-metrics-service";
 
 const day = new Date("2026-10-01"), query = { startDate: "2026-10-01", endDate: "2026-10-01" };
 const actor = { email: "test@example.test", name: "Test", role: "ADMIN" as const };
-function fixture(t: TestContext, role = "ADMIN") {
+function fixture(t: TestContext, role = "ADMIN", supervisorPatch: Record<string, unknown> = {}) {
   const employees = ["a", "b"].map((id) => ({ id, fullName: `Agente ${id}`, wbLogin: `wb_${id}`, roleTitle: "Agente", skill: "Material Queues",
-    operationalStatus: "Ativo", admissionDate: new Date("2025-01-01"), terminationDate: null, supervisorId: "sup", supervisor: { id: "sup", fullName: "Supervisor de teste" }, lob: { name: "ADS" } }));
+    operationalStatus: "Ativo", admissionDate: new Date("2025-01-01"), terminationDate: null, supervisorId: "sup", supervisor: { id: "sup", fullName: "Supervisor de teste", operationalStatus: "Ativo", deletedAt: null, user: { status: "ACTIVE", deletedAt: null }, ...supervisorPatch }, lob: { name: "ADS" } }));
   const schedules = employees.map((employee) => ({ id: `slot-${employee.id}`, employeeId: employee.id, date: day, status: "PRESENTE", startsAt: "08:00", endsAt: "17:00", shift: { name: "Manhã", startsAt: "08:00", endsAt: "17:00" } }));
   const profile = mockPrismaDelegate(t, "employeeProfile", { findMany: async (args: any) => {
     assert.equal(args.where.deletedAt, null);
@@ -22,7 +22,7 @@ function fixture(t: TestContext, role = "ADMIN") {
   mockPrismaDelegate(t, "workHourRecord", { findMany: async () => schedules.map((row, index) => ({ employeeId: row.employeeId, date: day, scheduleId: row.id, effectiveHours: index ? 10 : 4, plannedHours: 8 })) });
   mockPrismaDelegate(t, "employeeMoodRecord", { findMany: async () => [{ employeeId: "a", moodScore: 4 }],
     groupBy: async (args: any) => { assert.deepEqual(args.where.employeeId.in, ["a", "b"]); return [{ employeeId: "a", _sum: { moodScore: 4 }, _count: { _all: 1 } }]; } });
-  t.mock.method(teamWorkData, "timelineRange", async (args: any) => {
+  const captureRead = t.mock.method(teamWorkData, "timelineRange", async (args: any) => {
     assert.deepEqual(args.eligibleEmployeeIds, ["a", "b"]);
     return [{ date: "2026-10-01", rows: schedules.map((row, index) => ({ employeeId: row.employeeId, slotId: row.id, data: "2026-10-01", entryAt: index ? "2026-10-01T11:00:00Z" : "2026-10-01T11:01:00Z", exitAt: "2026-10-01T20:00:00Z" })) }] as any;
   });
@@ -36,7 +36,7 @@ function fixture(t: TestContext, role = "ADMIN") {
       : [{ supervisorId: "sup", correct: 19, total: 20 }];
     return [];
   });
-  return { profile };
+  return { profile, captureRead };
 }
 
 test("supervisors return weighted adherence, capture rates and official overtime together", async (t) => {
@@ -65,3 +65,21 @@ test("a role forged in the client cannot open supervisor detail", async (t) => {
   await assert.rejects(() => getPerformanceSupervisorAgentsDashboard(actor, "sup", query), { status: 403 });
   assert.equal(profile.findMany.mock.callCount(), 0);
 });
+
+for (const [name, patch] of [
+  ["desligado", { operationalStatus: "Desligado" }],
+  ["inativo", { operationalStatus: "Inativo" }],
+  ["excluído", { deletedAt: day }],
+  ["conta inativa", { user: { status: "INACTIVE", deletedAt: null } }],
+  ["conta excluída", { user: { status: "ACTIVE", deletedAt: day } }],
+  ["sem conta ativa", { user: null }]
+] as const) {
+  test(`supervisor ${name} não entra no consolidado nem no detalhe por ID direto`, async (t) => {
+    const { captureRead } = fixture(t, "ADMIN", patch);
+    const result = await getPerformanceSupervisorsDashboard(actor, query);
+    assert.equal(result.supervisors.length, 0); assert.equal(result.summary.supervisors, 0);
+    assert.equal(result.summary.adherenceRate, null);
+    await assert.rejects(() => getPerformanceSupervisorAgentsDashboard(actor, "sup", query), { status: 404 });
+    assert.equal(captureRead.mock.callCount(), 0);
+  });
+}

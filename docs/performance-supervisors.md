@@ -4,7 +4,7 @@ A tabela mantém ABS, attrition, humor, AHT/CPD e qualidade e inclui aderência 
 
 ## Fontes e fórmulas
 
-- Equipe: agentes pelo vínculo atual de `EmployeeProfile.supervisorId`, sem perfis excluídos, conforme o consolidado existente de Performance. O novo detalhe usa exatamente esses IDs e a permissão de Performance relida no usuário ativo.
+- Equipe: agentes pelo vínculo atual de `EmployeeProfile.supervisorId`, sem perfis excluídos, vinculados somente a supervisores com cadastro operacional Ativo/Active, conta ACTIVE e sem exclusão. O mesmo filtro é aplicado ao abrir o detalhe por ID; supervisores inativos não entram nos totais. O novo detalhe usa exatamente esses IDs e a permissão de Performance relida no usuário ativo.
 - ABS, AHT/CPD e qualidade: cálculos compartilhados com o resultado do time do Meu Espaço. AHT usa ponderação por submits; TNS utiliza filas de 15 minutos. CPD CEC usa tickets por dia-agente com produção positiva. Qualidade TNS prefere KAP no mesmo parceiro/dia. Sem base no detalhe é `null`.
 - Humor: média das respostas válidas do período em `EmployeeMoodRecord`, escala 1–5, com quantidade de respostas; ausência de resposta não vira zero.
 - Jornada: somente dias produtivos cujo turno terminou, incluindo madrugadas na data de início. Folga, férias, faltas, Nesting e Treinamento não entram nos indicadores de horas/pontualidade; ABS permanece separado.

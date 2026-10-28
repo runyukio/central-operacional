@@ -1255,7 +1255,7 @@ function SupervisorsView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Consolidado por supervisor</h2>
-          <p className="mt-1 text-xs font-bold text-muted">ABS, humor, AHT/CPD, qualidade, aderência e pontualidade do time. Clique no supervisor para abrir os agentes.</p>
+          <p className="mt-1 text-xs font-bold text-muted">Supervisores ativos: ABS, humor, AHT/CPD, qualidade, aderência e pontualidade. Clique no nome para abrir os agentes.</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SlicerGroup label="Visão">
@@ -1299,7 +1299,7 @@ function SupervisorsView({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
               <div>
                 <h3 className="text-sm font-black text-navy-950">Supervisores</h3>
-                <p className="mt-1 text-xs font-bold text-muted">{formatNumber(summary?.supervisors ?? 0)} supervisor(es) no período</p>
+                <p className="mt-1 text-xs font-bold text-muted">{formatNumber(summary?.supervisors ?? 0)} supervisor(es) ativo(s) no período</p>
               </div>
               {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
             </div>

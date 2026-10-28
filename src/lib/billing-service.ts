@@ -3239,7 +3239,7 @@ async function listCycleAdjustments(billingCycleId: string, employeeIds?: Set<st
     }
     : {};
   const rows = await prisma.billingAdjustment.findMany({
-    where: { billingCycleId, deletedAt: null, ...employeeWhere },
+    where: { billingCycleId, deletedAt: null, hiddenAt: null, ...employeeWhere },
     include: { employee: true, lob: true, createdBy: true },
     orderBy: { createdAt: "desc" }
   });
@@ -3313,6 +3313,7 @@ async function listEmployeeBillingAdjustmentDetails(cycleId: string, employeeId:
     where: {
       billingCycleId: cycleId,
       deletedAt: null,
+      hiddenAt: null,
       OR: [
         { employeeId },
         { employeeInvoice: { employeeId } },

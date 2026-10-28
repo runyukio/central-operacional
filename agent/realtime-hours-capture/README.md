@@ -1,216 +1,164 @@
-# Realtime Hours Capture 0.1.1 - instalacao direta no site
+# Realtime Hours Capture 0.4.0
 
-Este pacote instala o agente de captura de horas diretamente nos computadores da operacao, sem servidor Windows local.
+Agente Windows da Central Operacional para captura silenciosa e transparente de presença, ociosidade e atividade da estação.
 
-Fluxo atual:
-
-```text
-Computador do colaborador -> https://eastriverbrasil.com/api/realtime-hours/agent-snapshot -> banco do site
-```
-
-O computador precisa apenas de internet. Nao precisa estar na mesma rede da empresa e nao precisa acessar `192.168.x.x`.
-
-## Otimizacao da versao 0.1.1
-
-- envia heartbeat a cada 120 segundos, mantendo eventos de sessao e o histórico operacional;
-- move JSON local inválido e respostas HTTP 4xx permanentes para `failed\`, evitando reenvio infinito;
-- mantém `408`, `429` e falhas `5xx` na fila para nova tentativa.
-
-## O que o agente captura
-
-Por padrao, captura apenas:
-
-- hostname;
-- usuario Windows;
-- WB/Login configurado ou inferido do usuario Windows;
-- IP da maquina;
-- sessao ativa ou ociosa;
-- segundos ocioso;
-- horario da ultima atividade;
-- versao do agente.
-
-Nao captura tela, teclado, mouse, historico de navegador, URL ou conteudo digitado.
-
-Janela/processo ativo ficam desligados por padrao. Use `-CaptureActiveWindow` somente se isso for aprovado internamente.
-
-## Token necessario
-
-Configure no ambiente de producao do site:
-
-```env
-REALTIME_HOURS_AGENT_TOKEN="um-token-forte-para-agentes"
-```
-
-Esse token autentica os computadores contra:
+## Fluxo
 
 ```text
-/api/realtime-hours/agent-snapshot
+Computador -> /api/realtime-hours/agent-snapshot -> presença e horas
+Computador -> /api/realtime-hours/agent-activity -> domínio/aplicativo e intervalo
 ```
 
-Gere o token no PowerShell:
+O agente roda em segundo plano na sessão interativa do Windows. Não abre PowerShell, Prompt ou notificações durante o uso normal. A tarefa continua visível para TI no Agendador de Tarefas e no Gerenciador de Tarefas.
 
-```powershell
-[Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))
-```
+## Transparência e privacidade
 
-Use esse valor como `CloudToken` na instalacao das maquinas.
+A implantação deve ocorrer somente após comunicação formal aos colaboradores.
 
-## Arquivos para copiar
+O agente captura:
 
-Copie a pasta:
+- hostname, usuário Windows e WB/Login;
+- IP local, status da sessão e tempo ocioso;
+- aplicativo em primeiro plano;
+- domínio da aba ativa em navegador compatível;
+- início, fim e duração do intervalo;
+- versão do agente.
+
+O agente não captura:
+
+- tela, vídeo, teclado, senha, texto digitado ou clipboard;
+- conteúdo da página ou de e-mails;
+- URL completa, caminho, parâmetros ou título da página;
+- histórico anterior à instalação.
+
+Exemplo armazenado:
 
 ```text
-agent/realtime-hours-capture/workstation
+chatgpt.com | 14:00 - 14:10 | 10 minutos
 ```
 
-Para cada computador, por exemplo:
+Em janela Incognito, InPrivate ou anônima, registra apenas `Navegação privada`, sem domínio.
+
+## Navegadores suportados no piloto
+
+A captura usa a API de acessibilidade do Windows para ler a barra de endereços da janela em primeiro plano. O valor é sanitizado em memória e somente o hostname é enviado.
+
+- Microsoft Edge
+- Google Chrome
+- Mozilla Firefox
+- Brave
+- Opera
+- Vivaldi
+
+Quando a barra não está acessível, o navegador é registrado como aplicativo, sem inventar domínio.
+
+## Instalação de um clique
+
+Arquivos na mesma pasta:
 
 ```text
-C:\Server\workstation
+Instalar.vbs
+instalar-silencioso.bat
+install-one-click.ps1
+install-workstation-task.ps1
+RealtimeHoursAgent.ps1
+setup.json
+uninstall-workstation-task.ps1
 ```
 
-Dentro da pasta precisam existir:
+1. Copie `setup.example.json` para `setup.json`.
+2. Preencha `cloudToken` com o valor de `REALTIME_HOURS_AGENT_TOKEN` da Central.
+3. Clique duas vezes em `Instalar.vbs`.
+4. Aceite somente a confirmação administrativa do Windows.
 
-```text
-C:\Server\workstation\install-workstation-task.ps1
-C:\Server\workstation\RealtimeHoursAgent.ps1
+Depois disso, a instalação e a execução ficam sem console visível. Por padrão, `setup.json` é removido após a instalação para não deixar o token em texto claro no pacote.
+
+Configuração recomendada:
+
+```json
+{
+  "cloudUrl": "https://eastriverbrasil.com",
+  "cloudToken": "SUBSTITUIR_PELO_TOKEN_DO_AGENT",
+  "wbLogin": "",
+  "employeeId": "",
+  "heartbeatSeconds": 120,
+  "activeThresholdSeconds": 300,
+  "activityEnabled": true,
+  "captureDomains": true,
+  "activitySampleSeconds": 5,
+  "activityUploadSeconds": 60,
+  "activityMaxSegmentSeconds": 3600,
+  "identitySource": "windows_user",
+  "identityConfidence": "MEDIUM",
+  "removeSetupAfterInstall": true
+}
 ```
 
-## Instalacao em cada maquina
-
-Abra PowerShell como Administrador na maquina do colaborador.
-
-Entre na pasta:
-
-```powershell
-cd "C:\Server\workstation"
-```
-
-Rode:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
-  -CloudUrl "https://eastriverbrasil.com" `
-  -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN" `
-  -IdentityConfidence "MEDIUM" `
-  -RunNow
-```
-
-Se precisar informar o WB/Login manualmente:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
-  -CloudUrl "https://eastriverbrasil.com" `
-  -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN" `
-  -WbLogin "wb_login_do_colaborador" `
-  -IdentityConfidence "HIGH" `
-  -RunNow
-```
-
-Se o usuario Windows ja for igual ao WB/Login, pode omitir `-WbLogin`.
-
-## Onde fica instalado
+## Instalação e arquivos locais
 
 ```text
 C:\ProgramData\CentralOperacional\RealtimeHoursAgent
 ```
 
-Arquivos principais:
+- `config.json`: configuração com token protegido por DPAPI da máquina;
+- `queue\`: fila de presença;
+- `queue\activity\`: fila de atividade;
+- `failed\`: quarentena de payloads recusados;
+- `logs\agent.log`: log técnico;
+- `logs\installation.log`: log da instalação.
 
-- `config.json`: URL do site, token do agente e parametros;
-- `queue\`: snapshots pendentes quando o site/internet estiver fora;
-- `failed\`: snapshots inválidos ou recusados permanentemente;
-- `logs\agent.log`: logs locais.
-
-## Tarefa agendada
-
-O instalador cria a tarefa:
+Tarefa criada:
 
 ```text
 Central Operacional - Realtime Hours Agent
 ```
 
-Ela inicia no logon do usuario Windows. Se o computador for desligado, a captura para; quando ligar e o usuario logar, ela volta automaticamente.
+## Central Operacional
 
-## Teste manual
-
-Na maquina do colaborador:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\ProgramData\CentralOperacional\RealtimeHoursAgent\RealtimeHoursAgent.ps1" -Mode Once
-```
-
-Confira o log:
-
-```powershell
-Get-Content "C:\ProgramData\CentralOperacional\RealtimeHoursAgent\logs\agent.log" -Tail 50
-```
-
-Procure por:
+Página:
 
 ```text
-Snapshot enviado para site direto
+/captura-horas/atividade
 ```
 
-Se aparecer `Snapshot mantido em fila`, o agente capturou, mas nao conseguiu enviar naquele momento. Ele tenta novamente no proximo ciclo.
+Acesso:
 
-## Rollout
+- Supervisor: somente colaboradores vinculados diretamente à sua equipe;
+- WFM: visão operacional;
+- Gestor, Coordenador e Gerente: visão gerencial;
+- Administrador: visão completa.
 
-1. Configure `REALTIME_HOURS_AGENT_TOKEN` no Vercel/ambiente de producao.
-2. Aguarde o redeploy do site.
-3. Instale em 1 maquina piloto.
-4. Confirme o log com `Snapshot enviado para site direto`.
-5. Confirme a maquina na tela `/captura-horas`.
-6. Instale em lotes pequenos, por exemplo 5 a 10 maquinas.
-7. Depois instale nas demais.
+A tela contém resumo de tempo monitorado, sites, aplicativos, inatividade, tela bloqueada, rankings e timeline por colaborador.
 
-## Desinstalacao
+## Retenção
 
-Na maquina:
+```env
+REALTIME_HOURS_ACTIVITY_RETENTION_DAYS=7
+```
+
+Padrão: 7 dias. Limite: 1 a 90 dias.
+
+## Teste técnico
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:\ProgramData\CentralOperacional\RealtimeHoursAgent\RealtimeHoursAgent.ps1" -Mode Once
+Get-Content "C:\ProgramData\CentralOperacional\RealtimeHoursAgent\logs\agent.log" -Tail 100
+Get-ScheduledTask -TaskName "Central Operacional - Realtime Hours Agent"
+```
+
+## Desinstalação
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\uninstall-workstation-task.ps1
-```
-
-Removendo dados locais:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File .\uninstall-workstation-task.ps1 -RemoveData
 ```
 
-## Problemas comuns
+## Rollout recomendado
 
-### O site recusa o envio
-
-Verifique:
-
-- `REALTIME_HOURS_AGENT_TOKEN` configurado em producao;
-- `CloudToken` igual ao token do site;
-- redeploy feito depois de criar a variavel;
-- rota publicada em `/api/realtime-hours/agent-snapshot`.
-
-### Nao aparece no site
-
-Verifique:
-
-- log em `C:\ProgramData\CentralOperacional\RealtimeHoursAgent\logs\agent.log`;
-- arquivos acumulados em `C:\ProgramData\CentralOperacional\RealtimeHoursAgent\queue`;
-- se a maquina tem internet;
-- se a tarefa agendada esta ativa.
-
-### Conferir tarefa agendada
-
-```powershell
-Get-ScheduledTask -TaskName "Central Operacional - Realtime Hours Agent"
-Get-ScheduledTaskInfo -TaskName "Central Operacional - Realtime Hours Agent"
-```
-
-Se estiver parada:
-
-```powershell
-Start-ScheduledTask -TaskName "Central Operacional - Realtime Hours Agent"
-```
-
-## Legado
-
-A pasta `server/` ainda existe no repositorio para historico e rollback, mas nao faz parte do fluxo atual. O rollout atual usa somente `workstation/` e envio direto para o site.
+1. Comunicar formalmente a política de monitoramento.
+2. Rotacionar tokens antigos expostos em documentos ou pacotes.
+3. Aplicar a migração e publicar a Central.
+4. Instalar em uma máquina piloto.
+5. Validar presença, domínio, ociosidade, bloqueio e fila offline.
+6. Ampliar para 5 a 10 máquinas.
+7. Expandir em lotes após validação operacional, técnica e jurídica.
