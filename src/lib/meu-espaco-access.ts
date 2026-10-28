@@ -7,7 +7,8 @@ export function canAccessMeuEspaco(user?: PermissionUser) {
 }
 
 export function canRespondMeuEspaco(user?: PermissionUser, kind?: string) {
-  return Boolean(user && canAccessMeuEspaco(user) && (kind === "absence" ? canJustifyAbsence(user) : canJustifyWorkHourAdherence(user)));
+  return Boolean(user && canAccessMeuEspaco(user) && (normalizeRole(user.role) === "GESTOR"
+    || (kind === "absence" ? canJustifyAbsence(user) : canJustifyWorkHourAdherence(user))));
 }
 
 export class MeuEspacoError extends Error {

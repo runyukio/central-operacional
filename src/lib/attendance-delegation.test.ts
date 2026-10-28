@@ -188,3 +188,64 @@ test("schedule edit requires the assessment only when justifying an absence", as
   assert.ok("error" in result && /48h/.test(result.error ?? ""));
   assert.deepEqual(f.writes, []);
 });
+
+const spaceContext = { source: "meu-espaco" as const };
+for (const role of ["GESTOR", "COORDENADOR", "GERENTE"]) {
+  test(`${role} justifica falta de outra equipe pelo Meu Espaço com classificação e auditoria`, async (t) => {
+    const f = fixture(t);
+    f.user.role.name = role;
+    f.user.employeeProfile.id = "another-manager";
+    f.employee.supervisorId = "another-team";
+    const result = await updateOperationalAttendance(actor, { ...input, impactsAbs: false, impactsCoverage: false }, spaceContext);
+    assert.ok("data" in result, JSON.stringify(result));
+    const attendance = f.writes.find(w => w.model === "attendanceRecord")!;
+    assert.equal(attendance.data.justifiedById, f.user.id);
+    assert.equal(attendance.data.impactsAbs, true);
+    assert.equal(attendance.data.impactsCoverage, true);
+    assert.equal(f.writes.filter(w => w.model === "attendanceHistory").length, 1);
+    assert.equal(f.writes.filter(w => w.model === "auditLog").length, 1);
+    assert.match(f.writes.find(w => w.model === "auditLog")!.data.reason, /Gestor no Meu Espaço/);
+    assert.deepEqual(Object.keys(f.writes.find(w => w.model === "schedule")!.data).sort(), ["observation", "status"]);
+    Object.assign(f.record, attendance.data);
+    Object.assign(f.schedule, f.writes.find(w => w.model === "schedule")!.data);
+    const count = f.writes.length;
+    assert.ok("data" in await updateOperationalAttendance(actor, { ...input, status: "Falta Justificada" }, spaceContext));
+    assert.equal(f.writes.length, count);
+  });
+}
+
+for (const [name, change] of [
+  ["inactive actor", (f) => { f.user.status = "INACTIVE"; }],
+  ["deleted actor", (f) => { f.user.deletedAt = date; }],
+  ["revoked role", (f) => { f.user.role.name = "COLABORADOR"; }],
+  ["RH role", (f) => { f.user.role.name = "RH"; }],
+  ["deleted schedule", (f) => { f.schedule.deletedAt = date; }],
+  ["schedule from another date", (f) => { f.schedule.date = new Date("2026-09-07T00:00:00Z"); }],
+  ["schedule from another partner", (f) => { f.schedule.employeeId = "another-partner"; }],
+  ["attendance from another date", (f) => { f.record.date = new Date("2026-09-07T00:00:00Z"); }],
+  ["attendance from another partner", (f) => { f.record.employeeId = "another-partner"; }],
+  ["attendance from another schedule", (f) => { f.record.scheduleId = "another-slot"; }],
+  ["presence instead of an occurrence", (f) => { f.schedule.status = "PRESENTE"; }],
+  ["grant revoked before saving", (f) => { f.current.authorized = false; }],
+  ["schedule changed before saving", (f) => { f.current.sameSchedule = false; }],
+] as Array<[string, (f: ReturnType<typeof fixture>) => void]>) {
+  test(`Meu Espaço blocks ${name} without writes`, async (t) => {
+    const f = fixture(t); change(f);
+    assert.ok("error" in await updateOperationalAttendance(actor, input, spaceContext));
+    assert.deepEqual(f.writes, []);
+  });
+}
+
+test("o navegador não pode habilitar a permissão de gestor pelo corpo da API antiga", async (t) => {
+  const f = fixture(t); f.user.employeeProfile.id = "another-manager";
+  assert.ok("error" in await updateOperationalAttendance(actor, { ...input, source: "meu-espaco" } as any));
+  assert.deepEqual(f.writes, []);
+});
+
+test("a permissão de gestor no Meu Espaço exige aviso de 48h e descrição", async (t) => {
+  const f = fixture(t);
+  for (const patch of [{ notifiedWithin48h: undefined }, { supervisorJustification: "" }]) {
+    assert.ok("error" in await updateOperationalAttendance(actor, { ...input, ...patch }, spaceContext));
+    assert.deepEqual(f.writes, []);
+  }
+});

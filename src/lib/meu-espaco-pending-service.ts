@@ -166,7 +166,7 @@ export async function respondSpacePending(scope: MeuEspacoScope, kind: string, i
     const attendance = await prisma.attendanceRecord.findFirst({ where: { scheduleId: id, employeeId: item.employeeId }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { id: true } });
     const result = await updateOperationalAttendance(scope.actor, { employeeId: item.employeeId, scheduleId: id, attendanceRecordId: attendance?.id,
       date: item.date, shift: schedule.shift?.name || schedule.employee.shift.name, status: schedule.status === "ERRO_ESCALA" ? "Erro de cronograma" : "Falta",
-      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, notifiedWithin48h: input.notifiedWithin48h, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl });
+      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, notifiedWithin48h: input.notifiedWithin48h, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl }, { source: "meu-espaco" });
     if ("error" in result) throw new MeuEspacoError(result.error || "Não foi possível responder.");
   }
   return { data: await getSpacePendingItem(scope, kind, id) };
