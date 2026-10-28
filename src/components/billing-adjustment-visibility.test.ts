@@ -13,37 +13,20 @@ const compiled = ts.transpileModule(`const subject = ${node.getText(source)}; su
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React }
 }).outputText;
 
-test("a lista oculta por padrão, permite consultar ocultos e reexibir a linha correta", () => {
-  let showHidden = false;
-  let tableRows: React.ReactNode[][] = [];
-  const rows = [
-    { id: "ana", description: "Ajuste da Ana", employeeName: "Ana Paula", amount: 2500, hidden: true },
-    { id: "other", description: "Outro ajuste", employeeName: "Outro parceiro", amount: 100, hidden: false }
-  ];
-  const toggled: unknown[] = [];
+test("a tabela mantém os ajustes visíveis sem controles de ocultar ou reexibir", () => {
   const icon = () => null;
   const table = vm.runInNewContext(compiled, {
     React,
-    useState: () => [showHidden, (value: boolean) => { showHidden = value; }],
-    Table: ({ rows: value }: { rows: React.ReactNode[][] }) => { tableRows = value; return React.createElement("div", null, value.flat()); },
-    formatCurrency: (value: number) => String(value), Eye: icon, EyeOff: icon, Pencil: icon, Trash2: icon
+    Table: ({ rows }: { rows: React.ReactNode[][] }) => React.createElement("div", null, rows.flat()),
+    formatCurrency: (value: number) => String(value), Pencil: icon, Trash2: icon
   });
-  const render = () => table({ rows, saving: false, onEdit: () => {}, onDelete: () => {}, onToggleVisibility: (row: unknown) => toggled.push(row) });
-  const tree = render();
-  const html = renderToStaticMarkup(tree);
-  assert.doesNotMatch(html, /Ajuste da Ana/);
+  const html = renderToStaticMarkup(table({
+    rows: [{ id: "other", description: "Outro ajuste", employeeName: "Outro parceiro", amount: 2500 }],
+    saving: false, onEdit: () => {}, onDelete: () => {}
+  }));
   assert.match(html, /Outro ajuste/);
-  assert.match(html, /Mostrar ocultos \(1\)/);
-  const input = tree.props.children[0].props.children[1].props.children[0];
-  input.props.onChange({ target: { checked: true } });
-  const shownHtml = renderToStaticMarkup(render());
-  assert.match(shownHtml, /Ajuste da Ana/);
-  assert.match(shownHtml, /Oculto/);
-  assert.match(shownHtml, /Reexibir/);
-  const actions = tableRows[0][8] as React.ReactElement<any>;
-  actions.props.children[0].props.onClick();
-  assert.equal(toggled[0], rows[0]);
-  rows[0].hidden = false;
-  showHidden = false;
-  assert.match(renderToStaticMarkup(render()), /Ajuste da Ana/);
+  assert.match(html, /2500/);
+  assert.match(html, /Editar/);
+  assert.match(html, /Excluir/);
+  assert.doesNotMatch(html, /Ocultar|Reexibir|Mostrar ocultos|type="checkbox"/);
 });
