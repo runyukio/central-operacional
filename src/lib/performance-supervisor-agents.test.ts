@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { getPerformanceSupervisorAgentsDashboard, getPerformanceSupervisorsDashboard } from "./performance-service";
+import { getPerformanceSupervisorAgentsDashboard, getPerformanceSupervisorsDashboard, getPerformanceSupervisorsWorkMetrics } from "./performance-service";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
 import { prisma } from "./prisma";
 import { teamWorkData } from "./team-work-metrics-service";
@@ -22,9 +22,9 @@ function fixture(t: TestContext, role = "ADMIN", supervisorPatch: Record<string,
   mockPrismaDelegate(t, "workHourRecord", { findMany: async () => schedules.map((row, index) => ({ employeeId: row.employeeId, date: day, scheduleId: row.id, effectiveHours: index ? 10 : 4, plannedHours: 8 })) });
   mockPrismaDelegate(t, "employeeMoodRecord", { findMany: async () => [{ employeeId: "a", moodScore: 4 }],
     groupBy: async (args: any) => { assert.deepEqual(args.where.employeeId.in, ["a", "b"]); return [{ employeeId: "a", _sum: { moodScore: 4 }, _count: { _all: 1 } }]; } });
-  const captureRead = t.mock.method(teamWorkData, "timelineRange", async (args: any) => {
+  const captureRead = t.mock.method(teamWorkData, "punctualityRange", async (args: any) => {
     assert.deepEqual(args.eligibleEmployeeIds, ["a", "b"]);
-    return [{ date: "2026-10-01", rows: schedules.map((row, index) => ({ employeeId: row.employeeId, slotId: row.id, data: "2026-10-01", entryAt: index ? "2026-10-01T11:00:00Z" : "2026-10-01T11:01:00Z", exitAt: "2026-10-01T20:00:00Z" })) }] as any;
+    return { warnings: [], rows: schedules.map((row, index) => ({ employeeId: row.employeeId, slotId: row.id, data: "2026-10-01", entryAt: index ? "2026-10-01T11:00:00Z" : "2026-10-01T11:01:00Z", exitAt: "2026-10-01T20:00:00Z" })) } as any;
   });
   t.mock.method(prisma, "$queryRaw", async (sql: any) => {
     assert.ok(!sql.values.includes("another-team"));
@@ -36,7 +36,7 @@ function fixture(t: TestContext, role = "ADMIN", supervisorPatch: Record<string,
       : [{ supervisorId: "sup", correct: 19, total: 20 }];
     return [];
   });
-  return { profile, captureRead };
+  return { profile, captureRead, employees };
 }
 
 test("supervisors return weighted adherence, capture rates and official overtime together", async (t) => {
@@ -83,3 +83,31 @@ for (const [name, patch] of [
     assert.equal(captureRead.mock.callCount(), 0);
   });
 }
+
+for (const status of ["Desligado", "Inativo"]) {
+  test(`agente ${status} fica fora da lista, mantendo sua contribuição nos totais`, async (t) => {
+    const { employees } = fixture(t);
+    employees[1].operationalStatus = status;
+    const total = await getPerformanceSupervisorsDashboard(actor, query);
+    const detail = await getPerformanceSupervisorAgentsDashboard(actor, "sup", query);
+    const work = await getPerformanceSupervisorsWorkMetrics(actor, query, "sup");
+    assert.deepEqual(detail.agents.map((row) => row.id), ["a"]);
+    assert.deepEqual(work.agents.map((row) => row.id), ["a"]);
+    assert.equal(total.supervisors[0].adherenceRate, 75);
+    assert.equal(total.summary.officialOvertimeHours, 2);
+    assert.equal(total.supervisors[0].lateRate, 50);
+    assert.equal(work.supervisors[0].lateRate, 50);
+  });
+}
+
+test("base dashboard and agent detail return official indicators without waiting for capture", async (t) => {
+  const { captureRead } = fixture(t);
+  const baseQuery = { ...query, includePunctuality: false };
+  const total = await getPerformanceSupervisorsDashboard(actor, baseQuery);
+  const detail = await getPerformanceSupervisorAgentsDashboard(actor, "sup", baseQuery);
+  assert.equal(total.summary.adherenceRate, 75);
+  assert.equal(total.summary.officialOvertimeHours, 2);
+  assert.equal(detail.agents.length, 2);
+  assert.equal(total.supervisors[0].lateRate, null);
+  assert.equal(captureRead.mock.callCount(), 0);
+});

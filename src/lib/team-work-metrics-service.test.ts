@@ -13,7 +13,7 @@ test("work metrics queries and capture receive the authorized IDs and preserve o
     assert.deepEqual(args.where.employeeId.in, ["agent"]);
     return [{ employeeId: "agent", scheduleId: "s", date: day, effectiveHours: 9, plannedHours: 8 }];
   } });
-  t.mock.method(teamWorkData, "timelineRange", async (args: any) => {
+  t.mock.method(teamWorkData, "punctualityRange", async (args: any) => {
     assert.deepEqual(args.dates, ["2026-10-26"]); assert.deepEqual(args.eligibleEmployeeIds, ["agent"]);
     assert.deepEqual(args.eligibleWbLogins, ["wb_agent"]); throw new Error("Capture unavailable");
   });
@@ -25,7 +25,7 @@ test("work metrics queries and capture receive the authorized IDs and preserve o
 });
 
 test("empty employee scope performs no capture or database reads", async (t) => {
-  const capture = t.mock.method(teamWorkData, "timelineRange", async () => { throw new Error("Must not read all captures"); });
+  const capture = t.mock.method(teamWorkData, "punctualityRange", async () => { throw new Error("Must not read all captures"); });
   const result = await loadTeamWorkMetrics([], new Date("2026-10-01"), new Date("2026-10-28"));
   assert.equal(result.byEmployee.size, 0); assert.equal(capture.mock.callCount(), 0);
 });

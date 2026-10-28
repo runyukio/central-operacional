@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { getPerformanceSupervisorAgentsDashboard } from "@/lib/performance-service";
+import type { getPerformanceSupervisorAgentsDashboard, getPerformanceSupervisorsWorkMetrics } from "@/lib/performance-service";
 import { compareSpaceValues } from "@/lib/meu-espaco-order";
 import { formatMinutesToHHMM } from "@/lib/work-hours-rules";
 import { number, tableClass, useSpaceRead } from "./meu-espaco/shared";
@@ -20,7 +20,7 @@ const columns = [
   { key: "overtime", label: "Hora extra", value: (row: Agent) => row.work.officialOvertimeHours }
 ];
 
-export function SupervisorAgentsTable({ data }: { data: Payload }) {
+export function SupervisorAgentsTable({ data, punctualityLoading = false }: { data: Payload; punctualityLoading?: boolean }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("name"), [direction, setDirection] = useState<"asc" | "desc">("asc");
   function onSort(key: string) { setDirection(sort === key && direction === "asc" ? "desc" : "asc"); setSort(key); }
@@ -31,13 +31,13 @@ export function SupervisorAgentsTable({ data }: { data: Payload }) {
   return <div className="space-y-3 p-4">
     <div className="flex flex-wrap items-center justify-between gap-3"><h4 className="font-bold">Agentes de {data.supervisor}</h4>
       <label className="text-xs text-muted">Buscar agente<input className="premium-control ml-2 p-2 text-sm" placeholder="Nome ou WB" value={search} onChange={(event) => setSearch(event.target.value)} /></label></div>
-    <p className="text-xs text-muted">{data.period.startDate.split("-").reverse().join("/")} a {data.period.endDate.split("-").reverse().join("/")} · {data.agents.length} agente(s)</p>
+    <p className="text-xs text-muted">{data.period.startDate.split("-").reverse().join("/")} a {data.period.endDate.split("-").reverse().join("/")} · {data.agents.length} agente(s) ativo(s). O consolidado do time inclui também os desligados no período.</p>
     {data.workWarnings.length ? <div role="status" className="rounded-lg border border-amber-300 p-3 text-sm">{data.workWarnings.map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
     <div className="overflow-x-auto"><table className={`${tableClass} min-w-[1300px] [&_th:first-child]:sticky [&_th:first-child]:left-0 [&_th:first-child]:z-20 [&_th:first-child]:bg-slate-50 [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-white`}><thead><tr>
       <SpaceSortHeader column="name" label="Agente / WB" sort={sort} direction={direction} onSort={onSort} /><th>LOB / skill</th>
       {columns.map((column) => <SpaceSortHeader key={column.key} column={column.key} label={column.label} sort={sort} direction={direction} onSort={onSort} />)}
     </tr></thead><tbody>{agents.map((row) => <tr key={row.id}><td className="font-bold">{row.name}<p className="text-xs font-normal text-muted">{row.wbLogin}</p></td><td>{row.lob}<p className="text-xs text-muted">{row.skill}</p></td>
-      {columns.map((column) => <td key={column.key}>{column.key === "overtime"
+      {columns.map((column) => <td key={column.key}>{punctualityLoading && ["late", "early"].includes(column.key) ? "Carregando…" : column.key === "overtime"
         ? row.work.officialOvertimeHours == null ? "Sem dados" : formatMinutesToHHMM(row.work.officialOvertimeHours * 60)
         : number(column.value(row), column.key === "productivity" ? row.lob === "CEC" ? " CPD" : " s" : column.suffix)}
         {column.key === "adherence" ? <p className="text-xs text-muted">{row.work.recordedDays}/{row.work.expectedDays} dias com horas</p> : null}
@@ -45,16 +45,21 @@ export function SupervisorAgentsTable({ data }: { data: Payload }) {
         {column.key === "early" ? <p className="text-xs text-muted">{row.work.earlyExits}/{row.work.observedExits} saídas observadas</p> : null}
         {column.key === "mood" ? <p className="text-xs text-muted">{row.moodResponses} resposta(s)</p> : null}
       </td>)}
-    </tr>)}</tbody></table>{!agents.length ? <p className="p-6 text-center text-muted">Nenhum agente encontrado.</p> : null}</div>
+    </tr>)}</tbody></table>{!agents.length ? <p className="p-6 text-center text-muted">{data.agents.length ? "Nenhum agente encontrado." : "Nenhum agente ativo para este supervisor."}</p> : null}</div>
   </div>;
 }
 
 export function PerformanceSupervisorAgents({ supervisorId, period }: { supervisorId: string; period: { startDate: string; endDate: string } }) {
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => { container.current?.scrollIntoView({ block: "nearest" }); }, []);
-  const query = new URLSearchParams({ ...period, supervisorId });
+  const query = new URLSearchParams({ ...period, supervisorId, phase: "base" });
   const read = useSpaceRead<Payload>(`/api/performance/supervisors?${query}`);
+  const workQuery = new URLSearchParams({ ...period, supervisorId, phase: "work" });
+  const work = useSpaceRead<Awaited<ReturnType<typeof getPerformanceSupervisorsWorkMetrics>>>(`/api/performance/supervisors?${workQuery}`, Boolean(read.data));
   if (read.error) return <div ref={container} role="alert" className="p-4 text-red-700">{read.error} <button type="button" onClick={read.retry} className="font-bold underline">Tentar novamente</button></div>;
   if (read.loading || !read.data) return <div ref={container} role="status" className="p-4 text-muted">Carregando agentes e indicadores do time…</div>;
-  return <div ref={container}><SupervisorAgentsTable data={read.data} /></div>;
+  const byId = new Map(work.data?.agents.map((row) => [row.id, row.work]));
+  const data = { ...read.data, workWarnings: [...read.data.workWarnings, ...(work.data?.workWarnings ?? [])],
+    agents: read.data.agents.map((row) => ({ ...row, work: byId.get(row.id) ?? row.work })) };
+  return <div ref={container}>{work.error ? <p role="alert" className="p-4 text-amber-700">A pontualidade não pôde ser carregada. <button type="button" onClick={work.retry} className="font-bold underline">Tentar novamente</button></p> : null}<SupervisorAgentsTable data={data} punctualityLoading={work.loading} /></div>;
 }

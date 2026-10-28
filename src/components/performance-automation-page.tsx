@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildForecastDisplay, forecastCycleLabel, type ForecastDisplayRow, type ForecastPayload } from "@/lib/volume-forecast-display";
 import dynamic from "next/dynamic";
+import { useSpaceRead } from "./meu-espaco/shared";
+import { createClientRequestGate } from "@/lib/client-request-gate";
+import type { getPerformanceSupervisorsWorkMetrics } from "@/lib/performance-service";
 import type { TeamWorkMetric } from "@/lib/team-work-metrics";
 import { formatMinutesToHHMM } from "@/lib/work-hours-rules";
 import { PerformanceSupervisorAgents } from "./performance-supervisor-agents";
@@ -301,6 +304,8 @@ export function PerformanceAutomationPage() {
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
   const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
+  const [supervisorRequestGate] = useState(createClientRequestGate);
+  const [supervisorRevision, setSupervisorRevision] = useState(0);
   const [supervisorsPayload, setSupervisorsPayload] = useState<PerformanceSupervisorsResponse | null>(null);
   const [agentView, setAgentView] = useState<QualityGranularity>("monthly");
   const [supervisorView, setSupervisorView] = useState<SupervisorView>("monthly");
@@ -445,20 +450,21 @@ export function PerformanceAutomationPage() {
   }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
 
   const loadSupervisors = useCallback(async () => {
+    const request = supervisorRequestGate.begin();
     setLoadingSupervisors(true);
-    const params = new URLSearchParams({ view: supervisorView });
+    const params = new URLSearchParams({ view: supervisorView, phase: "base" });
     if (supervisorStartDate) params.set("startDate", supervisorStartDate);
     if (supervisorEndDate) params.set("endDate", supervisorEndDate);
     try {
-      const data = await fetchPerformanceSupervisors(params);
-      setSupervisorsPayload(data);
-      setMessage("");
+      const data = await fetchPerformanceSupervisors(params, request.signal);
+      if (!supervisorRequestGate.isCurrent(request)) return;
+      setSupervisorsPayload(data); setSupervisorRevision((value) => value + 1); setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível carregar os dados dos supervisores.");
+      if (supervisorRequestGate.isCurrent(request)) setMessage(error instanceof Error ? error.message : "Não foi possível carregar os dados dos supervisores.");
     } finally {
-      setLoadingSupervisors(false);
+      if (supervisorRequestGate.isCurrent(request)) setLoadingSupervisors(false);
     }
-  }, [supervisorEndDate, supervisorStartDate, supervisorView]);
+  }, [supervisorEndDate, supervisorStartDate, supervisorView, supervisorRequestGate]);
 
   useEffect(() => {
     void loadQueue();
@@ -501,7 +507,8 @@ export function PerformanceAutomationPage() {
 
   useEffect(() => {
     if (activeTab === "supervisors") void loadSupervisors();
-  }, [activeTab, loadSupervisors, manualImportVersion]);
+    return () => supervisorRequestGate.cancel();
+  }, [activeTab, loadSupervisors, manualImportVersion, supervisorRequestGate]);
 
   const basePayload = queuePayload;
   const realtimeFallbackWarning = activeTab === "queue" && queueGranularity === "hourly"
@@ -614,6 +621,7 @@ export function PerformanceAutomationPage() {
         />
       ) : activeTab === "supervisors" ? (
         <SupervisorsView
+          revision={supervisorRevision}
           loading={loadingSupervisors}
           payload={supervisorsPayload}
           view={supervisorView}
@@ -1236,7 +1244,8 @@ function SupervisorsView({
   onViewChange,
   onStartDateChange,
   onEndDateChange,
-  onRefresh
+  onRefresh,
+  revision = 0
 }: {
   loading: boolean;
   payload: PerformanceSupervisorsResponse | null;
@@ -1247,8 +1256,11 @@ function SupervisorsView({
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
   onRefresh: () => void;
+  revision?: number;
 }) {
   const summary = payload?.summary;
+  const workQuery = new URLSearchParams({ ...(payload?.period ?? {}), phase: "work" });
+  const punctuality = useSpaceRead<Awaited<ReturnType<typeof getPerformanceSupervisorsWorkMetrics>>>(`/api/performance/supervisors?${workQuery}`, Boolean(payload) && !loading, revision);
   const [openedSupervisor, setOpenedSupervisor] = useState("");
   return (
     <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
@@ -1293,6 +1305,8 @@ function SupervisorsView({
         </div>
 
         <details className="rounded-xl border border-border p-3 text-xs leading-6 text-muted"><summary className="cursor-pointer font-bold">Como ler horas e pontualidade</summary><p>Aderência: horas oficiais de cada dia, limitadas a 8h, divididas por 8h por dia com registro. Dias sem horas não viram zero; a cobertura aparece em cada linha. Horas extras não compensam déficits de outros dias.</p><p>Taxas: dias com atraso ou saída antecipada observados na Captura / dias com entrada ou saída observada. Considera qualquer diferença positiva em segundos, sem desconto de tolerância. Somente turnos encerrados entram nesses indicadores. Hora extra soma as horas oficiais acima do previsto, sem incluir excedentes em validação.</p></details>
+        {punctuality.error ? <div role="alert" className="rounded-xl border border-amber-300 p-3 text-sm">Os resultados do time já estão disponíveis. A pontualidade não pôde ser carregada. <button type="button" onClick={punctuality.retry} className="font-bold underline">Tentar novamente</button></div> : null}
+        {punctuality.data?.workWarnings.map((warning) => <p key={warning} role="status" className="p-3 text-sm text-amber-700">{warning}</p>)}
         {payload?.workWarnings.length ? <div role="status" className="rounded-xl border border-amber-300 p-3 text-sm">{payload.workWarnings.map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
         {loading && !payload ? <EmptyBox label="Carregando consolidado dos supervisores..." /> : (
           <div className="overflow-hidden rounded-xl border border-border bg-white">
@@ -1338,8 +1352,7 @@ function SupervisorsView({
                       </td>
                       <td className="px-4 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.quality)} detail={`${formatNumber(row.qualityTotal)} casos`} /></td>
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.adherenceRate)} detail={`${row.recordedDays}/${row.expectedDays} dias com horas`} /></td>
-                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.lateRate)} detail={`${row.lateEntries}/${row.observedEntries} entradas observadas`} /></td>
-                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.earlyRate)} detail={`${row.earlyExits}/${row.observedExits} saídas observadas`} /></td>
+                      <SupervisorPunctualityCells metric={punctuality.data?.supervisors.find((work) => work.supervisorId === row.supervisorId)} loading={punctuality.loading} error={Boolean(punctuality.error)} />
                       <td className="px-3 py-3 text-right font-bold">{row.officialOvertimeHours == null ? "Sem dados" : formatMinutesToHHMM(row.officialOvertimeHours * 60)}</td>
                     </tr>
                   ))}
@@ -1347,12 +1360,18 @@ function SupervisorsView({
                 </tbody>
               </table>
             </div>
-            {openedSupervisor && payload && !loading && payload.supervisors.some((row) => row.supervisorId === openedSupervisor) ? <div id={`supervisor-agents-${openedSupervisor}`} className="border-t border-border bg-blue-50/20"><PerformanceSupervisorAgents key={`${openedSupervisor}:${payload.period.startDate}:${payload.period.endDate}`} supervisorId={openedSupervisor} period={payload.period} /></div> : null}
+            {openedSupervisor && payload && !loading && payload.supervisors.some((row) => row.supervisorId === openedSupervisor) ? <div id={`supervisor-agents-${openedSupervisor}`} className="border-t border-border bg-blue-50/20"><PerformanceSupervisorAgents key={`${openedSupervisor}:${payload.period.startDate}:${payload.period.endDate}:${revision}`} supervisorId={openedSupervisor} period={payload.period} /></div> : null}
           </div>
         )}
       </div>
     </section>
   );
+}
+
+function SupervisorPunctualityCells({ metric, loading, error }: { metric?: TeamWorkMetric; loading: boolean; error: boolean }) {
+  const label = (value?: number | null) => loading ? "Carregando…" : error ? "Indisponível" : formatQualityPercent(value);
+  return <><td className="px-3 py-3 text-right"><SupervisorMetric value={label(metric?.lateRate)} detail={metric ? `${metric.lateEntries}/${metric.observedEntries} entradas observadas` : "Captura de Horas"} /></td>
+    <td className="px-3 py-3 text-right"><SupervisorMetric value={label(metric?.earlyRate)} detail={metric ? `${metric.earlyExits}/${metric.observedExits} saídas observadas` : "Captura de Horas"} /></td></>;
 }
 
 function SupervisorMetric({ value, detail }: { value: string; detail: string }) {
@@ -2169,8 +2188,8 @@ async function fetchPerformanceAgents(params: URLSearchParams): Promise<Performa
   return body;
 }
 
-async function fetchPerformanceSupervisors(params: URLSearchParams): Promise<PerformanceSupervisorsResponse> {
-  const response = await fetch(`/api/performance/supervisors?${params.toString()}`, { cache: "no-store" });
+async function fetchPerformanceSupervisors(params: URLSearchParams, signal?: AbortSignal): Promise<PerformanceSupervisorsResponse> {
+  const response = await fetch(`/api/performance/supervisors?${params.toString()}`, { cache: "no-store", signal });
   const body = await response.json().catch(() => null) as (PerformanceSupervisorsResponse & { error?: string; message?: string }) | null;
   if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar os dados dos supervisores.");
   if (body.mode !== "supervisors") throw new Error("Resposta de supervisores inesperada.");
