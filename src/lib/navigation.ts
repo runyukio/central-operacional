@@ -30,7 +30,7 @@ export type NavSection = {
 };
 
 const personalRoles = rolesWithCapability("PERSONAL");
-const workstationActivityRoles: AppRole[] = ["ADMIN", "GESTOR", "COORDENADOR", "GERENTE", "SUPERVISOR", "WFM"];
+const workstationActivityRoles: AppRole[] = ["ADMIN", "GESTOR", "GERENTE", "SUPERVISOR", "WFM"];
 const shiftReportRoles = Array.from(new Set([
   ...rolesWithCapability("SHIFT_REPORT_SUBMIT"),
   ...rolesWithCapability("SHIFT_REPORT_VIEW")

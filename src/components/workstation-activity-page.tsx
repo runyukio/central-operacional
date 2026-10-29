@@ -1,464 +1,184 @@
 "use client";
 
-import {
-  Activity,
-  AppWindow,
-  CalendarDays,
-  Clock,
-  Globe2,
-  Laptop,
-  Lock,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  UserRound,
-  WifiOff
-} from "lucide-react";
+import { Activity, AppWindow, ArrowLeft, ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Clock, Globe2, Lock, RefreshCw, Search, ShieldCheck, UserRound, UsersRound } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 
-type ActivitySourceType = "WEB" | "APP" | "IDLE" | "LOCKED" | "PRIVATE" | "UNKNOWN";
-
-type ActivityRow = {
-  id: string;
-  eventId: string;
-  source: string;
-  capturedAt: string;
-  hostname: string;
-  windowsUser: string | null;
-  wbLogin: string | null;
-  employeeId: string | null;
-  sourceType: ActivitySourceType;
-  applicationName: string | null;
-  domain: string | null;
-  startedAt: string;
-  endedAt: string;
-  durationSeconds: number;
-  agentVersion: string | null;
-  employeeName: string;
-  lob: string;
-  supervisor: string;
-};
-
-type ActivitySummary = {
-  rowCount: number;
-  employees: number;
-  totalSeconds: number;
-  webSeconds: number;
-  appSeconds: number;
-  idleSeconds: number;
-  lockedSeconds: number;
-  privateSeconds: number;
-  unknownSeconds: number;
-  uniqueDomains: number;
-};
-
-type ActivityPayload = {
-  success: boolean;
-  date: string;
-  window: { start: string; end: string };
-  summary: ActivitySummary;
-  rows: ActivityRow[];
-  recordsReturned: number;
-  sourceRecordsReturned: number;
-  limit: number;
-  truncated: boolean;
-  privacy: string;
-  error?: string;
-  message?: string;
-};
-
-type RankedItem = { label: string; seconds: number };
-const allTypes = "ALL";
+type SourceType = "WEB" | "APP" | "IDLE" | "LOCKED" | "PRIVATE" | "UNKNOWN";
+type Summary = { rowCount: number; employees: number; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; privateSeconds: number; unknownSeconds: number; uniqueDomains: number };
+type Agent = { agentKey: string; employeeId: string | null; employeeName: string; wbLogin: string | null; windowsUser: string | null; lob: string; supervisor: string; hostnames: string[]; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; uniqueDomains: number; lastActivityAt: string };
+type Row = { id: string; eventId: string; sourceType: SourceType; applicationName: string | null; domain: string | null; startedAt: string; endedAt: string; durationSeconds: number; hostname: string };
+type Ranking = { label: string; seconds: number };
+type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; limit: number; truncated: boolean; error?: string; message?: string };
+type DetailTab = "WEB" | "APP" | "TIMELINE";
+const emptySummary: Summary = { rowCount: 0, employees: 0, totalSeconds: 0, webSeconds: 0, appSeconds: 0, idleSeconds: 0, lockedSeconds: 0, privateSeconds: 0, unknownSeconds: 0, uniqueDomains: 0 };
 
 export function WorkstationActivityPage() {
-  const [date, setDate] = useState(todayInSaoPaulo());
+  const [date, setDate] = useState(todayInSaoPaulo);
   const [search, setSearch] = useState("");
-  const [sourceType, setSourceType] = useState(allTypes);
-  const [payload, setPayload] = useState<ActivityPayload | null>(null);
+  const [agentSearch, setAgentSearch] = useState("");
+  const [selected, setSelected] = useState<Agent | null>(null);
+  const [overview, setOverview] = useState<Payload | null>(null);
+  const [detail, setDetail] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const loadData = useCallback(async (showRefreshing = false) => {
-    if (showRefreshing) setRefreshing(true);
-    else setLoading(true);
-    setError("");
-
-    try {
-      const params = new URLSearchParams({ date, limit: "5000" });
-      if (search.trim()) params.set("search", search.trim());
-      if (sourceType !== allTypes) params.set("sourceType", sourceType);
-      const response = await fetch(`/api/realtime-hours/activity?${params.toString()}`, { cache: "no-store" });
-      const body = await response.json() as ActivityPayload;
-      if (!response.ok || body.success === false) {
-        throw new Error(body.message || body.error || "Não foi possível carregar a atividade das estações.");
-      }
-      setPayload(body);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Não foi possível carregar a atividade das estações.");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [date, search, sourceType]);
+  const [detailError, setDetailError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [tab, setTab] = useState<DetailTab>("WEB");
+  const [page, setPage] = useState(0);
+  const selectedKey = selected?.agentKey ?? null;
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => void loadData(), 300);
-    return () => window.clearTimeout(timeout);
-  }, [loadData]);
+    const timer = window.setTimeout(() => setAgentSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
-    const refreshWhenVisible = () => {
-      if (!document.hidden) void loadData(true);
-    };
-    const interval = window.setInterval(refreshWhenVisible, 60_000);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    return () => {
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, [loadData]);
+    if (selectedKey) return;
+    const controller = new AbortController();
+    setLoading(true); setError("");
+    const params = new URLSearchParams({ date, view: "overview" });
+    if (agentSearch.trim()) params.set("agentSearch", agentSearch.trim());
+    void fetchActivity(params, controller.signal).then((body) => {
+      if (!controller.signal.aborted) setOverview(body);
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Não foi possível carregar os agentes.");
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [date, agentSearch, selectedKey, refresh]);
 
-  const summary = payload?.summary ?? emptySummary();
-  const activeSeconds = summary.webSeconds + summary.appSeconds + summary.unknownSeconds;
-  const topDomains = useMemo(() => rankRows(payload?.rows ?? [], "WEB"), [payload?.rows]);
-  const topApplications = useMemo(() => rankRows(payload?.rows ?? [], "APP"), [payload?.rows]);
+  useEffect(() => {
+    if (!selectedKey) return;
+    const controller = new AbortController();
+    setDetailLoading(true); setDetailError("");
+    const params = new URLSearchParams({ date, view: "agent", agentKey: selectedKey, limit: "5000" });
+    void fetchActivity(params, controller.signal).then((body) => {
+      if (!controller.signal.aborted) setDetail(body);
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setDetailError(reason instanceof Error ? reason.message : "Não foi possível carregar o agente.");
+    }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
+    return () => controller.abort();
+  }, [date, selectedKey, refresh]);
+
+  useEffect(() => {
+    const refreshVisible = () => { if (!document.hidden) setRefresh((value) => value + 1); };
+    const interval = window.setInterval(refreshVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", refreshVisible); };
+  }, []);
+
+  const data = selected ? detail?.date === date && detail.agentKey === selectedKey ? detail : null : overview?.date === date ? overview : null;
+  const summary = data?.summary ?? emptySummary;
+  const busy = selected ? detailLoading : loading;
+  const currentError = selected ? detailError : error;
+  const pages = Math.max(1, Math.ceil((data?.rows.length ?? 0) / 50));
+  const currentPage = Math.min(page, pages - 1);
+  const pageRows = useMemo(() => data?.rows.slice(currentPage * 50, (currentPage + 1) * 50) ?? [], [data?.rows, currentPage]);
+
+  function openAgent(agent: Agent) {
+    setSelected(agent); setDetail(null); setTab("WEB"); setPage(0); setDetailError("");
+  }
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Atividades"
-        description="Visão operacional dos domínios e aplicativos ativos nas estações monitoradas."
-        icon={Activity}
-        actions={
-          <button
-            type="button"
-            onClick={() => void loadData(true)}
-            disabled={refreshing}
-            className="premium-button inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold disabled:cursor-wait disabled:opacity-70"
-          >
-            <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-            Atualizar
-          </button>
-        }
-      />
-
-      <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
-        <div>
-          <p className="font-black">Coleta minimizada e restrita</p>
-          <p className="mt-0.5 font-medium text-blue-800">
-            A Central recebe somente domínio, aplicativo e intervalo. URL completa, conteúdo da página, texto digitado, senha e captura de tela não são coletados.
-          </p>
-        </div>
-      </div>
-
-      {error ? (
-        <div className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
-          <WifiOff className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      {payload?.truncated ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
-          O resumo considera o período completo, mas a tabela atingiu o limite de {payload.limit.toLocaleString("pt-BR")} registros. Refine os filtros para detalhar.
-        </div>
-      ) : null}
-
-      <Panel title="Filtros operacionais">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[190px_minmax(280px,1fr)_220px]">
-          <label className="relative block">
-            <span className="sr-only">Data</span>
-            <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
-            <input
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-              className="premium-control h-10 w-full pl-9 pr-3 text-sm font-black text-navy-950 outline-none"
-            />
+    <div className="space-y-5">
+      <PageHeader title="Atividades" description="Uma visão geral da equipe. Os detalhes aparecem ao selecionar um agente." icon={Activity}
+        actions={<div className="flex flex-wrap items-center gap-2">
+          <label className="relative"><span className="sr-only">Data das atividades</span><CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
+            <input type="date" aria-label="Data das atividades" value={date} onChange={(event) => { setDate(event.target.value || todayInSaoPaulo()); setPage(0); }} className="premium-control h-10 pl-9 pr-3 text-sm font-bold text-navy-950" />
           </label>
+          <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={busy} className="premium-button inline-flex h-10 items-center gap-2 px-3 text-sm font-bold disabled:opacity-60"><RefreshCw className={cn("h-4 w-4", busy && "animate-spin")} />Atualizar</button>
+        </div>} />
 
-          <label className="relative block">
-            <span className="sr-only">Buscar</span>
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="premium-control h-10 w-full pl-9 pr-3 text-sm font-bold outline-none"
-              placeholder="Buscar parceiro, WB, domínio, aplicativo ou máquina"
-            />
-          </label>
+      {currentError ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{currentError}</div> : null}
 
-          <select
-            value={sourceType}
-            onChange={(event) => setSourceType(event.target.value)}
-            className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
-            aria-label="Tipo de atividade"
-          >
-            <option value={allTypes}>Todos os tipos</option>
-            <option value="WEB">Sites</option>
-            <option value="APP">Aplicativos</option>
-            <option value="IDLE">Inatividade</option>
-            <option value="LOCKED">Tela bloqueada</option>
-            <option value="PRIVATE">Navegação privada</option>
-            <option value="UNKNOWN">Não identificado</option>
-          </select>
+      {selected ? <div className="space-y-4">
+        <button type="button" onClick={() => { setSelected(null); setPage(0); }} className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-800"><ArrowLeft className="h-4 w-4" />Voltar à visão geral</button>
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-white p-5">
+          <div className="flex min-w-0 items-center gap-3"><Avatar /><div className="min-w-0"><h2 className="break-words text-xl font-extrabold tracking-tight text-navy-950">{selected.employeeName}</h2><p className="mt-1 text-sm text-muted">{selected.employeeId ? `${selected.wbLogin || selected.windowsUser || ""} · ${selected.lob}` : "Estação sem vínculo com um agente"}</p><p className="mt-1 text-xs text-muted">{selected.hostnames.join(" · ")}{selected.supervisor !== "Sem supervisor" ? ` · ${selected.supervisor}` : ""}</p></div></div>
+          <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">Visão individual</span>
         </div>
-      </Panel>
+      </div> : <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-navy-950">Visão geral da equipe</h2><p className="mt-0.5 text-sm text-muted">Resumo de todos os agentes disponíveis para o seu perfil.</p></div><span className="hidden rounded-full border border-border bg-white px-3 py-1.5 text-xs font-semibold text-muted sm:block">Atualização a cada minuto</span></div>}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <MetricCard title="Tempo monitorado" value={formatDuration(summary.totalSeconds)} helper={`${summary.employees} parceiro(s)`} icon={Clock} tone="blue" />
-        <MetricCard title="Atividade ativa" value={formatDuration(activeSeconds)} helper="Sites, apps e contexto ativo" icon={Activity} tone="green" />
-        <MetricCard title="Sites" value={formatDuration(summary.webSeconds)} helper={`${summary.uniqueDomains} domínio(s)`} icon={Globe2} tone="purple" />
-        <MetricCard title="Aplicativos" value={formatDuration(summary.appSeconds)} helper="Fora do navegador" icon={AppWindow} tone="blue" />
-        <MetricCard title="Inatividade" value={formatDuration(summary.idleSeconds)} helper="Acima da tolerância" icon={Laptop} tone="orange" />
-        <MetricCard title="Tela bloqueada" value={formatDuration(summary.lockedSeconds)} helper={summary.privateSeconds ? `${formatDuration(summary.privateSeconds)} em modo privado` : "Sessão bloqueada"} icon={Lock} tone="slate" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={busy}>
+        <Metric title={selected ? "Tempo monitorado" : "Agentes e estações"} value={data ? selected ? formatDuration(summary.totalSeconds) : String(summary.employees) : "—"} icon={selected ? Clock : UsersRound} />
+        <Metric title={selected ? "Em sites" : "Tempo monitorado"} value={data ? formatDuration(selected ? summary.webSeconds : summary.totalSeconds) : "—"} icon={selected ? Globe2 : Clock} />
+        <Metric title={selected ? "Em aplicativos" : "Em sites"} value={data ? formatDuration(selected ? summary.appSeconds : summary.webSeconds) : "—"} icon={selected ? AppWindow : Globe2} />
+        <Metric title="Inatividade e bloqueio" value={data ? formatDuration(summary.idleSeconds + summary.lockedSeconds) : "—"} icon={Lock} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <RankingPanel title="Sites mais utilizados" items={topDomains} icon={Globe2} empty="Nenhum domínio capturado neste filtro." />
-        <RankingPanel title="Aplicativos mais utilizados" items={topApplications} icon={AppWindow} empty="Nenhum aplicativo capturado neste filtro." />
-      </div>
-
-      <Panel title="Linha do tempo de atividade">
-        {loading ? (
-          <div className="grid min-h-[280px] place-items-center text-sm font-bold text-muted">
-            <span className="inline-flex items-center gap-2">
-              <RefreshCw className="h-4 w-4 animate-spin text-blue-600" />
-              Carregando atividade das estações...
-            </span>
-          </div>
-        ) : !payload?.rows.length ? (
-          <EmptyState title="Sem atividade neste filtro" description="Escolha outra data, ajuste os filtros ou aguarde o próximo envio dos agentes Windows." />
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-border bg-white">
-            <table className="w-full min-w-[1180px] border-collapse text-left">
-              <thead>
-                <tr className="border-b border-border bg-slate-50 text-[11px] font-black uppercase tracking-wide text-muted">
-                  <th className="px-3 py-3">Parceiro</th>
-                  <th className="w-36 px-3 py-3">Intervalo</th>
-                  <th className="w-28 px-3 py-3">Duração</th>
-                  <th className="w-36 px-3 py-3">Tipo</th>
-                  <th className="px-3 py-3">Site ou aplicativo</th>
-                  <th className="w-48 px-3 py-3">Estação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {payload.rows.map((row) => <ActivityTableRow key={`${row.eventId}-${row.startedAt}`} row={row} />)}
-              </tbody>
+      {!selected ? <>
+        <Panel title="Distribuição do tempo"><TimeDistribution summary={summary} /></Panel>
+        <Panel title="Selecione um agente">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted">Abra um agente para ver os sites e aplicativos utilizados.</p><label className="relative w-full sm:w-80"><span className="sr-only">Buscar agente</span><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" /><input aria-label="Buscar agente" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar agente, WB ou estação" className="premium-control h-10 w-full pl-9 pr-3 text-sm" /></label></div>
+          {loading && !data ? <Loading label="Carregando agentes..." /> : !data?.agents.length ? <EmptyState title={agentSearch ? "Nenhum agente encontrado" : "Ainda não há registros nessa data"} description={agentSearch ? "Tente outro nome, WB ou estação." : "Os agentes aparecerão aqui após o envio das atividades."} /> : <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full min-w-[700px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Agente</th><th className="px-4 py-3">Tempo monitorado</th><th className="px-4 py-3">Em sites</th><th className="px-4 py-3">Último registro</th><th className="px-4 py-3"><span className="sr-only">Abrir agente</span></th></tr></thead>
+              <tbody className="divide-y divide-border">{data.agents.map((agent) => <tr key={agent.agentKey} className="group hover:bg-blue-50/40"><td className="px-4 py-4"><button type="button" onClick={() => openAgent(agent)} className="flex max-w-full items-center gap-3 text-left font-bold text-navy-950 hover:text-blue-600"><Avatar small /><span className="min-w-0"><span className="block break-words text-sm">{agent.employeeName}</span><span className="mt-1 block text-xs font-medium text-muted">{agent.employeeId ? `${agent.wbLogin || ""} · ${agent.lob}` : `Sem vínculo · ${agent.hostnames.join(", ")}`}</span></span></button></td><td className="px-4 py-4 text-sm font-bold text-navy-950">{formatDuration(agent.totalSeconds)}</td><td className="px-4 py-4 text-sm text-muted">{formatDuration(agent.webSeconds)}</td><td className="px-4 py-4 text-sm text-muted">{formatTime(agent.lastActivityAt)}</td><td className="px-4 py-4 text-right"><button type="button" onClick={() => openAgent(agent)} aria-label={`Ver atividades de ${agent.employeeName}`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-bold text-blue-700 hover:bg-blue-100">Ver atividade<ArrowRight className="h-3.5 w-3.5" /></button></td></tr>)}</tbody>
             </table>
-          </div>
-        )}
-      </Panel>
+          </div>}
+          {data?.agentsTruncated ? <p className="mt-3 text-xs text-amber-700">Mostrando {data.agents.length} de {data.agentsFound} agentes. Use a busca para encontrar outro agente.</p> : null}
+        </Panel>
+      </> : <>
+        <div role="group" aria-label="Detalhamento do agente" className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl border border-border bg-white p-1">
+          {([{ key: "WEB", label: "Sites", icon: Globe2 }, { key: "APP", label: "Aplicativos", icon: AppWindow }, { key: "TIMELINE", label: "Linha do tempo", icon: Clock }] as const).map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-pressed={tab === key} aria-controls="activity-detail-content" onClick={() => { setTab(key); setPage(0); }} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors", tab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-slate-50 hover:text-navy-950")}><Icon className="h-4 w-4" />{label}</button>)}
+        </div>
+        <div id="activity-detail-content" role="region" aria-label={tab === "WEB" ? "Sites do agente" : tab === "APP" ? "Aplicativos do agente" : "Histórico do agente"}>
+          {detailLoading && !data ? <Loading label="Carregando atividade do agente..." /> : tab !== "TIMELINE" ? <RankingPanel title={tab === "WEB" ? "Sites utilizados" : "Aplicativos utilizados"} items={tab === "WEB" ? data?.topDomains ?? [] : data?.topApplications ?? []} total={tab === "WEB" ? summary.webSeconds : summary.appSeconds} applications={tab === "APP"} count={tab === "WEB" ? summary.uniqueDomains : undefined} /> : <Panel title="Linha do tempo">
+            {!data?.rows.length ? <EmptyState title="Sem atividade para este agente" description="Escolha outra data para consultar o histórico." /> : <>
+              <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full min-w-[650px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Intervalo</th><th className="px-4 py-3">Atividade</th><th className="px-4 py-3">Duração</th><th className="px-4 py-3">Estação</th></tr></thead><tbody className="divide-y divide-border">{pageRows.map((row) => <tr key={`${row.eventId}-${row.startedAt}`}><td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-muted">{formatTime(row.startedAt, true)} – {formatTime(row.endedAt, true)}</td><td className="px-4 py-3"><span className="block text-sm font-bold text-navy-950">{row.sourceType === "WEB" ? row.domain || "Domínio não identificado" : row.sourceType === "APP" ? formatApplication(row.applicationName) : sourceLabel(row.sourceType)}</span><span className="mt-0.5 block text-xs text-muted">{sourceLabel(row.sourceType)}</span></td><td className="px-4 py-3 text-sm font-semibold text-navy-950">{formatDuration(row.durationSeconds)}</td><td className="px-4 py-3 text-xs text-muted">{row.hostname}</td></tr>)}</tbody></table></div>
+              <div className="mt-4 flex items-center justify-between gap-3 text-xs text-muted"><span>Página {currentPage + 1} de {pages}</span><div className="flex gap-2"><button type="button" aria-label="Página anterior" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Próxima página" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>
+              {data.truncated ? <p className="mt-3 text-xs text-amber-700">O histórico exibe até {data.limit.toLocaleString("pt-BR")} registros. Os totais e rankings consideram o dia completo.</p> : null}
+            </>}
+          </Panel>}
+        </div>
+      </>}
+      <p className="flex items-center gap-2 px-1 text-xs text-muted"><ShieldCheck className="h-3.5 w-3.5 shrink-0" />Somente domínio, aplicativo e intervalo são coletados.</p>
     </div>
   );
 }
 
-function ActivityTableRow({ row }: { row: ActivityRow }) {
-  const displayTarget = row.sourceType === "WEB"
-    ? row.domain || "Domínio não identificado"
-    : row.sourceType === "APP"
-      ? formatApplication(row.applicationName)
-      : sourceTypeLabel(row.sourceType);
-
-  return (
-    <tr className="align-middle transition-colors hover:bg-blue-50/30">
-      <td className="px-3 py-3">
-        <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue-50 text-blue-600">
-            <UserRound className="h-4 w-4" />
-          </span>
-          <div className="min-w-0">
-            <p className="max-w-[260px] truncate text-sm font-black text-navy-950">{row.employeeName}</p>
-            <p className="max-w-[280px] truncate text-xs font-bold text-muted">
-              {row.wbLogin || row.windowsUser || "Sem identificação"} · {row.lob} · {row.supervisor}
-            </p>
-          </div>
-        </div>
-      </td>
-      <td className="px-3 py-3 text-sm font-black text-navy-950">{formatTime(row.startedAt)} - {formatTime(row.endedAt)}</td>
-      <td className="px-3 py-3 text-sm font-black text-emerald-600">{formatDuration(row.durationSeconds)}</td>
-      <td className="px-3 py-3"><SourceBadge sourceType={row.sourceType} /></td>
-      <td className="px-3 py-3">
-        <p className="text-sm font-black text-navy-950">{displayTarget}</p>
-        {row.sourceType === "WEB" && row.applicationName ? (
-          <p className="text-xs font-bold text-muted">via {formatApplication(row.applicationName)}</p>
-        ) : null}
-      </td>
-      <td className="px-3 py-3">
-        <p className="text-sm font-black text-navy-950">{row.hostname}</p>
-        <p className="text-xs font-bold text-muted">{row.windowsUser || "Usuário Windows não informado"}</p>
-      </td>
-    </tr>
-  );
+async function fetchActivity(params: URLSearchParams, signal: AbortSignal): Promise<Payload> {
+  const response = await fetch(`/api/realtime-hours/activity?${params}`, { cache: "no-store", signal });
+  const body = await response.json().catch(() => null) as Payload | null;
+  if (!response.ok || !body?.success) throw new Error(body?.message || body?.error || "Não foi possível carregar as atividades. Tente atualizar novamente.");
+  return body;
 }
 
-function SourceBadge({ sourceType }: { sourceType: ActivitySourceType }) {
-  const styles: Record<ActivitySourceType, string> = {
-    WEB: "border-violet-200 bg-violet-50 text-violet-700",
-    APP: "border-blue-200 bg-blue-50 text-blue-700",
-    IDLE: "border-amber-200 bg-amber-50 text-amber-700",
-    LOCKED: "border-slate-200 bg-slate-100 text-slate-700",
-    PRIVATE: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700",
-    UNKNOWN: "border-red-200 bg-red-50 text-red-700"
-  };
-  return (
-    <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", styles[sourceType])}>
-      {sourceTypeLabel(sourceType)}
-    </span>
-  );
+function Avatar({ small = false }: { small?: boolean }) {
+  return <span className={cn("grid shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600", small ? "h-9 w-9" : "h-12 w-12")}><UserRound className={small ? "h-4 w-4" : "h-6 w-6"} /></span>;
 }
-
-function MetricCard({ title, value, helper, icon: Icon, tone }: {
-  title: string;
-  value: string;
-  helper: string;
-  icon: LucideIcon;
-  tone: "blue" | "green" | "orange" | "purple" | "slate";
-}) {
-  const styles = {
-    blue: "bg-blue-50 text-blue-600",
-    green: "bg-emerald-50 text-emerald-600",
-    orange: "bg-amber-50 text-amber-600",
-    purple: "bg-violet-50 text-violet-600",
-    slate: "bg-slate-100 text-slate-600"
-  }[tone];
-
-  return (
-    <article className="flex min-h-[112px] items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 shadow-soft">
-      <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-xl", styles)}><Icon className="h-5 w-5" /></span>
-      <span className="min-w-0">
-        <span className="block truncate text-xs font-black uppercase tracking-wide text-muted">{title}</span>
-        <span className="mt-1 block text-xl font-black text-navy-950">{value}</span>
-        <span className="mt-1 block truncate text-xs font-bold text-muted">{helper}</span>
-      </span>
-    </article>
-  );
+function Metric({ title, value, icon: Icon }: { title: string; value: string; icon: LucideIcon }) {
+  return <article className="flex min-h-[94px] min-w-0 items-center gap-3 rounded-xl border border-border bg-white px-4 py-4"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-50 text-slate-500"><Icon className="h-4 w-4" /></span><div className="min-w-0"><p className="text-xs font-semibold text-muted">{title}</p><p className="mt-1 text-xl font-extrabold tracking-tight text-navy-950">{value}</p></div></article>;
 }
-
-function RankingPanel({ title, items, icon: Icon, empty }: {
-  title: string;
-  items: RankedItem[];
-  icon: LucideIcon;
-  empty: string;
-}) {
-  const maximum = Math.max(1, ...items.map((item) => item.seconds));
-  return (
-    <Panel title={title}>
-      {!items.length ? (
-        <p className="py-8 text-center text-sm font-bold text-muted">{empty}</p>
-      ) : (
-        <div className="space-y-3">
-          {items.slice(0, 8).map((item) => (
-            <div key={item.label} className="space-y-1.5">
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="inline-flex min-w-0 items-center gap-2 font-black text-navy-950">
-                  <Icon className="h-4 w-4 shrink-0 text-blue-600" />
-                  <span className="truncate">{item.label}</span>
-                </span>
-                <span className="shrink-0 font-black text-slate-600">{formatDuration(item.seconds)}</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.max(4, (item.seconds / maximum) * 100)}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </Panel>
-  );
+function Loading({ label }: { label: string }) {
+  return <div role="status" className="grid min-h-48 place-items-center text-sm font-semibold text-muted"><span className="inline-flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin text-blue-600" />{label}</span></div>;
 }
-
-function rankRows(rows: ActivityRow[], sourceType: "WEB" | "APP"): RankedItem[] {
-  const totals = new Map<string, RankedItem>();
-  for (const row of rows) {
-    if (row.sourceType !== sourceType) continue;
-    const label = sourceType === "WEB" ? row.domain : formatApplication(row.applicationName);
-    if (!label) continue;
-    const current = totals.get(label) ?? { label, seconds: 0 };
-    current.seconds += row.durationSeconds;
-    totals.set(label, current);
-  }
-  return Array.from(totals.values()).sort((a, b) => b.seconds - a.seconds || a.label.localeCompare(b.label));
+function TimeDistribution({ summary }: { summary: Summary }) {
+  const items = [
+    { label: "Sites", seconds: summary.webSeconds, color: "bg-blue-500" },
+    { label: "Aplicativos", seconds: summary.appSeconds, color: "bg-indigo-400" },
+    { label: "Inatividade", seconds: summary.idleSeconds, color: "bg-amber-400" },
+    { label: "Bloqueio", seconds: summary.lockedSeconds, color: "bg-slate-400" },
+    { label: "Privado", seconds: summary.privateSeconds, color: "bg-violet-300" },
+    { label: "Não identificado", seconds: summary.unknownSeconds, color: "bg-slate-200" }
+  ].filter((item) => item.seconds > 0);
+  if (!summary.totalSeconds) return <p className="py-3 text-sm text-muted">O resumo será preenchido quando houver atividade nessa data.</p>;
+  return <><div className="flex h-3 overflow-hidden rounded-full bg-slate-100" aria-label="Distribuição do tempo monitorado">{items.map((item) => <span key={item.label} className={item.color} style={{ width: `${(item.seconds / summary.totalSeconds) * 100}%` }} title={`${item.label}: ${formatDuration(item.seconds)}`} />)}</div><div className="mt-4 flex flex-wrap gap-x-6 gap-y-2">{items.map((item) => <span key={item.label} className="inline-flex items-center gap-2 text-xs text-muted"><span className={cn("h-2 w-2 rounded-full", item.color)} />{item.label}<span className="font-bold text-navy-950">{formatDuration(item.seconds)}</span></span>)}</div></>;
 }
-
-function sourceTypeLabel(sourceType: ActivitySourceType) {
-  return {
-    WEB: "Site",
-    APP: "Aplicativo",
-    IDLE: "Inativo",
-    LOCKED: "Tela bloqueada",
-    PRIVATE: "Navegação privada",
-    UNKNOWN: "Não identificado"
-  }[sourceType];
+function RankingPanel({ title, items, total, applications, count }: { title: string; items: Ranking[]; total: number; applications: boolean; count?: number }) {
+  return <Panel title={title}>{!items.length ? <EmptyState title={applications ? "Nenhum aplicativo registrado" : "Nenhum site registrado"} description="Não há registros desse tipo para o agente e a data selecionados." /> : <>
+    <p className="mb-4 text-sm text-muted">{count !== undefined ? `${count} domínio${count === 1 ? "" : "s"} registrado${count === 1 ? "" : "s"}` : `${items.length} aplicativo${items.length === 1 ? "" : "s"}`} · {formatDuration(total)} no total{count && count > items.length ? ` · ${items.length} mais utilizados` : ""}</p>
+    <div className="overflow-hidden rounded-xl border border-border"><table className="w-full text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">{applications ? "Aplicativo" : "Domínio"}</th><th className="px-4 py-3 text-right">Tempo</th><th className="hidden w-52 px-4 py-3 sm:table-cell">Participação</th></tr></thead><tbody className="divide-y divide-border">{items.map((item) => { const percent = total ? Math.min(100, (item.seconds / total) * 100) : 0; return <tr key={item.label}><td className="px-4 py-4"><span className="inline-flex items-center gap-2.5 text-sm font-bold text-navy-950">{applications ? <AppWindow className="h-4 w-4 shrink-0 text-indigo-500" /> : <Globe2 className="h-4 w-4 shrink-0 text-blue-500" />}<span className="break-all">{applications ? formatApplication(item.label) : item.label}</span></span></td><td className="whitespace-nowrap px-4 py-4 text-right text-sm font-semibold text-navy-950">{formatDuration(item.seconds)}</td><td className="hidden px-4 py-4 sm:table-cell"><div className="flex items-center gap-3"><div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-blue-400" style={{ width: `${percent}%` }} /></div><span className="w-10 text-right text-xs text-muted">{percent.toFixed(1)}%</span></div></td></tr>; })}</tbody></table></div>
+  </>}</Panel>;
 }
-
+function sourceLabel(type: SourceType) { return { WEB: "Site", APP: "Aplicativo", IDLE: "Inatividade", LOCKED: "Tela bloqueada", PRIVATE: "Navegação privada", UNKNOWN: "Não identificado" }[type]; }
 function formatApplication(value: string | null) {
   if (!value) return "Aplicativo não identificado";
-  const labels: Record<string, string> = {
-    chrome: "Google Chrome",
-    msedge: "Microsoft Edge",
-    firefox: "Mozilla Firefox",
-    brave: "Brave",
-    opera: "Opera",
-    vivaldi: "Vivaldi",
-    excel: "Microsoft Excel",
-    winword: "Microsoft Word",
-    outlook: "Microsoft Outlook",
-    teams: "Microsoft Teams",
-    msaccess: "Microsoft Access",
-    powerpnt: "Microsoft PowerPoint"
-  };
+  const labels: Record<string, string> = { chrome: "Google Chrome", msedge: "Microsoft Edge", firefox: "Mozilla Firefox", brave: "Brave", excel: "Microsoft Excel", winword: "Microsoft Word", outlook: "Microsoft Outlook", teams: "Microsoft Teams", powerpnt: "Microsoft PowerPoint", code: "Visual Studio Code", explorer: "Explorador de Arquivos" };
   return labels[value.toLowerCase()] ?? value;
 }
-
-function formatDuration(seconds: number) {
-  const total = Math.max(0, Math.round(seconds));
-  const hours = Math.floor(total / 3_600);
-  const minutes = Math.floor((total % 3_600) / 60);
-  const remainingSeconds = total % 60;
-  if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}min`;
-  if (minutes) return `${minutes}min`;
-  return `${remainingSeconds}s`;
-}
-
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
-}
-
-function todayInSaoPaulo() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  return year && month && day ? `${year}-${month}-${day}` : new Date().toISOString().slice(0, 10);
-}
-
-function emptySummary(): ActivitySummary {
-  return {
-    rowCount: 0,
-    employees: 0,
-    totalSeconds: 0,
-    webSeconds: 0,
-    appSeconds: 0,
-    idleSeconds: 0,
-    lockedSeconds: 0,
-    privateSeconds: 0,
-    unknownSeconds: 0,
-    uniqueDomains: 0
-  };
-}
+function formatDuration(seconds: number) { const total = Math.max(0, Math.round(seconds)); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); return h ? `${h}h ${String(m).padStart(2, "0")}min` : m ? `${m}min` : `${total % 60}s`; }
+function formatTime(value: string, seconds = false) { return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) }).format(new Date(value)); }
+function todayInSaoPaulo() { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()); return `${parts.find((p) => p.type === "year")?.value}-${parts.find((p) => p.type === "month")?.value}-${parts.find((p) => p.type === "day")?.value}`; }
