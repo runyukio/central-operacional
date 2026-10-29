@@ -20,6 +20,9 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const result = await getWorkstationActivityQuery(actor, {
       date: url.searchParams.get("date"),
+      view: url.searchParams.get("view"),
+      agentKey: url.searchParams.get("agentKey"),
+      agentSearch: url.searchParams.get("agentSearch"),
       search: url.searchParams.get("search"),
       sourceType: url.searchParams.get("sourceType"),
       domain: url.searchParams.get("domain"),
