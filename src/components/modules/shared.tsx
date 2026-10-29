@@ -45,6 +45,7 @@ export type ClientRequest = {
   nextOwner?: string;
   canSupervisorStep?: boolean;
   canWfmFinal?: boolean;
+  canConclude?: boolean;
   canPartnerAccept?: boolean;
   canCancelPairedSwap?: boolean;
   time: string;
@@ -1129,7 +1130,7 @@ export function RequestDetailContent({
   const canWfmFinal = selected.status === "Em análise" && Boolean(selected.canWfmFinal);
   const canPartnerAccept = Boolean(selected.canPartnerAccept) && selected.status === "Aberto";
   const canReject = canSupervisorStep || canWfmFinal || canPartnerAccept;
-  const canConclude = selected.status === "Aprovado" && Boolean(selected.canWfmFinal);
+  const canConclude = selected.status === "Aprovado" && Boolean(selected.canConclude ?? selected.canWfmFinal);
   const canCancel = dayOffKind === "PAIRED_DAY_OFF_SWAP" ? Boolean(selected.canCancelPairedSwap) : !isProcessed && !isApproved && actorRole === "COLABORADOR" && selected.status === "Aberto";
   const buttonsDisabled = Boolean(actionPending) || isProcessed;
   const actionInput = dayOffKind === "DAY_OFF_SELL" && canWfmFinal ? approvalData : undefined;

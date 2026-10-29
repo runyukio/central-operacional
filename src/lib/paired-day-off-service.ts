@@ -39,6 +39,12 @@ export function isPairedSwap(type: string, payload?: unknown) {
   return type === PAIRED_SWAP_TYPE || (payload as Partial<SwapPayload> | null)?.internalType === PAIRED_SWAP_KIND;
 }
 
+export function canConcludePairedSwap(role: string, status: string, payload: unknown) {
+  const swap = payload as Partial<SwapPayload> | null;
+  return ["ADMIN", "WFM"].includes(normalizeRole(role)) && status === "APROVADO"
+    && swap?.stage === "DONE" && swap.scheduleApplicationStatus === "APPLIED";
+}
+
 function operationalToday() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(value => value.type === type)!.value;
@@ -188,8 +194,25 @@ export async function updatePairedSwap(actor: Actor, userId: string, id: string,
     await lock(tx);
     const request = await tx.request.findUniqueOrThrow({ where: { id }, include });
     if (request.deletedAt) throw new PairedSwapError("Solicitação não encontrada.");
-    if (["APROVADO", "RECUSADO", "CANCELADO", "CONCLUIDO"].includes(request.status)) throw new PairedSwapError("Esta troca casada já foi encerrada.");
+    if (["RECUSADO", "CANCELADO", "CONCLUIDO"].includes(request.status)) throw new PairedSwapError("Esta troca casada já foi encerrada.");
     const payload = request.payload as unknown as SwapPayload;
+    if (status === "Concluído") {
+      if (!["ADMIN", "WFM"].includes(normalizeRole(actor.role))) throw new PairedSwapError("Sem permissão para concluir esta troca casada.");
+      if (!canConcludePairedSwap(actor.role, request.status, payload)) throw new PairedSwapError("A troca casada precisa estar aprovada e com os cronogramas atualizados antes da conclusão.");
+      // Approval already applied the four schedule changes. Completion only closes the request.
+      const action = "Conclusão administrativa da troca casada";
+      const saved = await tx.request.update({ where: { id }, data: {
+        status: "CONCLUIDO",
+        history: { create: { actorId: userId, action, from: request.status, to: "CONCLUIDO", reason } }
+      }, include });
+      await tx.auditLog.create({ data: {
+        actorId: userId, action: "EDICAO", entity: "Request", entityId: id, reason: action,
+        previousValue: { status: request.status }, newValue: { status: "CONCLUIDO", stage: payload.stage }
+      } });
+      await notify(tx, saved, [request.requesterId, payload.partnerUserId], `${saved.code}: ${action}. ${reason ?? ""}`);
+      return { request: saved, scheduleUpdated: false };
+    }
+    if (request.status === "APROVADO") throw new PairedSwapError("Esta troca casada já foi encerrada.");
     const supervisorId = status === "Cancelado" && request.requesterId === userId || status === "Recusado" && payload.stage === "PARTNER" ? "" : await supervisorUserId(tx, request.employee?.supervisorId ?? null);
     const decision = pairedSwapDecision(payload, userId, request.requesterId, actor.role, supervisorId, status);
     if (decision === "REJECT" && !reason?.trim()) throw new PairedSwapError("Informe o motivo da recusa.");

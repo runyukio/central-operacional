@@ -19,7 +19,7 @@ import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { baseTimesForShift } from "@/lib/shift-base-times";
 import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
-import { createPairedSwap, updatePairedSwap, isPairedSwap, PairedSwapError, PAIRED_SWAP_KIND } from "@/lib/paired-day-off-service";
+import { createPairedSwap, updatePairedSwap, isPairedSwap, canConcludePairedSwap, PairedSwapError, PAIRED_SWAP_KIND } from "@/lib/paired-day-off-service";
 import { isShiftChangeEffective } from "@/lib/shift-change-effective-service";
 
 const uiToDbStatus = {
@@ -1521,6 +1521,7 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
     nextOwner: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? String(payload.partnerName) : isPairedSwap(request.type.name, payload) && payload.stage === "DONE" ? "Sem próxima ação" : nextOwnerForRequest(request),
     canSupervisorStep: isPairedSwap(request.type.name, payload) ? payload.stage === "SUPERVISOR" && role === "SUPERVISOR" && request.employee?.supervisor?.userId === user?.id : canSupervisorStep,
     canWfmFinal: isPairedSwap(request.type.name, payload) ? payload.stage === "WFM" && canWfmFinal : canWfmFinal,
+    canConclude: isPairedSwap(request.type.name, payload) ? canConcludePairedSwap(role, request.status, payload) : request.status === "APROVADO" && canWfmFinal,
     canPartnerAccept: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" && payload.partnerUserId === user?.id,
     canCancelPairedSwap: isPairedSwap(request.type.name, payload) && request.requesterId === user?.id && payload.stage !== "DONE",
     time: formatDateTime(request.createdAt),
