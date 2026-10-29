@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { heartbeatPayloadSchema, normalizeDomain } from "@/lib/realtime-hours-v2/contract";
+import { publishPresenceToCentral } from "@/lib/realtime-hours-v2/central-presence-bridge";
 import { authenticateDeviceRequest } from "@/lib/realtime-hours-v2/device-auth";
 import { dateWithinWindow, parseJsonText, readRequestTextWithLimit } from "@/lib/realtime-hours-v2/request";
 
@@ -76,5 +77,10 @@ export async function POST(request: Request) {
     `);
   });
 
+  try {
+    await publishPresenceToCentral({ device: auth.device, snapshot: value });
+  } catch {
+    return NextResponse.json({ success: false, error: "Central presence delivery is temporarily unavailable." }, { status: 503 });
+  }
   return NextResponse.json({ success: true, acceptedAt: new Date().toISOString() });
 }
