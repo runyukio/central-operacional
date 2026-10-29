@@ -152,7 +152,7 @@ export async function respondSpacePending(scope: MeuEspacoScope, kind: string, i
     if (!input.action || input.version == null) throw new MeuEspacoError("Informe a decisão e a versão da revisão.");
     // Check the persisted revision even when a replacement removed it from the feed.
     // The decision service enforces the current role, assignment and version.
-    await reviewWorkHourOvertime(scope.actor, { id, action: input.action, version: input.version, rejectionReason: input.rejectionReason });
+    await reviewWorkHourOvertime(scope.actor, { id, action: input.action, version: input.version, justification: input.justification, rejectionReason: input.rejectionReason });
     return { data: await getSpacePendingItem(scope, kind, id) };
   }
   const item = await getSpacePendingItem(scope, kind, id);
