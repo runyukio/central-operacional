@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory = $true)][string]$AgentExe,
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-p]{32}$')][string]$ExtensionId,
   [Parameter(Mandatory = $true)][string]$ExtensionUpdateUrl,
-  [Parameter(Mandatory = $true)][string]$EnrollmentCode,
+  [string]$EnrollmentCode,
+  [string]$EnrollmentFile,
   [string]$BaseUrl = "https://eastriverbrasil.com",
   [string]$InstallDir = "$env:ProgramData\CentralOperacional\RealtimeHoursV2"
 )
@@ -20,6 +21,11 @@ $BackupDir = "$InstallDir.rollback.$(Get-Date -Format 'yyyyMMddHHmmss')"
 $TaskBackupDir = Join-Path $env:TEMP "RealtimeHoursV2-tasks-$([guid]::NewGuid().ToString('N'))"
 $CreatedFinalInstall = $false
 $StoppedTasks = @()
+$LocalMutationStarted = $false
+$RegistrySnapshot = @()
+$secretBytes = $null
+$enroll = $null
+$enrollBody = $null
 
 function Write-Utf8NoBom {
   param([string]$Path, [string]$Content)
@@ -65,7 +71,8 @@ function Backup-And-StopTasks {
     $safeName = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$($task.TaskPath)|$($task.TaskName)")).TrimEnd('=').Replace('/', '_').Replace('+', '-')
     $xmlPath = Join-Path $TaskBackupDir "$safeName.xml"
     Export-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath | Set-Content -LiteralPath $xmlPath -Encoding Unicode
-    $metadata += [pscustomobject]@{ Name = $task.TaskName; Path = $task.TaskPath; Xml = $xmlPath }
+    $metadata += [pscustomobject]@{ Name = $task.TaskName; Path = $task.TaskPath; Xml = $xmlPath; WasRunning = ($task.State -eq "Running") }
+    $script:StoppedTasks = @($metadata)
     Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
   }
@@ -77,7 +84,7 @@ function Restore-Tasks {
     if (-not (Test-Path -LiteralPath $task.Xml)) { continue }
     try {
       Register-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -Xml (Get-Content -LiteralPath $task.Xml -Raw) -Force | Out-Null
-      Start-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -ErrorAction SilentlyContinue
+      if ($task.WasRunning) { Start-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -ErrorAction Stop }
     } catch {
       Write-Warning "Nao foi possivel restaurar a tarefa $($task.Name): $($_.Exception.Message)"
     }
@@ -120,23 +127,58 @@ function Set-ExtensionPolicy {
   New-ItemProperty -Path $forceList -Name ([string]$slot) -Value "$ExtensionId;$ExtensionUpdateUrl" -PropertyType String -Force | Out-Null
 }
 
+
+function Backup-RegistryArtifacts {
+  foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
+    $native = "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$HostName"
+    $policy = "HKLM:\SOFTWARE\Policies\$browser\ExtensionInstallForcelist"
+    $values = @()
+    if (Test-Path $policy) {
+      $values = @((Get-ItemProperty $policy).PSObject.Properties | Where-Object {
+        $_.Name -match '^\d+$' -and [string]$_.Value -match "^$([regex]::Escape($ExtensionId));"
+      } | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
+    }
+    $script:RegistrySnapshot += [pscustomobject]@{
+      Native = $native; Existed = (Test-Path $native)
+      Default = if (Test-Path $native) { (Get-Item $native).GetValue('') } else { $null }
+      Policy = $policy; Values = $values
+    }
+  }
+}
+
+function Restore-RegistryArtifacts {
+  foreach ($entry in $script:RegistrySnapshot) {
+    if ($entry.Existed) {
+      New-Item -Path $entry.Native -Force | Out-Null
+      Set-Item -Path $entry.Native -Value $entry.Default
+    }
+    foreach ($value in $entry.Values) {
+      New-Item -Path $entry.Policy -Force | Out-Null
+      New-ItemProperty -Path $entry.Policy -Name $value.Name -Value $value.Value -PropertyType String -Force | Out-Null
+    }
+  }
+}
+
 function Set-InstallPermissions {
   param([string]$InteractiveUser, [string[]]$RuntimeDirectories, [string]$SecretPath)
   & icacls.exe $InstallDir /inheritance:r /grant:r `
     '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${InteractiveUser}:(OI)(CI)RX" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger a pasta de instalacao." }
   foreach ($directory in $RuntimeDirectories) {
     & icacls.exe $directory /inheritance:r /grant:r `
       '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${InteractiveUser}:(OI)(CI)M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger os dados de execucao." }
   }
   & icacls.exe $SecretPath /inheritance:r /grant:r `
     '*S-1-5-18:F' '*S-1-5-32-544:F' "${InteractiveUser}:R" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger a credencial do dispositivo." }
 }
 
 function Invoke-AgentMode {
   param([string]$Exe, [string]$Mode, [string]$ConfigPath, [string]$OutputPath = '')
   $arguments = @('-mode', $Mode)
-  if ($ConfigPath) { $arguments += @('-config', $ConfigPath) }
-  if ($OutputPath) { $arguments += @('-output', $OutputPath) }
+  if ($ConfigPath) { $arguments += @('-config', ('"{0}"' -f $ConfigPath)) }
+  if ($OutputPath) { $arguments += @('-output', ('"{0}"' -f $OutputPath)) }
   $process = Start-Process -FilePath $Exe -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
   if ($process.ExitCode -ne 0) { throw "Agent mode '$Mode' terminou com codigo $($process.ExitCode)." }
 }
@@ -161,6 +203,11 @@ Assert-Administrator
 if (-not (Test-Path -LiteralPath $AgentExe -PathType Leaf)) { throw "AgentExe nao encontrado: $AgentExe" }
 if ($BaseUrl -notmatch '^https://') { throw "BaseUrl deve usar HTTPS." }
 if ($ExtensionUpdateUrl -notmatch '^https://') { throw "ExtensionUpdateUrl deve usar HTTPS." }
+if ($EnrollmentFile) {
+  $enrollment = Get-Content -LiteralPath $EnrollmentFile -Raw | ConvertFrom-Json
+  if ([DateTimeOffset]::Parse([string]$enrollment.expiresAt) -le [DateTimeOffset]::UtcNow) { throw "Este pacote de instalacao expirou. Solicite um novo pacote." }
+  $EnrollmentCode = [string]$enrollment.enrollmentCode
+}
 if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw "EnrollmentCode e obrigatorio." }
 
 $interactiveUser = Get-InteractiveUser
@@ -202,6 +249,12 @@ try {
   $stageSecret = Join-Path $StagingDir 'device-secret.dpapi'
   $protected = [Security.Cryptography.ProtectedData]::Protect($secretBytes, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
   [IO.File]::WriteAllBytes($stageSecret, $protected)
+  # Only the single-use enrollment lives in the extracted package. The device
+  # credential is generated by the server and protected on this Windows machine.
+  if ($EnrollmentFile) { Remove-Item -LiteralPath $EnrollmentFile -Force -ErrorAction Stop }
+  $EnrollmentCode = $null
+  $enrollBody = $null
+  $enrollment = $null
 
   $stageState = Join-Path $StagingDir 'browser-state'
   $stageQueue = Join-Path $StagingDir 'queue'
@@ -221,6 +274,8 @@ try {
     throw "O diagnostico de pre-instalacao do agente falhou."
   }
 
+  Backup-RegistryArtifacts
+  $LocalMutationStarted = $true
   Backup-And-StopTasks
   Stop-RelatedProcesses
   if (Test-Path -LiteralPath $InstallDir) { Move-Item -LiteralPath $InstallDir -Destination $BackupDir -Force }
@@ -292,16 +347,20 @@ try {
   $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     [string]$_.ExecutablePath -ieq $exeTarget -and [string]$_.CommandLine -match '(?i)-mode\s+daemon'
   })
+  $remainingTasks = @(Get-RelatedTasks)
+  if ($remainingTasks.Count -ne 1 -or $remainingTasks[0].TaskName -ne $TaskName) {
+    throw "Era esperada exatamente uma tarefa V2; encontrado: $($remainingTasks.Count)."
+  }
   if ($processes.Count -ne 1) { throw "Era esperado exatamente um processo daemon, encontrado: $($processes.Count)." }
 
   if (Test-Path -LiteralPath $BackupDir) { Remove-Item -LiteralPath $BackupDir -Recurse -Force }
   Remove-Item -LiteralPath $TaskBackupDir -Recurse -Force -ErrorAction SilentlyContinue
-  $EnrollmentCode = $null
-  $secretBytes = $null
   Write-Host "Instalacao concluida. Reinicie Chrome e Edge para carregar a politica da extensao." -ForegroundColor Green
 }
 catch {
-  Write-Error $_
+  $installationError = $_
+  Write-Warning $installationError.Exception.Message
+  if (-not $LocalMutationStarted) { throw $installationError }
   try { Remove-V2Artifacts } catch {}
   try {
     Remove-ExtensionPolicyValue -BrowserPath 'HKLM:\SOFTWARE\Policies\Google\Chrome'
@@ -324,10 +383,15 @@ catch {
       }
     }
   }
+  Restore-RegistryArtifacts
   Restore-Tasks
-  throw
+  throw $installationError
 }
 finally {
+  $EnrollmentCode = $null
+  $enrollBody = $null
+  if ($null -ne $secretBytes) { [Array]::Clear($secretBytes, 0, $secretBytes.Length) }
+  $enroll = $null
   Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $versionOutput, $diagnosticOutput, $finalDiagnostic -Force -ErrorAction SilentlyContinue
 }

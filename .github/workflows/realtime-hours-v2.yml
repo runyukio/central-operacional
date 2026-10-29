@@ -13,6 +13,7 @@ on:
   push:
     branches:
       - "work/rebuild-realtime-hours-v1"
+      - "codex/realtime-hours-v2-one-click"
     paths:
       - "agent/realtime-hours-v2/**"
       - "src/lib/realtime-hours-v2/**"

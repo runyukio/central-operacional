@@ -38,3 +38,18 @@ func TestPostJSONSignsRequest(t *testing.T) {
 		t.Fatalf("status=%d err=%v", status, err)
 	}
 }
+
+func TestPostJSONDoesNotForwardCredentialsOnRedirect(t *testing.T) {
+	forwarded := false
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { forwarded = true }))
+	defer destination.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+	client := Client{BaseURL: source.URL, DeviceID: "device-test", Secret: []byte("01234567890123456789012345678901"), HTTPClient: source.Client()}
+	status, _, err := client.PostJSON(context.Background(), "/api/test", map[string]bool{"ok": true})
+	if err != nil || status != http.StatusTemporaryRedirect || forwarded {
+		t.Fatalf("status=%d err=%v forwarded=%v", status, err, forwarded)
+	}
+}

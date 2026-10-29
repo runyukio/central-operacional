@@ -355,6 +355,12 @@ func (r *Runtime) flush(ctx context.Context, kind string) error {
 			return postErr
 		}
 		if status >= 200 && status < 300 {
+			var acknowledgement struct {
+				Success bool `json:"success"`
+			}
+			if err := json.Unmarshal(body, &acknowledgement); err != nil || !acknowledgement.Success {
+				return fmt.Errorf("%s upload did not receive a success acknowledgement", kind)
+			}
 			if err := r.Queue.Remove(item.Path); err != nil {
 				return err
 			}
@@ -365,7 +371,7 @@ func (r *Runtime) flush(ctx context.Context, kind string) error {
 			if err := r.Queue.Quarantine(kind, item.Path); err != nil {
 				return err
 			}
-			continue
+			return fmt.Errorf("%s upload rejected: status=%d", kind, status)
 		}
 		return fmt.Errorf("temporary %s upload failure: status=%d body=%s", kind, status, strings.TrimSpace(string(body)))
 	}
