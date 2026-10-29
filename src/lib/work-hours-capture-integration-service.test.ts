@@ -172,7 +172,7 @@ test("reimportar captura dentro de 8h10 cancela a pendência antiga uma única v
       captureReconciliationKey: source.reconciliationKey, actualHours: outcome.calculatedHours, effectiveHours: 8,
       adjustedHours: null, status: "OK" }], workHourOvertimeReview: [oldReview] });
   f.capture("agent", capturedMs / hour);
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: oldReview.id, version: 1, action: "approve" }),
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: oldReview.id, version: 1, action: "approve" }),
     (error: any) => error.status === 409 && /8h10/.test(error.message));
   const imported: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
   assert.equal(imported.data.overtimeReviewsPending, 0);
@@ -208,7 +208,7 @@ test("aprovação libera 9h e reimportação igual preserva a decisão, sem novo
   const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
   await commitCaptureWorkHoursImport(actor, { shiftDate: day });
   const review = f.state.workHourOvertimeReview[0];
-  await reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve" });
+  await reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: review.version, action: "approve" });
   assert.equal(f.state.workHourRecord[0].effectiveHours, 9); assert.equal(f.state.workHourRecord[0].differenceMinutes, 60);
   assert.equal(f.state.workHourOvertimeReview[0].status, "APPROVED");
   const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day });
@@ -217,7 +217,7 @@ test("aprovação libera 9h e reimportação igual preserva a decisão, sem novo
   await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
   assert.equal(f.state.workHourRecord[0].effectiveHours, 9); assert.equal(review.version, version);
   assert.equal(f.state.auditLog.filter((r) => r.entity === "WorkHourOvertimeReview").length, audits);
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version, action: "approve" }), (error: any) => error.status === 409);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version, action: "approve" }), (error: any) => error.status === 409);
 });
 
 test("recusa exige motivo, mantém 8h e continua recusada após reimportar os mesmos dados", async (t) => {
@@ -233,25 +233,74 @@ test("recusa exige motivo, mantém 8h e continua recusada após reimportar os me
   assert.equal(review.status, "REJECTED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
 });
 
+test("aprovação exige justificativa válida antes de liberar horas ou gravar decisão", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  const review = f.state.workHourOvertimeReview[0];
+  const before = clone(f.state);
+  for (const justification of [undefined, "", "   ", "\n\t", "x".repeat(10001)]) {
+    await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve", justification }), /justificativa da aprovação/);
+    assert.deepEqual(f.state, before);
+  }
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve", rejectionReason: "Motivo em campo de recusa" }), /justificativa da aprovação/);
+  assert.deepEqual(f.state, before);
+  await assert.rejects(() => respondSpacePending({ canRespond: true, actor, role: "WFM", user: { status: "ACTIVE" } } as any, "overtime", review.id,
+    { version: review.version, action: "approve", justification: "   " }), /justificativa da aprovação/);
+  assert.deepEqual(f.state, before);
+  await reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve", justification: "  Atendimento de demanda extraordinária  " });
+  assert.equal(review.status, "APPROVED");
+  assert.equal(review.rejectionReason, null);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 9);
+  const reason = "Excedente de horas aprovado: Atendimento de demanda extraordinária";
+  assert.ok(f.state.auditLog.some(row => row.entity === "WorkHourOvertimeReview" && row.actorId === "wfm" && row.reason === reason));
+  assert.ok(f.state.workHourHistory.some(row => row.action === "OVERTIME_APPROVED" && row.changedById === "wfm" && row.reason === reason));
+  const decisionAudits = f.state.auditLog.filter(row => row.entity === "WorkHourOvertimeReview").length;
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(f.state.auditLog.filter(row => row.entity === "WorkHourOvertimeReview").length, decisionAudits);
+  assert.ok(f.state.auditLog.some(row => row.reason === reason));
+});
+
+test("recusa aceita a justificativa comum e conserva o motivo no fluxo existente", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
+  await reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "reject", justification: "  Excedente sem autorização operacional  " });
+  assert.equal(review.status, "REJECTED");
+  assert.equal(review.rejectionReason, "Excedente sem autorização operacional");
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+});
+
+test("Meu Espaço encaminha a justificativa ao serviço de aprovação e retorna a revisão respondida", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
+  t.mock.method(prisma, "$queryRaw", async () => [{ ...review, kind: "overtime", pending: review.status === "PENDING" }]);
+  const scope = { canRespond: true, actor, role: "WFM", user: { id: "wfm", status: "ACTIVE" }, employeeIds: [], activeSupervisorIds: [], profiles: [], supervisorId: "" } as any;
+  const result = await respondSpacePending(scope, "overtime", review.id,
+    { version: review.version, action: "approve", justification: "  Cobertura de pico aprovada pelo supervisor  " });
+  assert.equal(result.data.status, "APPROVED");
+  assert.equal(result.data.pending, false);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 9);
+  assert.ok(f.state.auditLog.some(row => row.entity === "WorkHourOvertimeReview" && row.reason === "Excedente de horas aprovado: Cobertura de pico aprovada pelo supervisor"));
+});
+
 test("captura ou turno alterados reabrem validação e bloqueiam a versão anterior; até 8h cancela", async (t) => {
   const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] }); f.capture("agent", 8.5);
   await commitCaptureWorkHoursImport(actor, { shiftDate: day }); let review = f.state.workHourOvertimeReview[0];
-  await reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" });
+  await reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" });
   f.timeline.rows[0].activeMs = 9 * hour;
   await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
   assert.equal(review.status, "PENDING"); assert.equal(review.calculatedHours, 9.5); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
   await assert.rejects(() => respondSpacePending({ canRespond: true, actor, role: "WFM", user: { status: "ACTIVE" } } as any, "overtime", review.id,
-    { version: 1, action: "approve" }), (error: any) => error.status === 409);
+    { justification: "Demanda operacional validada", version: 1, action: "approve" }), (error: any) => error.status === 409);
   review = f.state.workHourOvertimeReview[0];
-  await reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve" });
+  await reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: review.version, action: "approve" });
   f.state.schedule[0].startsAt = "22:00";
   await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
   assert.equal(review.status, "PENDING"); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
   f.timeline.rows[0].activeMs = 7.5 * hour;
   await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
   assert.equal(review.status, "CANCELLED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: review.version, action: "approve" }), (error: any) => error.status === 409);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: review.version, action: "approve" }), (error: any) => error.status === 409);
 });
 
 test("resolver divergência de presença também valida excedente e registra 8h efetivas na auditoria", async (t) => {
@@ -267,11 +316,11 @@ test("permissão usa o papel do banco, supervisor atribuído e perfil ativo", as
   const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" })], schedule: [slot()] }); f.capture("agent", 8.5);
   await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
   f.state.user[0].role.name = "SUPERVISOR"; f.state.user[0].employeeProfile = { id: "other", deletedAt: null };
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 403);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 403);
   f.state.user[0].role.name = "COLABORADOR";
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 403);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 403);
   f.state.user[0].role.name = "SUPERVISOR"; f.state.user[0].employeeProfile.id = "sup";
-  await reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" });
+  await reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" });
   assert.equal(f.state.workHourRecord[0].effectiveHours, 9);
 });
 
@@ -280,7 +329,7 @@ test("conflito no compare-and-set reverte a transação e não libera horas ou g
   await commitCaptureWorkHoursImport(actor, { shiftDate: day }); const review = f.state.workHourOvertimeReview[0];
   const before = clone(f.state);
   t.mock.method(prisma.workHourOvertimeReview, "updateMany", async () => ({ count: 0 }));
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
   assert.deepEqual(f.state, before);
 });
 
@@ -289,7 +338,7 @@ test("lançamento manual cancela revisão; exclusão conserva revisão cancelada
   await commitCaptureWorkHoursImport(actor, { shiftDate: day }); let review = f.state.workHourOvertimeReview[0];
   const manual: any = await upsertManualWorkHourRecord(actor, { employeeId: "agent", date: day, actualHours: "9:30", confirmOverwrite: true });
   assert.equal(manual.success, true, manual.error); assert.equal(review.status, "CANCELLED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 9.5);
-  await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
+  await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action: "approve" }), (error: any) => error.status === 409);
   await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true }); review = f.state.workHourOvertimeReview[0];
   assert.equal(review.status, "PENDING");
   const deleted: any = await deleteWorkHourRecord(actor, { workHourRecordId: f.state.workHourRecord[0].id });
@@ -307,7 +356,7 @@ test("ajuste manual aprovado substitui as horas e cancela a revisão na mesma tr
   assert.equal(review.status, "CANCELLED"); assert.equal(f.state.workHourRecord[0].effectiveHours, 10);
   assert.equal(f.state.workHourRecord[0].adjustedHours, 10);
   await assert.rejects(() => respondSpacePending({ canRespond: true, actor, role: "WFM", user: { status: "ACTIVE" } } as any, "overtime", review.id,
-    { version: 1, action: "approve" }), (error: any) => error.status === 409);
+    { justification: "Demanda operacional validada", version: 1, action: "approve" }), (error: any) => error.status === 409);
 });
 
 test("Go Live ausente não fica invisível na prévia nem na tela de divergências, mesmo sem elegíveis", async (t) => {
@@ -1346,13 +1395,13 @@ for (const role of ["GESTOR", "COORDENADOR", "GERENTE", "COORDINATOR", "MANAGER"
       const review = f.state.workHourOvertimeReview[0];
       Object.assign(f.state.user[0], { role: { name: role }, employeeProfile: null });
       const audits = f.state.auditLog.length;
-      await reviewWorkHourOvertime({ ...actor, role: "COLABORADOR" }, { id: review.id, version: 1, action, rejectionReason: "Sessão indevida" });
+      await reviewWorkHourOvertime({ ...actor, role: "COLABORADOR" }, { justification: "Demanda operacional validada", id: review.id, version: 1, action, rejectionReason: "Sessão indevida" });
       assert.equal(review.status, action === "approve" ? "APPROVED" : "REJECTED");
       assert.equal(f.state.workHourRecord[0].effectiveHours, action === "approve" ? 9 : 8);
       assert.equal(review.supervisorId, "other-supervisor");
       assert.equal(review.answeredById, "wfm");
       assert.equal(f.state.auditLog.length, audits + 1);
-      await assert.rejects(() => reviewWorkHourOvertime(actor, { id: review.id, version: 1, action, rejectionReason: "Sessão indevida" }), (error: any) => error.status === 409);
+      await assert.rejects(() => reviewWorkHourOvertime(actor, { justification: "Demanda operacional validada", id: review.id, version: 1, action, rejectionReason: "Sessão indevida" }), (error: any) => error.status === 409);
       assert.equal(f.state.auditLog.length, audits + 1);
     });
   }
@@ -1369,7 +1418,7 @@ for (const revoked of ["INACTIVE", "DELETED", "COLABORADOR"] as const) {
     const forged = { ...actor, role: "GESTOR" as const };
     const before = clone(f.state);
     assert.ok("error" in await answerWorkHourAdherenceJustification(forged, { id: "adherence", justification: "Teste com acesso revogado" }));
-    await assert.rejects(() => reviewWorkHourOvertime(forged, { id: "review", version: 1, action: "approve" }), (error: any) => error.status === 403);
+    await assert.rejects(() => reviewWorkHourOvertime(forged, { justification: "Demanda operacional validada", id: "review", version: 1, action: "approve" }), (error: any) => error.status === 403);
     assert.deepEqual(f.state, before);
   });
 }

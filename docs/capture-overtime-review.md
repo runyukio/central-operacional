@@ -4,6 +4,10 @@ As próximas importações da Captura de Horas (ABS e Upload de Horas), incluind
 
 Meu Espaço inclui **Excedente de horas** no filtro Horas. Supervisor responde pelas revisões atribuídas a seu perfil; Admin e WFM podem responder por qualquer time, inclusive **Sem supervisor**. Gestor consulta. As decisões individuais ficam em Respondidas, com histórico e auditoria. Invoice e totais continuam usando `effectiveHours`; o excedente pendente aparece separado como **Horas em validação**, inclusive no consolidado mensal e na exportação.
 
+## Justificativa das decisões
+
+No Meu Espaço, aprovar e recusar excedentes exige texto preenchido, com até 10.000 caracteres após remover espaços nas extremidades. A validação ocorre na tela, na API e no serviço de decisão. O motivo informado fica no histórico original das horas e na auditoria, junto do usuário responsável e da decisão. A API continua aceitando `rejectionReason` para recusas de clientes anteriores; aprovações exigem `justification`. Não altera decisões anteriores nem exige uma migração de banco.
+
 ## Ordem de ativação
 
 1. Aplicar primeiro a migração aditiva `20261005132002_capture_overtime_review` com o fluxo habitual de `npm run db:deploy`, somente após autorização de implantação no banco configurado. A migração cria a tabela/enum/índices, valida motivo de recusa e habilita RLS sem políticas para a Data API. O acesso interno continua pela conexão Prisma do servidor.

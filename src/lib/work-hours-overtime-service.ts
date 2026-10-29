@@ -60,13 +60,15 @@ export async function cancelOvertimeReviews(tx: Tx, recordIds: string[], actorId
   }
 }
 
-export async function reviewWorkHourOvertime(actor: Actor, input: { id: string; version: number; action: "approve" | "reject"; rejectionReason?: string }) {
+export async function reviewWorkHourOvertime(actor: Actor, input: { id: string; version: number; action: "approve" | "reject"; justification?: string; rejectionReason?: string }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
   const role = normalizeRole(user?.role.name ?? "");
   if (!user || user.status !== "ACTIVE" || user.deletedAt || !["ADMIN", "WFM", "GESTOR", "SUPERVISOR"].includes(role)) throw new MeuEspacoError("Você não pode decidir sobre excedentes de horas.", 403);
   if (input.action !== "approve" && input.action !== "reject") throw new MeuEspacoError("Decisão inválida.");
   if (!Number.isSafeInteger(input.version) || input.version < 1) throw new MeuEspacoError("Versão inválida. Atualize a lista.");
-  const rejectionReason = input.rejectionReason?.trim() ?? "";
+  const justification = input.justification?.trim() ?? "";
+  if (input.action === "approve" && (!justification || justification.length > 10000)) throw new MeuEspacoError("Informe a justificativa da aprovação (até 10.000 caracteres).");
+  const rejectionReason = justification || input.rejectionReason?.trim() || "";
   if (input.action === "reject" && (!rejectionReason || rejectionReason.length > 10000)) throw new MeuEspacoError("Informe o motivo da recusa (até 10.000 caracteres).");
   try {
     return await prisma.$transaction(async (tx) => {
@@ -95,7 +97,7 @@ export async function reviewWorkHourOvertime(actor: Actor, input: { id: string; 
         data: { effectiveHours, differenceMinutes, status: differenceMinutes !== null && Math.abs(differenceMinutes) <= 5 ? "OK" : "DIVERGENT" } });
       if (updated.count !== 1) throw new MeuEspacoError("As horas mudaram. Atualize a lista.", 409);
       const review = await tx.workHourOvertimeReview.findUniqueOrThrow({ where: { id: previous.id } });
-      await writeHistory(tx, review, user.id, previous, input.action === "approve" ? "Excedente de horas aprovado" : `Excedente de horas recusado: ${rejectionReason}`);
+      await writeHistory(tx, review, user.id, previous, input.action === "approve" ? `Excedente de horas aprovado: ${justification}` : `Excedente de horas recusado: ${rejectionReason}`);
       return review;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {

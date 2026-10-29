@@ -79,6 +79,11 @@ test("excedente mostra cálculo, 8h contabilizadas e botões de decisão só par
     assert.ok(html.includes("Total calculado: 9:00")); assert.ok(html.includes("Horas contabilizadas: 8:00"));
     assert.ok(html.includes("Horas em validação: 1:00"));
     assert.equal(html.includes("Aprovar excedente"), canRespond); assert.equal(html.includes("Recusar excedente"), canRespond);
+    if (canRespond) {
+      assert.match(html, /Justificativa \(obrigatória para aprovar ou recusar\)/);
+      assert.match(html, /<textarea required="" maxLength="10000"/);
+      assert.doesNotMatch(html, /obrigatório ao recusar/);
+    }
     assert.ok(!html.includes("Enviar justificativa"));
   }
   const html = renderToStaticMarkup(createElement(compiledModule.exports.PendingDetail, { row: { ...row, pending: false, status: "REJECTED", justification: "Sessão indevida" }, supervisorId: "sup", canRespond: true, onAnswered: () => {} }));

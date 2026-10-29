@@ -27,11 +27,11 @@ function PendingDetail({ row, supervisorId, canRespond: canRespondToSpace, onAns
   const [saving, setSaving] = useState(false), [error, setError] = useState("");
   async function decideOvertime(action: "approve" | "reject") {
     if (saving) return;
-    if (action === "reject" && !justification.trim()) { setError("Informe o motivo da recusa."); return; }
+    if (!justification.trim()) { setError(action === "approve" ? "Informe a justificativa da aprovação." : "Informe o motivo da recusa."); return; }
     setSaving(true); setError("");
     try {
       const result = await apiJson<{ data: SpacePending }>(endpoint, { method: "POST", body: JSON.stringify({
-        action, version: row.version, ...(action === "reject" ? { rejectionReason: justification } : {})
+        action, version: row.version, justification: justification.trim()
       }) });
       onAnswered(result.data);
     } catch (error) { setError(error instanceof Error ? error.message : "Não foi possível decidir. Sua resposta foi mantida."); }
@@ -57,7 +57,7 @@ function PendingDetail({ row, supervisorId, canRespond: canRespondToSpace, onAns
     {noticeRequired && (!row.pending || !canRespond) ? <p className="mb-3 text-sm font-bold">Aviso dentro de 48h: {absenceNoticeLabel(row.notifiedWithin48h)}</p> : null}
     {row.kind === "hours" ? <p className="mb-3 text-sm text-muted">Classificação: {row.reason} · Previsto: {row.plannedStart || "—"}–{row.plannedEnd || "—"} · Captura na ocorrência: {row.capturedMinutes == null ? "Sem dados" : formatMinutesToHHMM(row.capturedMinutes).padStart(5, "0")}</p> : null}
     {canRespond && row.pending && row.kind === "overtime" ? <div className="space-y-3">
-      <label className="block text-sm font-bold">Motivo da recusa (obrigatório ao recusar)<textarea maxLength={10000} value={justification} onChange={(event) => setJustification(event.target.value)} className="premium-control mt-2 min-h-24 w-full p-3 font-normal" /></label>
+      <label className="block text-sm font-bold">Justificativa (obrigatória para aprovar ou recusar)<textarea required maxLength={10000} value={justification} onChange={(event) => setJustification(event.target.value)} className="premium-control mt-2 min-h-24 w-full p-3 font-normal" /></label>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
       <div className="flex flex-wrap gap-3"><button type="button" disabled={saving} onClick={() => void decideOvertime("approve")} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Salvando…" : "Aprovar excedente"}</button><button type="button" disabled={saving} onClick={() => void decideOvertime("reject")} className="rounded-xl border border-red-300 px-4 py-2 text-sm font-bold text-red-700 disabled:opacity-50">Recusar excedente</button></div>
     </div> : canRespond && row.pending ? <form onSubmit={submit} className="space-y-3">
