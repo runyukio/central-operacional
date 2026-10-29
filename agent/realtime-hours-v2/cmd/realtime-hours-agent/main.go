@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", inferMode(), "daemon, once, diagnose, native-host or version")
+	mode := flag.String("mode", inferMode(), "daemon, once, diagnose, native-host, rollback or version")
 	configPath := flag.String("config", config.DefaultPath(), "path to config.json")
 	stateDir := flag.String("state-dir", "", "browser state directory for native host")
 	outputPath := flag.String("output", "", "optional output file for version and diagnose modes")
@@ -76,6 +76,16 @@ func main() {
 		defer cancel()
 		if err := runtime.RunOnce(ctx); err != nil {
 			fatal(err)
+		}
+	case "rollback":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		status, body, err := runtime.Client.PostJSON(ctx, "/api/realtime-hours/v2/rollback", map[string]any{})
+		var result struct {
+			Success bool `json:"success"`
+		}
+		if err != nil || status != 200 || json.Unmarshal(body, &result) != nil || !result.Success {
+			fatal(fmt.Errorf("server rollback failed: status=%d", status))
 		}
 	case "diagnose":
 		data, _ := json.MarshalIndent(runtime.Diagnose(), "", "  ")

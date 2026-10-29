@@ -26,6 +26,10 @@ $RegistrySnapshot = @()
 $secretBytes = $null
 $enroll = $null
 $enrollBody = $null
+$Enrolled = $false
+$OldPersistence = @()
+$OldStartupBackup = $null
+$stageConfig = $null
 
 function Write-Utf8NoBom {
   param([string]$Path, [string]$Content)
@@ -159,6 +163,31 @@ function Restore-RegistryArtifacts {
   }
 }
 
+function Remove-LegacyPersistence {
+  $runPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+  $name = 'CentralOperacionalRealtimeHoursAgent'
+  $item = Get-ItemProperty -Path $runPath -ErrorAction SilentlyContinue
+  if ($item -and $item.PSObject.Properties[$name]) {
+    $script:OldPersistence += [pscustomobject]@{ Path = $runPath; Name = $name; Value = $item.$name }
+    Remove-ItemProperty -Path $runPath -Name $name -ErrorAction Stop
+  }
+  $startup = Join-Path ([Environment]::GetFolderPath('CommonStartup')) 'CentralOperacionalRealtimeHoursAgent.vbs'
+  if (Test-Path -LiteralPath $startup) {
+    $backup = Join-Path $TaskBackupDir 'legacy-startup.vbs'
+    $script:OldStartupBackup = [pscustomobject]@{ Source = $startup; Backup = $backup }
+    Move-Item -LiteralPath $startup -Destination $backup -ErrorAction Stop
+  }
+}
+
+function Restore-LegacyPersistence {
+  foreach ($item in $script:OldPersistence) {
+    New-ItemProperty -Path $item.Path -Name $item.Name -Value $item.Value -PropertyType String -Force | Out-Null
+  }
+  if ($script:OldStartupBackup -and (Test-Path -LiteralPath $script:OldStartupBackup.Backup)) {
+    Copy-Item -LiteralPath $script:OldStartupBackup.Backup -Destination $script:OldStartupBackup.Source -Force
+  }
+}
+
 function Set-InstallPermissions {
   param([string]$InteractiveUser, [string[]]$RuntimeDirectories, [string]$SecretPath)
   & icacls.exe $InstallDir /inheritance:r /grant:r `
@@ -191,6 +220,7 @@ function Test-ExtensionEndpoint {
 }
 
 function Remove-V2Artifacts {
+  Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CentralOperacionalRealtimeHoursV2' -Recurse -Force -ErrorAction SilentlyContinue
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   foreach ($registryPath in @(
@@ -241,6 +271,7 @@ try {
     throw "A Central recusou o enrollment do dispositivo."
   }
 
+  $Enrolled = $true
   $encodedSecret = ([string]$enroll.deviceSecret).Replace('-', '+').Replace('_', '/')
   while (($encodedSecret.Length % 4) -ne 0) { $encodedSecret += '=' }
   try { $secretBytes = [Convert]::FromBase64String($encodedSecret) }
@@ -277,6 +308,7 @@ try {
   Backup-RegistryArtifacts
   $LocalMutationStarted = $true
   Backup-And-StopTasks
+  Remove-LegacyPersistence
   Stop-RelatedProcesses
   if (Test-Path -LiteralPath $InstallDir) { Move-Item -LiteralPath $InstallDir -Destination $BackupDir -Force }
   Move-Item -LiteralPath $StagingDir -Destination $InstallDir -Force
@@ -307,6 +339,10 @@ try {
     nativeHostName = $HostName
     installedAt = (Get-Date).ToUniversalTime().ToString('o')
   } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path (Join-Path $InstallDir 'install-metadata.json') -Content $_ }
+
+  foreach ($tool in @('Uninstall-RealtimeHoursV2.ps1', 'Collect-RealtimeHoursV2Diagnostics.ps1')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $tool) -Destination (Join-Path $InstallDir $tool) -Force
+  }
 
   $hostManifest = Join-Path $InstallDir "$HostName.json"
   [ordered]@{
@@ -353,13 +389,29 @@ try {
   }
   if ($processes.Count -ne 1) { throw "Era esperado exatamente um processo daemon, encontrado: $($processes.Count)." }
 
-  if (Test-Path -LiteralPath $BackupDir) { Remove-Item -LiteralPath $BackupDir -Recurse -Force }
+  # Backups are retained for the pilot so an operator can inspect recovery.
+  # Do not let nonessential cleanup turn a completed activation into a rollback.
+  $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CentralOperacionalRealtimeHoursV2'
+  New-Item -Path $uninstallKey -Force | Out-Null
+  New-ItemProperty -Path $uninstallKey -Name DisplayName -Value 'Central Operacional - Realtime Hours V2 (Homologacao)' -PropertyType String -Force | Out-Null
+  $uninstallCommand = '"{0}\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "{1}\Uninstall-RealtimeHoursV2.ps1"' -f $env:SystemRoot, $InstallDir
+  New-ItemProperty -Path $uninstallKey -Name UninstallString -Value $uninstallCommand -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value $ExpectedVersion -PropertyType String -Force | Out-Null
   Remove-Item -LiteralPath $TaskBackupDir -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "Instalacao concluida. Reinicie Chrome e Edge para carregar a politica da extensao." -ForegroundColor Green
 }
 catch {
   $installationError = $_
   Write-Warning $installationError.Exception.Message
+  if ($LocalMutationStarted) {
+    try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; Stop-RelatedProcesses } catch {}
+  }
+  if ($Enrolled) {
+    try {
+      if ($CreatedFinalInstall) { Invoke-AgentMode -Exe $exeTarget -Mode 'rollback' -ConfigPath $configPath }
+      elseif ($stageConfig -and (Test-Path -LiteralPath $stageConfig -ErrorAction SilentlyContinue)) { Invoke-AgentMode -Exe $stageExe -Mode 'rollback' -ConfigPath $stageConfig }
+    } catch { Write-Warning "Rollback remoto pendente: $($_.Exception.Message). O cadastro temporario precisa ser revisado na Central." }
+  }
   if (-not $LocalMutationStarted) { throw $installationError }
   try { Remove-V2Artifacts } catch {}
   try {
@@ -383,7 +435,8 @@ catch {
       }
     }
   }
-  Restore-RegistryArtifacts
+  try { Restore-RegistryArtifacts } catch { Write-Warning "Falha ao restaurar registro: $($_.Exception.Message)" }
+  try { Restore-LegacyPersistence } catch { Write-Warning "Falha ao restaurar inicio automatico: $($_.Exception.Message)" }
   Restore-Tasks
   throw $installationError
 }

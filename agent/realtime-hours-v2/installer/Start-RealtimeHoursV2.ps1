@@ -39,17 +39,25 @@ try {
   if (-not $health.success -or $health.environment -ne 'homologation' -or $health.extensionId -ne $release.extensionId) { throw 'A Central de homologacao nao confirmou este pacote.' }
   $enrollment = Join-Path $PSScriptRoot 'enrollment.json'
   if (-not (Test-Path -LiteralPath $enrollment -PathType Leaf)) { throw 'Este pacote ja foi utilizado. Solicite um novo pacote para outra instalacao.' }
+  $logDir = Join-Path $env:ProgramData 'CentralOperacional\RealtimeHoursV2-Installer'
+  New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+  $logFile = Join-Path $logDir ('install-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+  Start-Transcript -LiteralPath $logFile -Force | Out-Null
   Write-Host 'Instalando captura de dominios e envio para a Central...'
   & (Join-Path $PSScriptRoot 'Install-RealtimeHoursV2.ps1') `
     -AgentExe (Join-Path $PSScriptRoot 'RealtimeHoursAgentV2.exe') `
     -ExtensionId ([string]$release.extensionId) -ExtensionUpdateUrl ([string]$release.extensionUpdateUrl) `
     -EnrollmentFile $enrollment -BaseUrl ([string]$release.baseUrl)
+  try {
+    & (Join-Path $PSScriptRoot 'Collect-RealtimeHoursV2Diagnostics.ps1') -OutputPath (Join-Path $env:PUBLIC 'Desktop\RealtimeHoursV2-Diagnostico.json')
+  } catch { Write-Warning "Diagnostico nao exportado: $($_.Exception.Message)" }
   Write-Host 'Instalacao concluida.' -ForegroundColor Green
   exit 0
 } catch {
   Write-Host ('Instalacao nao concluida: ' + $_.Exception.Message) -ForegroundColor Red
   exit 1
 } finally {
+  try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch {}
   if ($locked) { $guard.ReleaseMutex() }
   $guard.Dispose()
 }

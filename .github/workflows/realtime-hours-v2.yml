@@ -85,7 +85,9 @@ jobs:
         run: |
           $files = @(
             "agent/realtime-hours-v2/installer/Install-RealtimeHoursV2.ps1",
-            "agent/realtime-hours-v2/installer/Uninstall-RealtimeHoursV2.ps1"
+            "agent/realtime-hours-v2/installer/Uninstall-RealtimeHoursV2.ps1",
+            "agent/realtime-hours-v2/installer/Start-RealtimeHoursV2.ps1",
+            "agent/realtime-hours-v2/installer/Collect-RealtimeHoursV2Diagnostics.ps1"
           )
           foreach ($file in $files) {
             $errors = $null
