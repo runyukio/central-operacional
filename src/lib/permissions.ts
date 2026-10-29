@@ -416,6 +416,11 @@ export function canJustifyAbsence(user: PermissionUser, employee?: PermissionEmp
   return isActiveUser(user) && roleHasCapability(user.role, "ATTENDANCE_JUSTIFY");
 }
 
+// Hour adherence is separate from the authorization to justify absences.
+export function canJustifyWorkHourAdherence(user: PermissionUser) {
+  return isActiveUser(user) && (normalizeRole(user.role) === "GESTOR" || canJustifyAbsence(user));
+}
+
 export function maskCpf(value?: string | null) {
   const digits = String(value ?? "").replace(/\D/g, "");
   if (digits.length < 2) return "***.***.***-**";

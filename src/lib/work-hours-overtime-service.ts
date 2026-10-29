@@ -63,7 +63,7 @@ export async function cancelOvertimeReviews(tx: Tx, recordIds: string[], actorId
 export async function reviewWorkHourOvertime(actor: Actor, input: { id: string; version: number; action: "approve" | "reject"; rejectionReason?: string }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
   const role = normalizeRole(user?.role.name ?? "");
-  if (!user || user.status !== "ACTIVE" || user.deletedAt || !["ADMIN", "WFM", "SUPERVISOR"].includes(role)) throw new MeuEspacoError("Você não pode decidir sobre excedentes de horas.", 403);
+  if (!user || user.status !== "ACTIVE" || user.deletedAt || !["ADMIN", "WFM", "GESTOR", "SUPERVISOR"].includes(role)) throw new MeuEspacoError("Você não pode decidir sobre excedentes de horas.", 403);
   if (input.action !== "approve" && input.action !== "reject") throw new MeuEspacoError("Decisão inválida.");
   if (!Number.isSafeInteger(input.version) || input.version < 1) throw new MeuEspacoError("Versão inválida. Atualize a lista.");
   const rejectionReason = input.rejectionReason?.trim() ?? "";

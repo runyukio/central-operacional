@@ -5,7 +5,7 @@
 A gestora Hellida recebeu autorização individual para justificar faltas já
 registradas dos parceiros vinculados diretamente a seu perfil. A associação usa
 o identificador imutável do perfil, definido em `attendance-delegation.ts`.
-Não há liberação geral para o cargo GESTOR nem alteração da matriz de permissões.
+Essa delegação é específica da API original de ocorrências e não altera a matriz geral de permissões. No Meu Espaço, o perfil GESTOR ativo possui liberação própria para justificar faltas das equipes consultadas; o contexto é definido pelo servidor e o perfil é novamente validado na transação.
 
 A autorização exige usuário ativo, perfil não excluído, cargo GESTOR e vínculo
 atual do parceiro. Data, parceiro, cronograma e ocorrência precisam corresponder.

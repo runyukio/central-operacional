@@ -41,3 +41,6 @@ export function decodeSpaceCursor(value: string | null, fingerprint: string): Pe
     return row;
   } catch { throw new MeuEspacoError("A paginação não corresponde aos filtros. Atualize a lista."); }
 }
+
+export const moveSpaceDay = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+export function spaceMonthEnd(month: string) { const [year, m] = month.split("-").map(Number); return new Date(Date.UTC(year, m, 0)).toISOString().slice(0, 10); }

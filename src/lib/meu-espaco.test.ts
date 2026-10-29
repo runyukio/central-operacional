@@ -27,10 +27,13 @@ beforeEach((t) => {
 });
 
 const user = (role: string) => ({ role, status: "ACTIVE" });
-for (const role of ["ADMIN", "WFM", "SUPERVISOR", "GESTOR", "COORDENADOR"]) {
-  test(`${role}: menu and every own API path accessible; reply differs from read`, () => {
+for (const role of ["ADMIN", "WFM", "SUPERVISOR", "GESTOR", "COORDENADOR", "GERENTE", "COORDINATOR", "MANAGER"]) {
+  test(`${role}: menu and every own API path accessible; can read and answer hour pending items`, () => {
     assert.equal(canAccessMeuEspaco(user(role)), true);
-    assert.equal(canRespondMeuEspaco(user(role)), !["GESTOR", "COORDENADOR"].includes(role));
+    assert.equal(canRespondMeuEspaco(user(role)), true);
+    assert.equal(canRespondMeuEspaco(user(role), "hours"), true);
+    assert.equal(canRespondMeuEspaco(user(role), "overtime"), true);
+    assert.equal(canRespondMeuEspaco(user(role), "absence"), true);
     assert.equal(canAccessPathForRole("/api/meu-espaco/pendencias/hours/id", user(role)), true);
     assert.equal(getNavSections(user(role)).find((section) => section.label === "Rotina")?.items.some((item) => item.href === "/meu-espaco"), true);
   });
@@ -128,7 +131,7 @@ test("50-item keyset pagination has no offset and id-scoped histories fail close
   assert.equal(result.data.length, 50); assert.equal(result.hasMore, true); assert.ok(result.nextCursor);
   await assert.rejects(() => getSpacePendingItem(scope(), "hours", "outside"));
 });
-test("manager cannot mutate even when an item id and fabricated reply are supplied", async () => {
+test("a read-only scope cannot mutate even when an item id and fabricated reply are supplied", async () => {
   await assert.rejects(() => respondSpacePending(scope({ role: "GESTOR", canRespond: false }), "hours", "id", { justification: "texto" }), /somente à consulta/);
 });
 test("summary aggregates without a metric-month cutoff on open items, using local answer days", async (t) => {
@@ -408,31 +411,42 @@ test("answering transferred hours writes the original record and exactly one ori
   assert.equal(audits.length, 1);
 });
 
-test("absence answer reuses attendance classification and its original histories, without touching recorded hours", async (t) => {
-  const date = new Date("2026-09-01"), audits: any[] = [], history: any[] = [], scheduleHistory: any[] = [];
-  const shift = { id: "morning", name: "Manhã" };
-  const partner = { ...employee(), shift };
-  const schedule: any = { id: "absence", employeeId: "agent", date, status: "FALTA", deletedAt: null, shift, employee: partner };
-  const record: any = { id: "attendance", employeeId: "agent", scheduleId: "absence", date, status: "FALTA", isJustified: false, absenceReason: null,
-    updatedAt: date, registeredAt: date, justifiedAt: null, evidenceUrl: "https://example.test/prior-evidence", hasEvidence: true };
-  t.mock.method(prisma.user, "findUnique", async () => ({ id: "u", name: "Test", status: "ACTIVE", role: { name: "SUPERVISOR" }, employeeProfile: { id: "sup", wbLogin: "test" } }));
-  t.mock.method(prisma.user, "findMany", async () => []);
-  t.mock.method(prisma.employeeProfile, "findFirst", async () => partner);
-  t.mock.method(prisma.schedule, "findFirst", async () => schedule);
-  t.mock.method(prisma.schedule, "update", async ({ data }: any) => Object.assign(schedule, data));
+for (const role of ["SUPERVISOR", "GESTOR"] as const) {
+  test(`${role}: absence answer reuses attendance classification and its original histories, without touching recorded hours`, async (t) => {
+    const date = new Date("2026-09-01"), audits: any[] = [], history: any[] = [], scheduleHistory: any[] = [];
+    const shift = { id: "morning", name: "Manhã" };
+    const partner = { ...employee(), shift };
+    const schedule: any = { id: "absence", employeeId: "agent", date, status: "FALTA", deletedAt: null, shift, employee: partner };
+    const record: any = { id: "attendance", employeeId: "agent", scheduleId: "absence", date, status: "FALTA", isJustified: false, absenceReason: null,
+      updatedAt: date, registeredAt: date, justifiedAt: null, evidenceUrl: "https://example.test/prior-evidence", hasEvidence: true };
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "u", name: "Test", status: "ACTIVE", role: { name: role }, employeeProfile: { id: "sup", wbLogin: "test" } }));
+    t.mock.method(prisma.user, "findMany", async () => []);
+    t.mock.method(prisma.employeeProfile, "findFirst", async () => partner);
+    t.mock.method(prisma.schedule, "findFirst", async () => schedule);
+    t.mock.method(prisma.schedule, "update", async ({ data }: any) => Object.assign(schedule, data));
+    t.mock.method(prisma.attendanceRecord, "groupBy", async () => []);
+    t.mock.method(prisma.attendanceRecord, "findFirst", async () => record);
+    t.mock.method(prisma.attendanceRecord, "findUnique", async () => record);
+    t.mock.method(prisma.attendanceRecord, "update", async ({ data }: any) => Object.assign(record, data));
+    t.mock.method(prisma.attendanceHistory, "create", async ({ data }: any) => { history.push(data); return data; });
+    t.mock.method(prisma.scheduleChangeHistory, "create", async ({ data }: any) => { scheduleHistory.push(data); return data; });
+    t.mock.method(prisma.auditLog, "create", async ({ data }: any) => { audits.push(data); return data; });
+    t.mock.method(prisma, "$transaction", (async (fn: any) => fn(prisma)) as any);
+    t.mock.method(prisma, "$queryRaw", async () => [{ ...record, id: schedule.id, status: schedule.status, kind: "absence", pending: !record.isJustified, answeredAt: record.justifiedAt }]);
+    const result = await respondSpacePending(scope({ role, actor: { ...scope().actor, role } }), "absence", "absence", { justification: "Motivo informado pelo parceiro", reason: "Não informado", reasonCategory: "Operacional", notifiedWithin48h: false });
+    assert.equal(result.data.pending, false); assert.equal(schedule.status, "FALTA_INJUSTIFICADA");
+    assert.equal(record.isJustified, true); assert.equal(history.length, 1); assert.equal(scheduleHistory.length, 1); assert.equal(audits.length, 1);
+    assert.equal(history[0].attendanceRecordId, "attendance"); assert.equal(audits[0].entity, "AttendanceRecord");
+    assert.equal(record.evidenceUrl, "https://example.test/prior-evidence"); assert.equal(record.hasEvidence, true);
+    assert.equal(record.notifiedWithin48h, false); assert.equal(result.data.notifiedWithin48h, false);
+  });
+}
+
+test("gestor recebe ação para faltas, horas e excedentes no Meu Espaço", async (t) => {
   t.mock.method(prisma.attendanceRecord, "groupBy", async () => []);
-  t.mock.method(prisma.attendanceRecord, "findFirst", async () => record);
-  t.mock.method(prisma.attendanceRecord, "findUnique", async () => record);
-  t.mock.method(prisma.attendanceRecord, "update", async ({ data }: any) => Object.assign(record, data));
-  t.mock.method(prisma.attendanceHistory, "create", async ({ data }: any) => { history.push(data); return data; });
-  t.mock.method(prisma.scheduleChangeHistory, "create", async ({ data }: any) => { scheduleHistory.push(data); return data; });
-  t.mock.method(prisma.auditLog, "create", async ({ data }: any) => { audits.push(data); return data; });
-  t.mock.method(prisma, "$transaction", (async (fn: any) => fn(prisma)) as any);
-  t.mock.method(prisma, "$queryRaw", async () => [{ ...record, id: schedule.id, status: schedule.status, kind: "absence", pending: !record.isJustified, answeredAt: record.justifiedAt }]);
-  const result = await respondSpacePending(scope(), "absence", "absence", { justification: "Motivo informado pelo parceiro", reason: "Não informado", reasonCategory: "Operacional", notifiedWithin48h: false });
-  assert.equal(result.data.pending, false); assert.equal(schedule.status, "FALTA_INJUSTIFICADA");
-  assert.equal(record.isJustified, true); assert.equal(history.length, 1); assert.equal(scheduleHistory.length, 1); assert.equal(audits.length, 1);
-  assert.equal(history[0].attendanceRecordId, "attendance"); assert.equal(audits[0].entity, "AttendanceRecord");
-  assert.equal(record.evidenceUrl, "https://example.test/prior-evidence"); assert.equal(record.hasEvidence, true);
-  assert.equal(record.notifiedWithin48h, false); assert.equal(result.data.notifiedWithin48h, false);
+  t.mock.method(prisma, "$queryRaw", async () => ["absence", "hours", "overtime"].map((kind) => ({ id: kind, kind, date: new Date("2026-09-01"), answeredAt: null, pending: true })));
+  const manager = scope({ role: "GESTOR", broad: true, supervisorId: null });
+  const result = await listSpacePending(manager, new URLSearchParams());
+  assert.deepEqual(result.data.map((item) => [item.kind, item.canRespond]), [["absence", true], ["hours", true], ["overtime", true]]);
+  await assert.rejects(() => respondSpacePending({ ...manager, canRespond: false }, "absence", "absence", { justification: "texto" }), (error: any) => error.status === 403);
 });

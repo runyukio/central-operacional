@@ -1009,7 +1009,8 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
   }
 }
 
-export async function updateOperationalAttendance(actor: Actor, input: AttendanceInput) {
+// The source is server-owned context, never a field accepted from the request body.
+export async function updateOperationalAttendance(actor: Actor, input: AttendanceInput, context?: { source: "meu-espaco" }) {
   const normalizedInput: AttendanceInput = {
     ...input,
     absenceReason: normalizeAttendanceReason(input.absenceReason) ?? ""
@@ -1019,7 +1020,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
   const role = normalizeRole(actor.role);
 
   if (role === "SUPERVISOR" || role === "GESTOR") {
-    return justifyAttendanceAsSupervisor(actor, normalizedInput);
+    return justifyAttendanceAsSupervisor(actor, normalizedInput, context?.source === "meu-espaco");
   }
 
   const defaultTimes = defaultShiftTimes[cleanShiftName(normalizedInput.shift)] ?? defaultShiftTimes.Manhã;
@@ -1057,7 +1058,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
   };
 }
 
-async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInput) {
+async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInput, fromMeuEspaco = false) {
   if (!supervisorJustificationStatuses.includes(input.status)) {
     return { error: "Supervisor só pode justificar ocorrências. Presença, cronograma, folga, férias e treinamento são atualizados pelo WFM/Admin." };
   }
@@ -1090,17 +1091,18 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     mark("sessionLookupMs");
     if (!user) return { error: "Usuário ativo não encontrado para justificar ocorrência." };
-    const delegatedManager = hasOwnTeamAbsenceDelegation(user);
-    if (normalizeRole(user.role.name) !== "SUPERVISOR" && !delegatedManager) {
+    const spaceManager = fromMeuEspaco && normalizeRole(user.role.name) === "GESTOR";
+    const delegatedManager = !spaceManager && hasOwnTeamAbsenceDelegation(user);
+    if (normalizeRole(user.role.name) !== "SUPERVISOR" && !spaceManager && !delegatedManager) {
       return { error: "Sem permissão para justificar faltas." };
     }
     if (user.status !== "ACTIVE" || user.deletedAt) return { error: "Usuário inativo não pode justificar ocorrências." };
-    if (!user.employeeProfile) return { error: "Supervisor sem perfil de parceiro vinculado." };
-    if (user.employeeProfile.deletedAt) return { error: "Perfil inativo não pode justificar ocorrências." };
+    if (!user.employeeProfile && !spaceManager) return { error: "Supervisor sem perfil de parceiro vinculado." };
+    if (user.employeeProfile?.deletedAt) return { error: "Perfil inativo não pode justificar ocorrências." };
     if (delegatedManager && !isDelegatedAbsenceStatus(uiToScheduleStatus[input.status])) {
       return { error: "Sua liberação permite somente justificar faltas já registradas do próprio time." };
     }
-    supervisorWbLogin = user.employeeProfile.wbLogin;
+    supervisorWbLogin = user.employeeProfile?.wbLogin;
 
     const date = parseDateOnly(input.date);
     if (!date) return { error: "Data inválida." };
@@ -1112,7 +1114,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     });
     mark("employeeLookupMs");
     if (!employee) return { error: "Parceiro não encontrado." };
-    if (delegatedManager && employee.supervisorId !== user.employeeProfile.id) {
+    if (delegatedManager && employee.supervisorId !== user.employeeProfile!.id) {
       return { error: "Você só pode justificar faltas dos parceiros diretamente vinculados a você." };
     }
 
@@ -1132,6 +1134,10 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     if (!schedule) return { error: "Registro de falta não encontrado." };
     if (delegatedManager && (schedule.deletedAt || schedule.date.getTime() !== date.getTime() || !isDelegatedAbsenceStatus(schedule.status))) {
       return { error: "A falta não corresponde à data selecionada ou não está mais disponível para justificar." };
+    }
+    if (spaceManager && (schedule.deletedAt || schedule.date.getTime() !== date.getTime()
+      || !supervisorJustificationStatuses.includes(scheduleToUiStatus[schedule.status] ?? ""))) {
+      return { error: "A ocorrência não corresponde à data selecionada ou não está mais disponível para justificar." };
     }
     if (schedule.employeeId !== employee.id) {
       return { error: "Parceiro da pendência não corresponde ao registro selecionado." };
@@ -1157,6 +1163,9 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     if (delegatedManager && existing && (existing.date.getTime() !== date.getTime() || existing.status !== "FALTA")) {
       return { error: "A ocorrência selecionada não corresponde a esta falta." };
     }
+    if (spaceManager && existing && existing.date.getTime() !== date.getTime()) {
+      return { error: "A ocorrência selecionada não corresponde a esta data." };
+    }
 
     const scheduleStatus = scheduleToUiStatus[schedule.status] ?? String(schedule.status);
     const existingStatus = existing ? scheduleToUiStatus[existing.status] ?? String(existing.status) : scheduleStatus;
@@ -1172,8 +1181,8 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     const savedStatus = uiToAttendanceStatus[existingStatus] ?? status;
     const nextScheduleStatus = isAbsenceStatus(schedule.status) ? scheduleStatusForAbsenceClassification(reasonClassification) : schedule.status;
     const nextHasEvidence = input.hasEvidence ?? false;
-    const nextImpactsAbs = delegatedManager ? impactsAbs(existingStatus, normalizedReason) : input.impactsAbs ?? impactsAbs(existingStatus, normalizedReason);
-    const nextImpactsCoverage = delegatedManager ? impactsCoverage(existingStatus) : input.impactsCoverage ?? impactsCoverage(existingStatus);
+    const nextImpactsAbs = delegatedManager || spaceManager ? impactsAbs(existingStatus, normalizedReason) : input.impactsAbs ?? impactsAbs(existingStatus, normalizedReason);
+    const nextImpactsCoverage = delegatedManager || spaceManager ? impactsCoverage(existingStatus) : input.impactsCoverage ?? impactsCoverage(existingStatus);
     const toResponseData = (record: NonNullable<typeof existing>) => ({
       id: record.id,
       employeeId: employee.id,
@@ -1225,6 +1234,15 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     mark("preSaveValidationMs");
 
     const saved = await prisma.$transaction(async (tx) => {
+      if (spaceManager) {
+        const currentUser = await tx.user.findUnique({ where: { id: user.id }, include: { role: true, employeeProfile: true } });
+        const currentEmployee = await tx.employeeProfile.findFirst({ where: { id: employee.id, deletedAt: null } });
+        const currentSchedule = await tx.schedule.findFirst({ where: { id: schedule.id, employeeId: employee.id, date, deletedAt: null, status: schedule.status } });
+        if (!currentUser || currentUser.status !== "ACTIVE" || currentUser.deletedAt || currentUser.employeeProfile?.deletedAt
+          || normalizeRole(currentUser.role.name) !== "GESTOR" || !currentEmployee || !currentSchedule) {
+          throw new Error("A permissão ou a ocorrência mudou antes de salvar.");
+        }
+      }
       if (delegatedManager) {
         // Recheck the grant, current direct-team relationship and absence inside
         // the save transaction. No schedule creation or time changes are granted.
@@ -1322,7 +1340,8 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           action: "EDICAO",
           entity: "AttendanceRecord",
           entityId: record.id,
-          reason: delegatedManager ? "Justificativa de falta registrada pela gestora autorizada do próprio time" : "Justificativa de ocorrência registrada pelo Supervisor",
+          reason: spaceManager ? "Justificativa de ocorrência registrada pelo Gestor no Meu Espaço"
+            : delegatedManager ? "Justificativa de falta registrada pela gestora autorizada do próprio time" : "Justificativa de ocorrência registrada pelo Supervisor",
           previousValue: existing ? serialize(existing) : null,
           newValue: { ...serialize(record), scheduleStatusBefore: schedule.status, scheduleStatusAfter: savedSchedule.status, reasonClassification }
         }

@@ -2,7 +2,7 @@ import { Prisma, type ScheduleStatus, type WorkHourRecordStatus } from "@prisma/
 
 import { createPermissionError, createServerError, createValidationError } from "@/lib/api-errors";
 import type { Actor } from "@/lib/mock-db";
-import { canImportWorkHours, canJustifyAbsence, normalizeRole } from "@/lib/permissions";
+import { canImportWorkHours, canJustifyWorkHourAdherence, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { captureOvertimeOutcome, type OvertimeSource } from "@/lib/work-hours-overtime";
 import { saveCaptureOvertimeReview, cancelOvertimeReviews } from "@/lib/work-hours-overtime-service";
@@ -519,7 +519,7 @@ const adherenceListInclude = {
 
 export async function listWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}, pagination?: { cursor?: string; limit?: number }) {
   const user = await getActiveUser(actor);
-  if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
+  if (!user || !canJustifyWorkHourAdherence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
   }
   const period = parsePeriod(filters);
@@ -612,7 +612,7 @@ async function visibleAdherenceRows(records: Prisma.WorkHourAdherenceJustificati
 
 export async function getWorkHourAdherenceFilterOptions(actor: Actor, filters: CaptureImportFilters) {
   const user = await getActiveUser(actor);
-  if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
+  if (!user || !canJustifyWorkHourAdherence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
   }
   const period = parsePeriod(filters);
@@ -661,7 +661,7 @@ export async function getWorkHourAdherenceFilterOptions(actor: Actor, filters: C
 
 export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<CaptureImportFilters, "startDate" | "endDate"> = {}) {
   const user = await getActiveUser(actor);
-  if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
+  if (!user || !canJustifyWorkHourAdherence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
   }
   const explicitPeriod = filters.startDate !== undefined || filters.endDate !== undefined ? parsePeriod(filters) : null;
@@ -733,7 +733,7 @@ export async function exportWorkHourAdherenceJustifications(actor: Actor, filter
 
 export async function answerWorkHourAdherenceJustification(actor: Actor, input: { id: string; justification: string }) {
   const user = await getActiveUser(actor);
-  if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
+  if (!user || !canJustifyWorkHourAdherence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para justificar esta pendência.");
   }
   const justification = input.justification.trim();

@@ -8,9 +8,8 @@ import { getSpaceCoverage, justifySpaceCoverage } from "../src/lib/meu-espaco-co
 import { getSpaceResults } from "../src/lib/meu-espaco-results-service";
 import { getSpaceMonthlyHours } from "../src/lib/meu-espaco-hours-service";
 import { listSpacePending } from "../src/lib/meu-espaco-pending-service";
-import { getSpaceGlide } from "../src/lib/meu-espaco-glide-service";
 import { spaceToday } from "../src/lib/meu-espaco-filters";
-import { moveSpaceDay, spaceMonthEnd } from "../src/lib/meu-espaco-glide";
+import { moveSpaceDay, spaceMonthEnd } from "../src/lib/meu-espaco-filters";
 import { allPerformanceQueueIds, getPerformanceQueueMetadataById } from "../src/lib/performance-service";
 
 async function main() {
@@ -101,14 +100,6 @@ async function main() {
   const metrics = result.groups[0].metric.targets!;
   assert.equal(metrics.find((m) => m.id === "materialDaily")!.value, 300);
   assert.equal(metrics.find((m) => m.id === "aht")!.value, 75);
-  const glide = await getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "materialDaily" }));
-  assert.equal(glide.overall, 300); assert.equal(glide.cutoff, moveSpaceDay(today, -1)); assert.ok(glide.automaticWeight! > 0);
-  assert.equal(glide.automaticWeight, glide.futureScheduled, "Missing partner-days must not reduce the observed productivity to zero");
-  const teamAht = await getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "aht" }));
-  const partnerAht = await getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "aht", employeeId: "qa-space-agent-01" }));
-  assert.equal(teamAht.overall, 75); assert.equal(partnerAht.overall, 120);
-  assert.ok(partnerAht.futureScheduled < teamAht.futureScheduled);
-  await assert.rejects(() => getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "aht", employeeId: "qa-space-sup-b" })), { status: 403 });
-  console.log("Local PostgreSQL QA passed: read-only coverage for every role, automatic closure and preserved history, scoped partner Glide, weighted targets, 61-partner ordering/pagination and unchanged monthly hours.");
+  console.log("Local PostgreSQL QA passed: read-only coverage for every role, automatic closure and preserved history, weighted targets, 61-partner ordering/pagination and unchanged monthly hours.");
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());

@@ -1,4 +1,4 @@
-import { normalizeRole, canJustifyAbsence, type PermissionUser } from "@/lib/permissions";
+import { normalizeRole, canJustifyAbsence, canJustifyWorkHourAdherence, type PermissionUser } from "@/lib/permissions";
 
 export const meuEspacoRoles = ["ADMIN", "WFM", "GESTOR", "SUPERVISOR"] as const;
 
@@ -6,8 +6,9 @@ export function canAccessMeuEspaco(user?: PermissionUser) {
   return Boolean(user && user.status === "ACTIVE" && meuEspacoRoles.some((role) => role === normalizeRole(user.role)));
 }
 
-export function canRespondMeuEspaco(user?: PermissionUser) {
-  return Boolean(user && canAccessMeuEspaco(user) && normalizeRole(user.role) !== "GESTOR" && canJustifyAbsence(user));
+export function canRespondMeuEspaco(user?: PermissionUser, kind?: string) {
+  return Boolean(user && canAccessMeuEspaco(user) && (normalizeRole(user.role) === "GESTOR"
+    || (kind === "absence" ? canJustifyAbsence(user) : canJustifyWorkHourAdherence(user))));
 }
 
 export class MeuEspacoError extends Error {

@@ -13,7 +13,7 @@ import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review
 import { WorkHourJustifications } from "@/components/work-hour-justifications";
 import { WorkHourJustificationSummary } from "@/components/work-hour-justification-summary";
 import { EmptyState, MetricPill, PageHeader, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { canApproveWorkHourAdjustment, canEditWorkHours, canImportWorkHours, canJustifyAbsence, canRequestWorkHourAdjustment, canViewWorkHours, normalizeRole } from "@/lib/permissions";
+import { canApproveWorkHourAdjustment, canEditWorkHours, canImportWorkHours, canJustifyWorkHourAdherence, canRequestWorkHourAdjustment, canViewWorkHours, normalizeRole } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { cleanShiftName, cleanShiftOptions, shiftCategoryName } from "@/lib/shift-display";
 import { DEFAULT_PRODUCTIVE_HOURS, type WorkHourBalanceStatus, workHourBalanceStatus } from "@/lib/work-hours-rules";
@@ -138,7 +138,7 @@ export function WorkHoursPage() {
   const canApprove = canApproveWorkHourAdjustment(permissionUser);
   const canDeleteWorkHours = canEditWorkHours(permissionUser);
   const canRequestAdjustment = canRequestWorkHourAdjustment(permissionUser);
-  const canViewAdherence = canJustifyAbsence(permissionUser);
+  const canViewAdherence = canJustifyWorkHourAdherence(permissionUser);
   const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
   const statusOptions = ["Todos", "Hora extra", "OK", "Horas pendentes", "Sem cronograma"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];

@@ -1,8 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { readMeuEspacoCoverageSnapshot } from "@/lib/staff-coverage-service";
 import { MeuEspacoError } from "@/lib/meu-espaco-access";
-import { spaceDate, spaceToday } from "@/lib/meu-espaco-filters";
-import { moveSpaceDay, spaceMonthEnd } from "@/lib/meu-espaco-glide";
+import { spaceDate, spaceToday, moveSpaceDay, spaceMonthEnd } from "@/lib/meu-espaco-filters";
 import { coverageSlotEnd, coverageSlotState, coverageSupervisorMatches, type SpaceCoverage, type SpaceCoverageRow } from "@/lib/meu-espaco-coverage";
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 
