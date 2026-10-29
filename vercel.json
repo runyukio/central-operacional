@@ -1,6 +1,14 @@
 {
   "crons": [
     {
+      "path": "/api/cron/ads-operational-alerts",
+      "schedule": "3 * * * *"
+    },
+    {
+      "path": "/api/cron/ads-shift-alerts",
+      "schedule": "0 3,12,18,21 * * *"
+    },
+    {
       "path": "/api/cron/realtime-cycle-monitor",
       "schedule": "* * * * *"
     },

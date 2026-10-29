@@ -321,6 +321,11 @@ export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?
   });
 }
 
+// Uses the same internal automation identity and Executive source as existing reports.
+export async function getAdsExecutiveAutomationSnapshot(cycleDownload?: string) {
+  return getAdsExecutiveReportSnapshot(automationActor, cycleDownload);
+}
+
 async function sendLatestExecutiveReport(config: ExecutiveWebhookConfig): Promise<AdsExecutiveWebhookResult> {
   if (!isWebhookEnabled(config)) {
     return {
