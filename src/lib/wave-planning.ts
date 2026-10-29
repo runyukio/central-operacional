@@ -14,11 +14,12 @@ export const wavePlanSchema = z.object({
   headcount: z.number().int().min(1, "Informe pelo menos uma pessoa.").max(10000),
   trainingStartDate: date,
   nestingStartDate: date,
+  // Legacy storage name: this date closes nesting (exclusive); operation starts on nestingStartDate.
   goLiveDate: date,
   notes: z.string().trim().max(1000).default("")
 }).superRefine((wave, context) => {
   if (wave.nestingStartDate <= wave.trainingStartDate) context.addIssue({ code: "custom", path: ["nestingStartDate"], message: "Nesting deve começar depois do início do treinamento." });
-  if (wave.goLiveDate <= wave.nestingStartDate) context.addIssue({ code: "custom", path: ["goLiveDate"], message: "A entrada em operação deve ocorrer depois do início do nesting." });
+  if (wave.goLiveDate <= wave.nestingStartDate) context.addIssue({ code: "custom", path: ["goLiveDate"], message: "A conclusão do nesting deve ocorrer depois do início do nesting." });
 });
 export type WavePlanInput = z.infer<typeof wavePlanSchema>;
 export type WavePlanItem = WavePlanInput & { id: string; lob: string; updatedAt: string };
