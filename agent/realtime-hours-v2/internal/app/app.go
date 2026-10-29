@@ -78,7 +78,10 @@ type DiagnoseResult struct {
 
 func New(cfg config.Config, configPath string) (*Runtime, error) {
 	hostname, _ := os.Hostname()
-	user := strings.TrimSpace(os.Getenv("USERNAME"))
+	user := strings.TrimSpace(cfg.WindowsUser)
+	if user == "" {
+		user = strings.TrimSpace(os.Getenv("USERNAME"))
+	}
 	if user == "" {
 		user = strings.TrimSpace(os.Getenv("USER"))
 	}

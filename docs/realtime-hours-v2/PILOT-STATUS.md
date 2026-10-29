@@ -15,7 +15,8 @@ The extension is CRX3 signed with a persistent ECDSA P-256 key stored outside th
 - Eleven TypeScript authentication, contract and request tests.
 - TypeScript validation, ESLint, Next.js production build.
 - PowerShell syntax validation on macOS (this is not an installation test).
-- Live homologation enrollment, single-use rejection, signed heartbeat, signed activity, unsigned request rejection and idempotent retry.
+- Live homologation enrollment, single-use rejection, signed heartbeat, signed activity, unsigned request rejection and idempotent retry. The normalized test domain was stored as exactly one `example.com` record.
+- Live upgrade credential replacement and signed server rollback restoring the prior credential; disposable test credentials were revoked.
 - CRX3 signature verification during packaging and published artifact hash comparison.
 
 ## Windows acceptance still pending

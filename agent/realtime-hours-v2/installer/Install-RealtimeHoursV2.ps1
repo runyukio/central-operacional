@@ -16,6 +16,8 @@ $ProgressPreference = "SilentlyContinue"
 $ExpectedVersion = "1.0.0-alpha.1"
 $TaskName = "Central Operacional - Realtime Hours V2"
 $HostName = "com.centraloperacional.realtimehours.v2"
+$LegacyHostName = "com.eastriver.realtime_hours"
+$LegacyExtensionId = "dchmgegaidpaimhadfacbejjjamkaeah"
 $StagingDir = "$InstallDir.staging.$([guid]::NewGuid().ToString('N'))"
 $BackupDir = "$InstallDir.rollback.$(Get-Date -Format 'yyyyMMddHHmmss')"
 $TaskBackupDir = Join-Path $env:TEMP "RealtimeHoursV2-tasks-$([guid]::NewGuid().ToString('N'))"
@@ -106,12 +108,12 @@ function Stop-RelatedProcesses {
 }
 
 function Remove-ExtensionPolicyValue {
-  param([string]$BrowserPath)
+  param([string]$BrowserPath, [string]$TargetId = $ExtensionId)
   $forceList = Join-Path $BrowserPath 'ExtensionInstallForcelist'
   $item = Get-ItemProperty -Path $forceList -ErrorAction SilentlyContinue
   if (-not $item) { return }
   foreach ($property in @($item.PSObject.Properties | Where-Object { $_.Name -match '^\d+$' })) {
-    if ([string]$property.Value -match "^$([regex]::Escape($ExtensionId));") {
+    if ([string]$property.Value -match "^$([regex]::Escape($TargetId));") {
       Remove-ItemProperty -Path $forceList -Name $property.Name -ErrorAction SilentlyContinue
     }
   }
@@ -135,17 +137,22 @@ function Set-ExtensionPolicy {
 function Backup-RegistryArtifacts {
   foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
     $native = "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$HostName"
+    $legacyNative = "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$LegacyHostName"
     $policy = "HKLM:\SOFTWARE\Policies\$browser\ExtensionInstallForcelist"
     $values = @()
     if (Test-Path $policy) {
       $values = @((Get-ItemProperty $policy).PSObject.Properties | Where-Object {
-        $_.Name -match '^\d+$' -and [string]$_.Value -match "^$([regex]::Escape($ExtensionId));"
+        $_.Name -match '^\d+$' -and [string]$_.Value -match "^($([regex]::Escape($ExtensionId))|$LegacyExtensionId);"
       } | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
     }
     $script:RegistrySnapshot += [pscustomobject]@{
       Native = $native; Existed = (Test-Path $native)
       Default = if (Test-Path $native) { (Get-Item $native).GetValue('') } else { $null }
       Policy = $policy; Values = $values
+      LegacyNative = $legacyNative; LegacyExisted = (Test-Path $legacyNative)
+      LegacyDefault = if (Test-Path $legacyNative) { (Get-Item $legacyNative).GetValue('') } else { $null }
+      SettingsPath = "HKLM:\SOFTWARE\Policies\$browser"
+      Settings = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\$browser" -Name ExtensionSettings -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ExtensionSettings -ErrorAction SilentlyContinue)
     }
   }
 }
@@ -156,9 +163,30 @@ function Restore-RegistryArtifacts {
       New-Item -Path $entry.Native -Force | Out-Null
       Set-Item -Path $entry.Native -Value $entry.Default
     }
+    if ($entry.LegacyExisted) {
+      New-Item -Path $entry.LegacyNative -Force | Out-Null
+      Set-Item -Path $entry.LegacyNative -Value $entry.LegacyDefault
+    }
+    if ($entry.Settings) {
+      New-ItemProperty -Path $entry.SettingsPath -Name ExtensionSettings -Value $entry.Settings -PropertyType String -Force | Out-Null
+    }
     foreach ($value in $entry.Values) {
       New-Item -Path $entry.Policy -Force | Out-Null
       New-ItemProperty -Path $entry.Policy -Name $value.Name -Value $value.Value -PropertyType String -Force | Out-Null
+    }
+  }
+}
+
+function Remove-LegacyBrowserArtifacts {
+  foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
+    $browserPath = "HKLM:\SOFTWARE\Policies\$browser"
+    Remove-ExtensionPolicyValue -BrowserPath $browserPath -TargetId $LegacyExtensionId
+    Remove-Item -Path "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$LegacyHostName" -Recurse -Force -ErrorAction SilentlyContinue
+    $settingsValue = Get-ItemProperty -Path $browserPath -Name ExtensionSettings -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ExtensionSettings -ErrorAction SilentlyContinue
+    if ($settingsValue) {
+      $settings = $settingsValue | ConvertFrom-Json
+      $settings.PSObject.Properties.Remove($LegacyExtensionId)
+      New-ItemProperty -Path $browserPath -Name ExtensionSettings -Value ($settings | ConvertTo-Json -Depth 20 -Compress) -PropertyType String -Force | Out-Null
     }
   }
 }
@@ -294,7 +322,7 @@ try {
   New-Item -ItemType Directory -Path $stageState, $stageQueue, $stageFailed, $stageLogs -Force | Out-Null
   $stageConfig = Join-Path $StagingDir 'config.json'
   [ordered]@{
-    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId
+    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId; windowsUser = $windowsUser
     secretFile = $stageSecret; stateDir = $stageState; queueDir = $stageQueue; failedDir = $stageFailed; logDir = $stageLogs
     sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 300; uploadIntervalSeconds = 300
     idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45
@@ -309,6 +337,7 @@ try {
   $LocalMutationStarted = $true
   Backup-And-StopTasks
   Remove-LegacyPersistence
+  Remove-LegacyBrowserArtifacts
   Stop-RelatedProcesses
   if (Test-Path -LiteralPath $InstallDir) { Move-Item -LiteralPath $InstallDir -Destination $BackupDir -Force }
   Move-Item -LiteralPath $StagingDir -Destination $InstallDir -Force
@@ -324,7 +353,7 @@ try {
   $logDir = Join-Path $InstallDir 'logs'
 
   [ordered]@{
-    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId
+    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId; windowsUser = $windowsUser
     secretFile = $secretPath; stateDir = $stateDir; queueDir = $queueDir; failedDir = $failedDir; logDir = $logDir
     sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 300; uploadIntervalSeconds = 300
     idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45

@@ -19,6 +19,7 @@ type Config struct {
 	SchemaVersion             int    `json:"schemaVersion"`
 	BaseURL                   string `json:"baseUrl"`
 	DeviceID                  string `json:"deviceId"`
+	WindowsUser               string `json:"windowsUser,omitempty"`
 	SecretFile                string `json:"secretFile"`
 	StateDir                  string `json:"stateDir"`
 	QueueDir                  string `json:"queueDir"`
