@@ -168,10 +168,10 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
 
   const overview = query.view === "overview";
   const agentSearch = String(query.agentSearch ?? "").trim().slice(0, 120);
-  const nameFilter = agentSearch ? Prisma.sql`WHERE COALESCE("employeeName", '') ILIKE ${`%${agentSearch}%`}
+  const nameFilter = agentSearch ? Prisma.sql`HAVING BOOL_OR(COALESCE("employeeName", '') ILIKE ${`%${agentSearch}%`}
     OR COALESCE("wbLogin", '') ILIKE ${`%${agentSearch}%`}
     OR COALESCE("windowsUser", '') ILIKE ${`%${agentSearch}%`}
-    OR "hostname" ILIKE ${`%${agentSearch}%`}` : Prisma.empty;
+    OR "hostname" ILIKE ${`%${agentSearch}%`})` : Prisma.empty;
 
   const [rawRows, summaries, agentRows, rankings] = await Promise.all([
     overview ? Promise.resolve([] as ActivityRawRow[]) : prisma.$queryRaw<ActivityRawRow[]>(Prisma.sql`
@@ -206,8 +206,8 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
         COALESCE(SUM(CASE WHEN "sourceType"='LOCKED' THEN EXTRACT(EPOCH FROM ("endedAt" - "startedAt")) ELSE 0 END), 0)::int AS "lockedSeconds",
         COUNT(DISTINCT "domain")::int AS "uniqueDomains", MAX("endedAt") AS "lastActivityAt",
         COUNT(*) OVER()::int AS "agentsFound"
-      FROM clipped_activity ${nameFilter}
-      GROUP BY "agentKey" ORDER BY "totalSeconds" DESC, "employeeName" ASC LIMIT 1000
+      FROM clipped_activity
+      GROUP BY "agentKey" ${nameFilter} ORDER BY "totalSeconds" DESC, "employeeName" ASC LIMIT 1000
     `) : Promise.resolve([] as AgentAggregate[]),
     query.view === "agent" ? prisma.$queryRaw<RankingAggregate[]>(Prisma.sql`
       WITH clipped_activity AS (${baseActivityQuery}), totals AS (

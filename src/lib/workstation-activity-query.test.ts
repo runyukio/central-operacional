@@ -68,6 +68,7 @@ test("overview aggregates before limiting and does not load a global timeline", 
   assert.ok(!summary.text.includes("LIMIT"));
   assert.ok(!summary.values.some((value) => String(value).includes("Ana")), "agent search must not narrow the overall summary");
   assert.ok(agents.text.indexOf('GROUP BY "agentKey"') < agents.text.indexOf("LIMIT 1000"));
+  assert.ok(agents.text.indexOf('GROUP BY "agentKey"') < agents.text.indexOf("HAVING BOOL_OR"), "searching one machine must retain the agent's full-day totals across machines");
   assert.ok(agents.values.includes("%Ana' OR TRUE --%"));
   assert.ok(!agents.text.includes("Ana'"), "search must remain parameterized");
   assert.ok(agents.text.includes('LOWER(activity."hostname")'), "unlinked shared Windows users remain distinct by machine");
