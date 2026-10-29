@@ -4,6 +4,14 @@ const nextConfig = {
   typedRoutes: false,
   serverExternalPackages: ["@napi-rs/canvas", "pdfjs-dist", "tesseract.js"],
   outputFileTracingIncludes: {
+    "/api/cron/ads-operational-alerts": [
+      "./node_modules/@fontsource/inter/files/inter-latin-400-normal.woff",
+      "./node_modules/@fontsource/inter/files/inter-latin-700-normal.woff"
+    ],
+    "/api/cron/ads-shift-alerts": [
+      "./node_modules/@fontsource/inter/files/inter-latin-400-normal.woff",
+      "./node_modules/@fontsource/inter/files/inter-latin-700-normal.woff"
+    ],
     "/api/cron/ads-productivity-alerts": [
       "./node_modules/@fontsource/inter/files/inter-latin-400-normal.woff",
       "./node_modules/@fontsource/inter/files/inter-latin-700-normal.woff"
