@@ -7,7 +7,7 @@ import { addWaveDays, waveDayOffset, waveLobColor, wavePlanSchema, waveSegment, 
 import { apiJson, currentOperationalDateInput } from "./shared";
 
 const control = "h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-50";
-const stages = [{ label: "Treinamento", color: "#7c3aed" }, { label: "Nesting", color: "#d97706" }, { label: "Entrada em operação", color: "#059669" }];
+const stages = [{ label: "Treinamento", color: "#7c3aed" }, { label: "Nesting", color: "#d97706" }, { label: "Go-live", color: "#059669" }];
 const displayDate = (value: string) => value.split("-").reverse().join("/");
 function shiftMonth(month: string, offset: number) {
   const date = new Date(`${month}-01T00:00:00Z`);
@@ -78,8 +78,8 @@ export function WavePlanningCalendar({ selectedLob = "Todos" }: { selectedLob?: 
             <tbody>{waves.map((wave) => {
               const training = waveSegment(wave.trainingStartDate, wave.nestingStartDate, monthStart, days);
               const nesting = waveSegment(wave.nestingStartDate, wave.goLiveDate, monthStart, days);
-              const liveDay = waveDayOffset(monthStart, wave.nestingStartDate);
-              const description = `${wave.name}, ${wave.lob}, ${wave.headcount} pessoas previstas. Treinamento: ${displayDate(wave.trainingStartDate)} a ${displayDate(addWaveDays(wave.nestingStartDate, -1))}. Nesting: ${displayDate(wave.nestingStartDate)} a ${displayDate(addWaveDays(wave.goLiveDate, -1))}. Entrada em operação: ${displayDate(wave.nestingStartDate)}. Conclusão do nesting: ${displayDate(wave.goLiveDate)}.${wave.notes ? ` Observações: ${wave.notes}` : ""}`;
+              const liveDay = waveDayOffset(monthStart, wave.goLiveDate);
+              const description = `${wave.name}, ${wave.lob}, ${wave.headcount} pessoas previstas. Treinamento: ${displayDate(wave.trainingStartDate)} a ${displayDate(addWaveDays(wave.nestingStartDate, -1))}. Nesting: ${displayDate(wave.nestingStartDate)} a ${displayDate(addWaveDays(wave.goLiveDate, -1))}. Entrada em operação: ${displayDate(wave.nestingStartDate)}. Go-live (conclusão do nesting): ${displayDate(wave.goLiveDate)}.${wave.notes ? ` Observações: ${wave.notes}` : ""}`;
               return <tr key={wave.id} className="border-t border-border/70">
                 <th scope="row" className="sticky left-0 z-20 border-r border-border bg-white p-0 text-left align-middle"><button type="button" disabled={!payload?.canManage} onClick={() => { setNotice(""); setEditor(wave); }} title={description} aria-label={`${payload?.canManage ? "Editar " : ""}${description}`} className="group flex h-24 w-full items-start gap-3 px-4 py-4 text-left hover:bg-slate-50 disabled:cursor-default"><span className="mt-0.5 h-10 w-1 shrink-0 rounded-full" style={{ background: waveLobColor(wave.lob) }} /><span className="flex h-16 min-w-0 flex-1 flex-col"><span className="flex items-center justify-between gap-2 font-extrabold leading-4 text-navy-950"><span className="truncate">{wave.name}</span>{payload?.canManage && <Pencil size={12} className="shrink-0 text-slate-400" />}</span><span className="mt-1 flex flex-wrap items-center gap-2 text-[10px]"><span className="rounded px-1.5 py-0.5 font-black" style={{ background: `${waveLobColor(wave.lob)}14`, color: waveLobColor(wave.lob) }}>{wave.lob}</span><span className="font-semibold text-muted">{wave.headcount} pessoas</span></span><span className="mt-auto block text-[10px] font-semibold leading-4 text-muted">Operação: {displayDate(wave.nestingStartDate)}</span></span></button></th>
                 <td className="p-0"><div className="relative h-24" role="img" aria-label={description} title={description}>
@@ -87,7 +87,7 @@ export function WavePlanningCalendar({ selectedLob = "Todos" }: { selectedLob?: 
                   {todayIndex >= 0 && todayIndex < days && <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-10 border-l-2 border-dashed border-blue-400" style={{ left: `${(todayIndex + 0.5) / days * 100}%` }} />}
                   {training && <div className="absolute top-1/2 flex h-7 -translate-y-1/2 items-center justify-center overflow-hidden rounded-l-md bg-violet-600 px-1 text-[10px] font-extrabold text-white shadow-sm" style={training}><span className="truncate">Treinamento</span></div>}
                   {nesting && <div className="absolute top-1/2 flex h-7 -translate-y-1/2 items-center justify-center overflow-hidden rounded-r-md bg-amber-600 px-1 text-[10px] font-extrabold text-white shadow-sm" style={nesting}><span className="truncate">Nesting</span></div>}
-                  {liveDay >= 0 && liveDay < days && <div className="absolute bottom-4 z-10 inline-flex h-4 -translate-x-1/2 items-center gap-1 rounded bg-white px-1.5 text-emerald-700 shadow-sm ring-1 ring-emerald-200" style={{ left: `${(liveDay + 0.5) / days * 100}%` }}><Flag size={12} fill="currentColor" /><span className="whitespace-nowrap text-[9px] font-black leading-none">Go-live</span></div>}
+                  {liveDay >= 0 && liveDay < days && <div className="absolute top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center rounded bg-white px-1 py-0.5 text-emerald-700 shadow-sm ring-1 ring-emerald-200" style={{ left: `${(liveDay + 0.5) / days * 100}%` }}><Flag size={14} fill="currentColor" /><span className="mt-0.5 whitespace-nowrap text-[9px] font-black leading-none">Go-live</span></div>}
                 </div></td>
               </tr>;
             })}</tbody>
