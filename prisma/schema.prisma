@@ -394,7 +394,26 @@ model Lob {
   productionRecords  ProductionRecord[]
   billingAdjustments BillingAdjustment[]
   equipments         Equipment[]
+  wavePlans          WavePlan[]
   createdAt          DateTime            @default(now())
+}
+
+model WavePlan {
+  id                String   @id @default(cuid())
+  name              String
+  lobId             String
+  headcount         Int
+  trainingStartDate DateTime @db.Date
+  nestingStartDate  DateTime @db.Date
+  goLiveDate        DateTime @db.Date
+  notes             String   @default("")
+  createdBy         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lob               Lob      @relation(fields: [lobId], references: [id], onDelete: Restrict)
+
+  @@index([lobId, trainingStartDate])
+  @@index([goLiveDate])
 }
 
 model Team {

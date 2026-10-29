@@ -1,6 +1,7 @@
 "use client";
 
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
+import { WavePlanningCalendar } from "./wave-planning-calendar";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClientRequestGate } from "@/lib/client-request-gate";
@@ -1428,6 +1429,7 @@ export function OperationalCommandCenter() {
             ) : <EmptyState title="Sem desligamentos no período" description="O cálculo usa Data de Desligamento e respeita os filtros da Central." />}
           </Panel>
         </div>
+        <WavePlanningCalendar selectedLob={selectedCommandLob} />
         </> : null}
       </div>
       </>
