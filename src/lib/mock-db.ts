@@ -50,6 +50,7 @@ export type RequestRecord = {
   nextOwner?: string;
   canSupervisorStep?: boolean;
   canWfmFinal?: boolean;
+  canConclude?: boolean;
   canPartnerAccept?: boolean;
   canCancelPairedSwap?: boolean;
   createdAt?: string;

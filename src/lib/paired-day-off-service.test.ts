@@ -24,7 +24,7 @@ function fixture(t: TestContext) {
   const state = {
     request: null as any,
     schedules: [schedule("a1", "requester", current, true, ""), schedule("a2", "requester", desired, false, "23:00"), schedule("b1", "partner", current, false, "22:00"), schedule("b2", "partner", desired, true, "")],
-    histories: [] as any[], audits: [] as any[], notifications: [] as any[], pending: [] as any[], casFailure: ""
+    histories: [] as any[], requestHistories: [] as any[], audits: [] as any[], notifications: [] as any[], pending: [] as any[], casFailure: ""
   };
   const withIncludes = (request: any) => ({ ...request, type: { name: "Troca Casada" }, employee: { ...profiles[0], supervisor: { fullName: "Supervisor", userId: "supervisor-user" } },
     requester: { id: "requester-user", name: "Ana", email: requesterActor.email }, assignee: null,
@@ -38,7 +38,7 @@ function fixture(t: TestContext) {
       findMany: async () => state.pending,
       create: async ({ data }: any) => { state.request = withIncludes({ ...data, id: "swap" }); return structuredClone(state.request); },
       findUniqueOrThrow: async () => structuredClone(state.request),
-      update: async ({ data }: any) => { state.request = withIncludes({ ...state.request, ...data }); return structuredClone(state.request); }
+      update: async ({ data }: any) => { if (data.history?.create) state.requestHistories.push(data.history.create); state.request = withIncludes({ ...state.request, ...data }); return structuredClone(state.request); }
     },
     schedule: {
       findMany: async () => structuredClone(state.schedules),
@@ -96,6 +96,72 @@ test("two acceptances, responsible supervisor and WFM precede atomic schedule tr
   assert.equal(state.histories.length, 4);
   assert.equal(state.audits.filter(row => row.entity === "Schedule").length, 4);
   await assert.rejects(updatePairedSwap(wfmActor, "wfm-user", "swap", "Aprovado"), /encerrada/);
+});
+
+for (const actor of [adminActor, wfmActor]) {
+  test(`${actor.role} can conclude an applied paired swap through the request service without reapplying schedules`, async t => {
+    const { state, tx } = fixture(t);
+    await createPairedSwap("requester-user", input);
+    await updatePairedSwap(partnerActor, "partner-user", "swap", "Aprovado");
+    await updatePairedSwap(supervisorActor, "supervisor-user", "swap", "Aprovado");
+    await updatePairedSwap(wfmActor, "wfm-user", "swap", "Aprovado");
+    const originalSchedules = structuredClone(state.schedules);
+    const approvedPayload = structuredClone(state.request.payload);
+    const actorId = `${actor.role.toLowerCase()}-user`;
+    mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: actorId, name: actor.name, email: actor.email, role: { name: actor.role }, status: "ACTIVE", employeeProfile: null }) });
+    mockPrismaDelegate(t, "request", { findFirst: async () => state.request, findMany: async () => [state.request], count: async () => 1, groupBy: async () => [] });
+    mockPrismaDelegate(t, "employeeProfile", { findMany: async () => [] });
+    const detail = await getOperationalRequest(actor, "swap");
+    assert.ok(detail);
+    assert.equal(detail.canWfmFinal, false);
+    assert.equal(detail.canConclude, true);
+    assert.equal((await listOperationalRequests(actor)).data[0].canConclude, true);
+    tx.schedule.findMany = async () => { throw new Error("Completion must not reload or revalidate schedules"); };
+    tx.employeeProfile.findUnique = async () => { throw new Error("Completion must not depend on the current supervisor"); };
+    const result = await updateOperationalRequestStatus(actor, "swap", "Concluído", "Conferência administrativa finalizada");
+    assert.ok(result && result !== "FORBIDDEN" && "data" in result, JSON.stringify(result));
+    assert.equal(result.persisted, true);
+    assert.equal(result.scheduleUpdated, false);
+    assert.equal(result.data.status, "Concluído");
+    assert.equal(result.data.canConclude, false);
+    assert.equal(state.request.status, "CONCLUIDO");
+    assert.deepEqual(state.request.payload, approvedPayload);
+    assert.deepEqual(state.schedules, originalSchedules);
+    assert.equal(state.histories.length, 4);
+    assert.equal(state.audits.filter(row => row.entity === "Schedule").length, 4);
+    assert.ok(state.requestHistories.some(row => row.actorId === actorId && row.from === "APROVADO" && row.to === "CONCLUIDO" && row.reason === "Conferência administrativa finalizada"));
+    assert.ok(state.audits.some(row => row.entity === "Request" && row.actorId === actorId && row.action === "EDICAO" && row.newValue.status === "CONCLUIDO"));
+    await assert.rejects(updatePairedSwap(actor, actorId, "swap", "Concluído"), /encerrada/);
+  });
+}
+
+test("paired completion rejects early stages, unauthorized users, unapplied swaps and closed requests", async t => {
+  const { state } = fixture(t);
+  await createPairedSwap("requester-user", input);
+  for (const stage of ["PARTNER", "SUPERVISOR", "WFM"]) {
+    state.request.payload.stage = stage;
+    await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Concluído"));
+    assert.equal(state.request.status, "ABERTO");
+  }
+  state.request.payload.stage = "DONE";
+  state.request.status = "APROVADO";
+  state.request.payload.scheduleApplicationStatus = "APPLIED";
+  for (const role of ["SUPERVISOR", "GESTOR", "COLABORADOR", "GLOBAL", "QUALIDADE"] as const) {
+    await assert.rejects(updatePairedSwap({ ...adminActor, role }, `${role}-user`, "swap", "Concluído"), /permissão/);
+    assert.equal(state.request.status, "APROVADO");
+  }
+  for (const application of ["PENDING", "NOT_APPLIED"]) {
+    state.request.payload.scheduleApplicationStatus = application;
+    await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Concluído"));
+    assert.equal(state.request.status, "APROVADO");
+  }
+  for (const status of ["RECUSADO", "CANCELADO", "CONCLUIDO"]) {
+    state.request.status = status;
+    await assert.rejects(updatePairedSwap(adminActor, "admin-user", "swap", "Concluído"), /encerrada/);
+    assert.equal(state.request.status, status);
+  }
+  assert.equal(state.histories.length, 0);
+  assert.equal(state.requestHistories.length, 0);
 });
 
 test("admin sees and executes final approval through the request service after both acceptances and supervisor approval", async t => {
