@@ -32,6 +32,7 @@ Server-only **Production** environment variables:
 
 - `ADS_OPERATIONAL_ALERTS_ENABLED=true`
 - `ADS_OPERATIONAL_ALERTS_WEBHOOK_URL`: dedicated KIM robot webhook (Secret; never commit/log).
+- `ADS_OPERATIONAL_ALERT_EXCLUDED_WBS`: validated private exclusion list (explicitly supplied, even if empty).
 - Existing `CRON_SECRET`, database configuration and font dependencies.
 
 The sender also requires `VERCEL_ENV=production`, so a preview cannot send. Use a Production-target build to activate, not a preview build with preview credentials. No database migration is needed. Operational source tables are read only; existing private `SystemConfig` stores delivery metadata under `ads-operational-alert:v1:<kind>:<period>`.
