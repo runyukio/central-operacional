@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { activityPayloadSchema, normalizeDomain } from "@/lib/realtime-hours-v2/contract";
+import { publishActivityToCentral } from "@/lib/realtime-hours-v2/central-activity-bridge";
 import { authenticateDeviceRequest } from "@/lib/realtime-hours-v2/device-auth";
 import { dateWithinWindow, parseJsonText, readRequestTextWithLimit } from "@/lib/realtime-hours-v2/request";
 
@@ -79,5 +80,11 @@ export async function POST(request: Request) {
     return count;
   });
 
+  try {
+    await publishActivityToCentral({ device: auth.device, capturedAt: parsed.data.capturedAt, agentVersion: parsed.data.agentVersion, records });
+  } catch {
+    // Keep the workstation queue until both stores acknowledge the same event IDs.
+    return NextResponse.json({ success: false, error: "Central activity delivery is temporarily unavailable." }, { status: 503 });
+  }
   return NextResponse.json({ success: true, recordsProcessed: records.length, rowsAffected: affected });
 }

@@ -67,5 +67,6 @@ if ($PSCmdlet.ShouldProcess($InstallDir, 'Remover Realtime Hours V2')) {
   }
 
   Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CentralOperacionalRealtimeHoursV2' -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "Realtime Hours V2 removido." -ForegroundColor Green
 }

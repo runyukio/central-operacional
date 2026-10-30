@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory = $true)][string]$AgentExe,
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-p]{32}$')][string]$ExtensionId,
   [Parameter(Mandatory = $true)][string]$ExtensionUpdateUrl,
-  [Parameter(Mandatory = $true)][string]$EnrollmentCode,
+  [string]$EnrollmentCode,
+  [string]$EnrollmentFile,
   [string]$BaseUrl = "https://eastriverbrasil.com",
   [string]$InstallDir = "$env:ProgramData\CentralOperacional\RealtimeHoursV2"
 )
@@ -15,11 +16,23 @@ $ProgressPreference = "SilentlyContinue"
 $ExpectedVersion = "1.0.0-alpha.1"
 $TaskName = "Central Operacional - Realtime Hours V2"
 $HostName = "com.centraloperacional.realtimehours.v2"
+$LegacyHostName = "com.eastriver.realtime_hours"
+$LegacyExtensionId = "dchmgegaidpaimhadfacbejjjamkaeah"
 $StagingDir = "$InstallDir.staging.$([guid]::NewGuid().ToString('N'))"
 $BackupDir = "$InstallDir.rollback.$(Get-Date -Format 'yyyyMMddHHmmss')"
 $TaskBackupDir = Join-Path $env:TEMP "RealtimeHoursV2-tasks-$([guid]::NewGuid().ToString('N'))"
 $CreatedFinalInstall = $false
 $StoppedTasks = @()
+$LocalMutationStarted = $false
+$RegistrySnapshot = @()
+$secretBytes = $null
+$enroll = $null
+$enrollBody = $null
+$enrollment = $null
+$Enrolled = $false
+$OldPersistence = @()
+$OldStartupBackup = $null
+$stageConfig = $null
 
 function Write-Utf8NoBom {
   param([string]$Path, [string]$Content)
@@ -65,7 +78,8 @@ function Backup-And-StopTasks {
     $safeName = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$($task.TaskPath)|$($task.TaskName)")).TrimEnd('=').Replace('/', '_').Replace('+', '-')
     $xmlPath = Join-Path $TaskBackupDir "$safeName.xml"
     Export-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath | Set-Content -LiteralPath $xmlPath -Encoding Unicode
-    $metadata += [pscustomobject]@{ Name = $task.TaskName; Path = $task.TaskPath; Xml = $xmlPath }
+    $metadata += [pscustomobject]@{ Name = $task.TaskName; Path = $task.TaskPath; Xml = $xmlPath; WasRunning = ($task.State -eq "Running") }
+    $script:StoppedTasks = @($metadata)
     Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
   }
@@ -77,7 +91,7 @@ function Restore-Tasks {
     if (-not (Test-Path -LiteralPath $task.Xml)) { continue }
     try {
       Register-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -Xml (Get-Content -LiteralPath $task.Xml -Raw) -Force | Out-Null
-      Start-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -ErrorAction SilentlyContinue
+      if ($task.WasRunning) { Start-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -ErrorAction Stop }
     } catch {
       Write-Warning "Nao foi possivel restaurar a tarefa $($task.Name): $($_.Exception.Message)"
     }
@@ -95,12 +109,12 @@ function Stop-RelatedProcesses {
 }
 
 function Remove-ExtensionPolicyValue {
-  param([string]$BrowserPath)
+  param([string]$BrowserPath, [string]$TargetId = $ExtensionId)
   $forceList = Join-Path $BrowserPath 'ExtensionInstallForcelist'
   $item = Get-ItemProperty -Path $forceList -ErrorAction SilentlyContinue
   if (-not $item) { return }
   foreach ($property in @($item.PSObject.Properties | Where-Object { $_.Name -match '^\d+$' })) {
-    if ([string]$property.Value -match "^$([regex]::Escape($ExtensionId));") {
+    if ([string]$property.Value -match "^$([regex]::Escape($TargetId));") {
       Remove-ItemProperty -Path $forceList -Name $property.Name -ErrorAction SilentlyContinue
     }
   }
@@ -120,23 +134,109 @@ function Set-ExtensionPolicy {
   New-ItemProperty -Path $forceList -Name ([string]$slot) -Value "$ExtensionId;$ExtensionUpdateUrl" -PropertyType String -Force | Out-Null
 }
 
+
+function Backup-RegistryArtifacts {
+  foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
+    $native = "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$HostName"
+    $legacyNative = "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$LegacyHostName"
+    $policy = "HKLM:\SOFTWARE\Policies\$browser\ExtensionInstallForcelist"
+    $values = @()
+    if (Test-Path $policy) {
+      $values = @((Get-ItemProperty $policy).PSObject.Properties | Where-Object {
+        $_.Name -match '^\d+$' -and [string]$_.Value -match "^($([regex]::Escape($ExtensionId))|$LegacyExtensionId);"
+      } | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
+    }
+    $script:RegistrySnapshot += [pscustomobject]@{
+      Native = $native; Existed = (Test-Path $native)
+      Default = if (Test-Path $native) { (Get-Item $native).GetValue('') } else { $null }
+      Policy = $policy; Values = $values
+      LegacyNative = $legacyNative; LegacyExisted = (Test-Path $legacyNative)
+      LegacyDefault = if (Test-Path $legacyNative) { (Get-Item $legacyNative).GetValue('') } else { $null }
+      SettingsPath = "HKLM:\SOFTWARE\Policies\$browser"
+      Settings = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\$browser" -Name ExtensionSettings -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ExtensionSettings -ErrorAction SilentlyContinue)
+    }
+  }
+}
+
+function Restore-RegistryArtifacts {
+  foreach ($entry in $script:RegistrySnapshot) {
+    if ($entry.Existed) {
+      New-Item -Path $entry.Native -Force | Out-Null
+      Set-Item -Path $entry.Native -Value $entry.Default
+    }
+    if ($entry.LegacyExisted) {
+      New-Item -Path $entry.LegacyNative -Force | Out-Null
+      Set-Item -Path $entry.LegacyNative -Value $entry.LegacyDefault
+    }
+    if ($entry.Settings) {
+      New-ItemProperty -Path $entry.SettingsPath -Name ExtensionSettings -Value $entry.Settings -PropertyType String -Force | Out-Null
+    }
+    foreach ($value in $entry.Values) {
+      New-Item -Path $entry.Policy -Force | Out-Null
+      New-ItemProperty -Path $entry.Policy -Name $value.Name -Value $value.Value -PropertyType String -Force | Out-Null
+    }
+  }
+}
+
+function Remove-LegacyBrowserArtifacts {
+  foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
+    $browserPath = "HKLM:\SOFTWARE\Policies\$browser"
+    Remove-ExtensionPolicyValue -BrowserPath $browserPath -TargetId $LegacyExtensionId
+    Remove-Item -Path "HKLM:\SOFTWARE\$browser\NativeMessagingHosts\$LegacyHostName" -Recurse -Force -ErrorAction SilentlyContinue
+    $settingsValue = Get-ItemProperty -Path $browserPath -Name ExtensionSettings -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ExtensionSettings -ErrorAction SilentlyContinue
+    if ($settingsValue) {
+      $settings = $settingsValue | ConvertFrom-Json
+      $settings.PSObject.Properties.Remove($LegacyExtensionId)
+      New-ItemProperty -Path $browserPath -Name ExtensionSettings -Value ($settings | ConvertTo-Json -Depth 20 -Compress) -PropertyType String -Force | Out-Null
+    }
+  }
+}
+
+function Remove-LegacyPersistence {
+  $runPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+  $name = 'CentralOperacionalRealtimeHoursAgent'
+  $item = Get-ItemProperty -Path $runPath -ErrorAction SilentlyContinue
+  if ($item -and $item.PSObject.Properties[$name]) {
+    $script:OldPersistence += [pscustomobject]@{ Path = $runPath; Name = $name; Value = $item.$name }
+    Remove-ItemProperty -Path $runPath -Name $name -ErrorAction Stop
+  }
+  $startup = Join-Path ([Environment]::GetFolderPath('CommonStartup')) 'CentralOperacionalRealtimeHoursAgent.vbs'
+  if (Test-Path -LiteralPath $startup) {
+    $backup = Join-Path $TaskBackupDir 'legacy-startup.vbs'
+    $script:OldStartupBackup = [pscustomobject]@{ Source = $startup; Backup = $backup }
+    Move-Item -LiteralPath $startup -Destination $backup -ErrorAction Stop
+  }
+}
+
+function Restore-LegacyPersistence {
+  foreach ($item in $script:OldPersistence) {
+    New-ItemProperty -Path $item.Path -Name $item.Name -Value $item.Value -PropertyType String -Force | Out-Null
+  }
+  if ($script:OldStartupBackup -and (Test-Path -LiteralPath $script:OldStartupBackup.Backup)) {
+    Copy-Item -LiteralPath $script:OldStartupBackup.Backup -Destination $script:OldStartupBackup.Source -Force
+  }
+}
+
 function Set-InstallPermissions {
   param([string]$InteractiveUser, [string[]]$RuntimeDirectories, [string]$SecretPath)
   & icacls.exe $InstallDir /inheritance:r /grant:r `
     '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${InteractiveUser}:(OI)(CI)RX" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger a pasta de instalacao." }
   foreach ($directory in $RuntimeDirectories) {
     & icacls.exe $directory /inheritance:r /grant:r `
       '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${InteractiveUser}:(OI)(CI)M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger os dados de execucao." }
   }
   & icacls.exe $SecretPath /inheritance:r /grant:r `
     '*S-1-5-18:F' '*S-1-5-32-544:F' "${InteractiveUser}:R" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger a credencial do dispositivo." }
 }
 
 function Invoke-AgentMode {
   param([string]$Exe, [string]$Mode, [string]$ConfigPath, [string]$OutputPath = '')
   $arguments = @('-mode', $Mode)
-  if ($ConfigPath) { $arguments += @('-config', $ConfigPath) }
-  if ($OutputPath) { $arguments += @('-output', $OutputPath) }
+  if ($ConfigPath) { $arguments += @('-config', ('"{0}"' -f $ConfigPath)) }
+  if ($OutputPath) { $arguments += @('-output', ('"{0}"' -f $OutputPath)) }
   $process = Start-Process -FilePath $Exe -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
   if ($process.ExitCode -ne 0) { throw "Agent mode '$Mode' terminou com codigo $($process.ExitCode)." }
 }
@@ -149,6 +249,7 @@ function Test-ExtensionEndpoint {
 }
 
 function Remove-V2Artifacts {
+  Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CentralOperacionalRealtimeHoursV2' -Recurse -Force -ErrorAction SilentlyContinue
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   foreach ($registryPath in @(
@@ -158,10 +259,18 @@ function Remove-V2Artifacts {
 }
 
 Assert-Administrator
+. (Join-Path $PSScriptRoot 'Windows-CredentialProtection.ps1')
+. (Join-Path $PSScriptRoot 'Enrollment-RealtimeHoursV2.ps1')
+Initialize-WindowsCredentialProtection
 if (-not (Test-Path -LiteralPath $AgentExe -PathType Leaf)) { throw "AgentExe nao encontrado: $AgentExe" }
 if ($BaseUrl -notmatch '^https://') { throw "BaseUrl deve usar HTTPS." }
 if ($ExtensionUpdateUrl -notmatch '^https://') { throw "ExtensionUpdateUrl deve usar HTTPS." }
-if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw "EnrollmentCode e obrigatorio." }
+if ($EnrollmentFile) {
+  $enrollment = Get-Content -LiteralPath $EnrollmentFile -Raw | ConvertFrom-Json
+  Assert-RealtimeEnrollmentLifetime -Enrollment $enrollment
+  if ($enrollment.PSObject.Properties['enrollmentCode']) { $EnrollmentCode = [string]$enrollment.enrollmentCode }
+}
+if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -and ($null -eq $enrollment -or -not $enrollment.PSObject.Properties['deploymentCode'])) { throw "Autorizacao de instalacao ausente." }
 
 $interactiveUser = Get-InteractiveUser
 $windowsUser = ($interactiveUser -split '\\')[-1].Trim().ToLowerInvariant()
@@ -183,25 +292,35 @@ try {
   Copy-Item -LiteralPath $AgentExe -Destination $stageExe -Force
   Copy-Item -LiteralPath $AgentExe -Destination $stageNative -Force
 
+  if ($null -ne $enrollment) {
+    $EnrollmentCode = Get-RealtimeOneTimeEnrollment -Enrollment $enrollment -BaseUrl $BaseUrl -ComputerName $env:COMPUTERNAME -WindowsUser $windowsUser
+  }
   $enrollBody = @{
     enrollmentCode = $EnrollmentCode
     hostname = $env:COMPUTERNAME
     windowsUser = $windowsUser
     agentVersion = $ExpectedVersion
   } | ConvertTo-Json -Compress
-  $enroll = Invoke-RestMethod -Method Post -Uri "$($BaseUrl.TrimEnd('/'))/api/realtime-hours/v2/enroll" -ContentType 'application/json' -Body $enrollBody -TimeoutSec 30
+  $enroll = Invoke-RealtimeEnrollmentRequest -Uri "$($BaseUrl.TrimEnd('/'))/api/realtime-hours/v2/enroll" -Body $enrollBody
   if (-not $enroll.success -or [string]::IsNullOrWhiteSpace([string]$enroll.deviceId) -or [string]::IsNullOrWhiteSpace([string]$enroll.deviceSecret)) {
     throw "A Central recusou o enrollment do dispositivo."
   }
 
+  $Enrolled = $true
   $encodedSecret = ([string]$enroll.deviceSecret).Replace('-', '+').Replace('_', '/')
   while (($encodedSecret.Length % 4) -ne 0) { $encodedSecret += '=' }
   try { $secretBytes = [Convert]::FromBase64String($encodedSecret) }
   catch { throw "A Central retornou um segredo de dispositivo invalido." }
   if ($secretBytes.Length -lt 32) { throw "O segredo de dispositivo retornado e muito curto." }
   $stageSecret = Join-Path $StagingDir 'device-secret.dpapi'
-  $protected = [Security.Cryptography.ProtectedData]::Protect($secretBytes, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+  $protected = [System.Security.Cryptography.ProtectedData]::Protect($secretBytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
   [IO.File]::WriteAllBytes($stageSecret, $protected)
+  # Only the single-use enrollment lives in the extracted package. The device
+  # credential is generated by the server and protected on this Windows machine.
+  if ($EnrollmentFile) { Remove-Item -LiteralPath $EnrollmentFile -Force -ErrorAction Stop }
+  $EnrollmentCode = $null
+  $enrollBody = $null
+  $enrollment = $null
 
   $stageState = Join-Path $StagingDir 'browser-state'
   $stageQueue = Join-Path $StagingDir 'queue'
@@ -210,7 +329,7 @@ try {
   New-Item -ItemType Directory -Path $stageState, $stageQueue, $stageFailed, $stageLogs -Force | Out-Null
   $stageConfig = Join-Path $StagingDir 'config.json'
   [ordered]@{
-    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId
+    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId; windowsUser = $windowsUser
     secretFile = $stageSecret; stateDir = $stageState; queueDir = $stageQueue; failedDir = $stageFailed; logDir = $stageLogs
     sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 300; uploadIntervalSeconds = 300
     idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45
@@ -221,7 +340,11 @@ try {
     throw "O diagnostico de pre-instalacao do agente falhou."
   }
 
+  Backup-RegistryArtifacts
+  $LocalMutationStarted = $true
   Backup-And-StopTasks
+  Remove-LegacyPersistence
+  Remove-LegacyBrowserArtifacts
   Stop-RelatedProcesses
   if (Test-Path -LiteralPath $InstallDir) { Move-Item -LiteralPath $InstallDir -Destination $BackupDir -Force }
   Move-Item -LiteralPath $StagingDir -Destination $InstallDir -Force
@@ -237,7 +360,7 @@ try {
   $logDir = Join-Path $InstallDir 'logs'
 
   [ordered]@{
-    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId
+    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId; windowsUser = $windowsUser
     secretFile = $secretPath; stateDir = $stateDir; queueDir = $queueDir; failedDir = $failedDir; logDir = $logDir
     sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 300; uploadIntervalSeconds = 300
     idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45
@@ -252,6 +375,10 @@ try {
     nativeHostName = $HostName
     installedAt = (Get-Date).ToUniversalTime().ToString('o')
   } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path (Join-Path $InstallDir 'install-metadata.json') -Content $_ }
+
+  foreach ($tool in @('Uninstall-RealtimeHoursV2.ps1', 'Collect-RealtimeHoursV2Diagnostics.ps1')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $tool) -Destination (Join-Path $InstallDir $tool) -Force
+  }
 
   $hostManifest = Join-Path $InstallDir "$HostName.json"
   [ordered]@{
@@ -292,16 +419,36 @@ try {
   $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     [string]$_.ExecutablePath -ieq $exeTarget -and [string]$_.CommandLine -match '(?i)-mode\s+daemon'
   })
+  $remainingTasks = @(Get-RelatedTasks)
+  if ($remainingTasks.Count -ne 1 -or $remainingTasks[0].TaskName -ne $TaskName) {
+    throw "Era esperada exatamente uma tarefa V2; encontrado: $($remainingTasks.Count)."
+  }
   if ($processes.Count -ne 1) { throw "Era esperado exatamente um processo daemon, encontrado: $($processes.Count)." }
 
-  if (Test-Path -LiteralPath $BackupDir) { Remove-Item -LiteralPath $BackupDir -Recurse -Force }
+  # Backups are retained for the pilot so an operator can inspect recovery.
+  # Do not let nonessential cleanup turn a completed activation into a rollback.
+  $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CentralOperacionalRealtimeHoursV2'
+  New-Item -Path $uninstallKey -Force | Out-Null
+  New-ItemProperty -Path $uninstallKey -Name DisplayName -Value 'Central Operacional - Realtime Hours V2 (Homologacao)' -PropertyType String -Force | Out-Null
+  $uninstallCommand = '"{0}\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "{1}\Uninstall-RealtimeHoursV2.ps1"' -f $env:SystemRoot, $InstallDir
+  New-ItemProperty -Path $uninstallKey -Name UninstallString -Value $uninstallCommand -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value $ExpectedVersion -PropertyType String -Force | Out-Null
   Remove-Item -LiteralPath $TaskBackupDir -Recurse -Force -ErrorAction SilentlyContinue
-  $EnrollmentCode = $null
-  $secretBytes = $null
   Write-Host "Instalacao concluida. Reinicie Chrome e Edge para carregar a politica da extensao." -ForegroundColor Green
 }
 catch {
-  Write-Error $_
+  $installationError = $_
+  Write-Warning $installationError.Exception.Message
+  if ($LocalMutationStarted) {
+    try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; Stop-RelatedProcesses } catch {}
+  }
+  if ($Enrolled) {
+    try {
+      if ($CreatedFinalInstall) { Invoke-AgentMode -Exe $exeTarget -Mode 'rollback' -ConfigPath $configPath }
+      elseif ($stageConfig -and (Test-Path -LiteralPath $stageConfig -ErrorAction SilentlyContinue)) { Invoke-AgentMode -Exe $stageExe -Mode 'rollback' -ConfigPath $stageConfig }
+    } catch { Write-Warning "Rollback remoto pendente: $($_.Exception.Message). O cadastro temporario precisa ser revisado na Central." }
+  }
+  if (-not $LocalMutationStarted) { throw $installationError }
   try { Remove-V2Artifacts } catch {}
   try {
     Remove-ExtensionPolicyValue -BrowserPath 'HKLM:\SOFTWARE\Policies\Google\Chrome'
@@ -324,10 +471,17 @@ catch {
       }
     }
   }
+  try { Restore-RegistryArtifacts } catch { Write-Warning "Falha ao restaurar registro: $($_.Exception.Message)" }
+  try { Restore-LegacyPersistence } catch { Write-Warning "Falha ao restaurar inicio automatico: $($_.Exception.Message)" }
   Restore-Tasks
-  throw
+  throw $installationError
 }
 finally {
+  $EnrollmentCode = $null
+  $enrollment = $null
+  $enrollBody = $null
+  if ($null -ne $secretBytes) { [Array]::Clear($secretBytes, 0, $secretBytes.Length) }
+  $enroll = $null
   Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $versionOutput, $diagnosticOutput, $finalDiagnostic -Force -ErrorAction SilentlyContinue
 }
