@@ -9,6 +9,7 @@ on:
       - "src/app/api/cron/realtime-hours-v2-maintenance/**"
       - "prisma/migrations/*realtime_hours_v2*/**"
       - "scripts/create-realtime-hours-v2-enrollment.ts"
+      - "scripts/create-realtime-hours-v2-deployment.ts"
       - ".github/workflows/realtime-hours-v2.yml"
   push:
     branches:
@@ -21,6 +22,7 @@ on:
       - "src/app/api/cron/realtime-hours-v2-maintenance/**"
       - "prisma/migrations/*realtime_hours_v2*/**"
       - "scripts/create-realtime-hours-v2-enrollment.ts"
+      - "scripts/create-realtime-hours-v2-deployment.ts"
 
 jobs:
   agent:
@@ -68,11 +70,13 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Contract tests
-        run: npx tsx --test src/lib/realtime-hours-v2/auth.test.ts src/lib/realtime-hours-v2/contract.test.ts src/lib/realtime-hours-v2/request.test.ts src/lib/realtime-hours-v2/central-activity-bridge.test.ts src/lib/realtime-hours-v2/central-presence-bridge.test.ts
+        run: npx tsx --test src/lib/realtime-hours-v2/auth.test.ts src/lib/realtime-hours-v2/contract.test.ts src/lib/realtime-hours-v2/request.test.ts src/lib/realtime-hours-v2/enrollment.test.ts src/lib/realtime-hours-v2/central-activity-bridge.test.ts src/lib/realtime-hours-v2/central-presence-bridge.test.ts
       - name: Typecheck
         run: npm run typecheck
       - name: Lint V2 files
-        run: npx eslint src/lib/realtime-hours-v2 src/app/api/realtime-hours/v2 src/app/api/cron/realtime-hours-v2-maintenance scripts/create-realtime-hours-v2-enrollment.ts
+        run: npx eslint src/lib/realtime-hours-v2 src/app/api/realtime-hours/v2 src/app/api/cron/realtime-hours-v2-maintenance scripts/create-realtime-hours-v2-enrollment.ts scripts/create-realtime-hours-v2-deployment.ts
+      - name: Installer package tests
+        run: python3 -B agent/realtime-hours-v2/tests/test_package_one_click.py
       - name: Production build
         run: npm run build
 
@@ -83,6 +87,9 @@ jobs:
       - name: Windows PowerShell credential protection regression
         shell: powershell
         run: ./agent/realtime-hours-v2/tests/Test-WindowsCredentialProtection.ps1
+      - name: Fleet enrollment regression
+        shell: powershell
+        run: ./agent/realtime-hours-v2/tests/Test-FleetEnrollment.ps1
       - name: Parse PowerShell installers
         shell: pwsh
         run: |
@@ -91,7 +98,8 @@ jobs:
             "agent/realtime-hours-v2/installer/Uninstall-RealtimeHoursV2.ps1",
             "agent/realtime-hours-v2/installer/Start-RealtimeHoursV2.ps1",
             "agent/realtime-hours-v2/installer/Collect-RealtimeHoursV2Diagnostics.ps1",
-            "agent/realtime-hours-v2/installer/Windows-CredentialProtection.ps1"
+            "agent/realtime-hours-v2/installer/Windows-CredentialProtection.ps1",
+            "agent/realtime-hours-v2/installer/Enrollment-RealtimeHoursV2.ps1"
           )
           foreach ($file in $files) {
             $errors = $null

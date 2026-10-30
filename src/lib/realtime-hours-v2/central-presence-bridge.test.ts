@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { heartbeatPayloadSchema } from "./contract";
-import { centralPresenceRecord, publishPresenceToCentral } from "./central-presence-bridge";
+import { centralPresenceBridgeEnabled, centralPresenceRecord, publishPresenceToCentral } from "./central-presence-bridge";
 
 const device = { id: "pilot-device", hostname: "PILOT-PC", windowsUser: "pilot", wbLogin: null };
 const snapshot = heartbeatPayloadSchema.parse({ schemaVersion: 2, agentVersion: "1.0.0-alpha.1", capturedAt: "2026-10-29T19:00:00.000Z", hostname: "UNTRUSTED-PC", windowsUser: "other", wbLogin: "other-person", sessionState: "ACTIVE", idleSeconds: 45, activeProcessName: "chrome", currentType: "WEB", currentDomain: "example.com" });
 const enabled = { REALTIME_HOURS_V2_CENTRAL_BRIDGE_ENABLED: "true", REALTIME_HOURS_V2_CENTRAL_BRIDGE_DEVICE_IDS: device.id, REALTIME_HOURS_V2_PRESENCE_BRIDGE_ENABLED: "true", REALTIME_HOURS_AGENT_TOKEN: "test-server-credential" };
+
+test("fleet presence requires trusted permission and both delivery switches", () => {
+  assert.equal(centralPresenceBridgeEnabled("new-fleet-device", enabled, true), true);
+  assert.equal(centralPresenceBridgeEnabled("new-fleet-device", enabled, false), false);
+  assert.equal(centralPresenceBridgeEnabled("new-fleet-device", { ...enabled, REALTIME_HOURS_V2_PRESENCE_BRIDGE_ENABLED: "false" }, true), false);
+});
 
 test("presence uses enrolled identity and does not assign an unverified employee", () => {
   const row = centralPresenceRecord(device, snapshot);

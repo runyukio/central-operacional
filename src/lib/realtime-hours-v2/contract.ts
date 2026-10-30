@@ -15,6 +15,12 @@ export const enrollmentRequestSchema = z.object({
   agentVersion: boundedString(40)
 }).strict();
 
+export const deploymentTicketRequestSchema = z.object({
+  deploymentCode: z.string().regex(/^[A-Za-z0-9_-]{32}$/),
+  hostname: boundedString(120),
+  windowsUser: boundedString(120)
+}).strict();
+
 export const heartbeatPayloadSchema = z.object({
   schemaVersion: z.literal(2),
   agentVersion: boundedString(40),

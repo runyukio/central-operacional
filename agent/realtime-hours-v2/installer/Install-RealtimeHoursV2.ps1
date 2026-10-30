@@ -28,6 +28,7 @@ $RegistrySnapshot = @()
 $secretBytes = $null
 $enroll = $null
 $enrollBody = $null
+$enrollment = $null
 $Enrolled = $false
 $OldPersistence = @()
 $OldStartupBackup = $null
@@ -259,16 +260,17 @@ function Remove-V2Artifacts {
 
 Assert-Administrator
 . (Join-Path $PSScriptRoot 'Windows-CredentialProtection.ps1')
+. (Join-Path $PSScriptRoot 'Enrollment-RealtimeHoursV2.ps1')
 Initialize-WindowsCredentialProtection
 if (-not (Test-Path -LiteralPath $AgentExe -PathType Leaf)) { throw "AgentExe nao encontrado: $AgentExe" }
 if ($BaseUrl -notmatch '^https://') { throw "BaseUrl deve usar HTTPS." }
 if ($ExtensionUpdateUrl -notmatch '^https://') { throw "ExtensionUpdateUrl deve usar HTTPS." }
 if ($EnrollmentFile) {
   $enrollment = Get-Content -LiteralPath $EnrollmentFile -Raw | ConvertFrom-Json
-  if ([DateTimeOffset]::Parse([string]$enrollment.expiresAt) -le [DateTimeOffset]::UtcNow) { throw "Este pacote de instalacao expirou. Solicite um novo pacote." }
-  $EnrollmentCode = [string]$enrollment.enrollmentCode
+  Assert-RealtimeEnrollmentLifetime -Enrollment $enrollment
+  if ($enrollment.PSObject.Properties['enrollmentCode']) { $EnrollmentCode = [string]$enrollment.enrollmentCode }
 }
-if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw "EnrollmentCode e obrigatorio." }
+if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -and ($null -eq $enrollment -or -not $enrollment.PSObject.Properties['deploymentCode'])) { throw "Autorizacao de instalacao ausente." }
 
 $interactiveUser = Get-InteractiveUser
 $windowsUser = ($interactiveUser -split '\\')[-1].Trim().ToLowerInvariant()
@@ -290,13 +292,16 @@ try {
   Copy-Item -LiteralPath $AgentExe -Destination $stageExe -Force
   Copy-Item -LiteralPath $AgentExe -Destination $stageNative -Force
 
+  if ($null -ne $enrollment) {
+    $EnrollmentCode = Get-RealtimeOneTimeEnrollment -Enrollment $enrollment -BaseUrl $BaseUrl -ComputerName $env:COMPUTERNAME -WindowsUser $windowsUser
+  }
   $enrollBody = @{
     enrollmentCode = $EnrollmentCode
     hostname = $env:COMPUTERNAME
     windowsUser = $windowsUser
     agentVersion = $ExpectedVersion
   } | ConvertTo-Json -Compress
-  $enroll = Invoke-RestMethod -Method Post -Uri "$($BaseUrl.TrimEnd('/'))/api/realtime-hours/v2/enroll" -ContentType 'application/json' -Body $enrollBody -TimeoutSec 30
+  $enroll = Invoke-RealtimeEnrollmentRequest -Uri "$($BaseUrl.TrimEnd('/'))/api/realtime-hours/v2/enroll" -Body $enrollBody
   if (-not $enroll.success -or [string]::IsNullOrWhiteSpace([string]$enroll.deviceId) -or [string]::IsNullOrWhiteSpace([string]$enroll.deviceSecret)) {
     throw "A Central recusou o enrollment do dispositivo."
   }
@@ -473,6 +478,7 @@ catch {
 }
 finally {
   $EnrollmentCode = $null
+  $enrollment = $null
   $enrollBody = $null
   if ($null -ne $secretBytes) { [Array]::Clear($secretBytes, 0, $secretBytes.Length) }
   $enroll = $null

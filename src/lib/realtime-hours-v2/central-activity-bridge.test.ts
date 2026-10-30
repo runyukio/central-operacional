@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { publishActivityToCentral } from "./central-activity-bridge";
+import { centralActivityBridgeEnabled, publishActivityToCentral } from "./central-activity-bridge";
 
 const input = {
   device: { id: "device-pilot", hostname: "PILOT-PC", windowsUser: "pilot", wbLogin: null },
@@ -8,6 +8,12 @@ const input = {
   records: [{ eventId: "event-example-123456", sourceType: "WEB" as const, applicationName: "chrome", domain: "https://www.example.com/private?query=discarded", startedAt: "2026-10-29T18:59:00Z", endedAt: "2026-10-29T19:00:00Z", durationSeconds: 60 }]
 };
 const enabled = { REALTIME_HOURS_V2_CENTRAL_BRIDGE_ENABLED: "true", REALTIME_HOURS_V2_CENTRAL_BRIDGE_DEVICE_IDS: "device-pilot", REALTIME_HOURS_AGENT_TOKEN: "test-server-only-credential" };
+
+test("trusted deployment permission authorizes new devices while the global switch remains required", () => {
+  assert.equal(centralActivityBridgeEnabled("new-fleet-device", enabled, true), true);
+  assert.equal(centralActivityBridgeEnabled("new-fleet-device", enabled, false), false);
+  assert.equal(centralActivityBridgeEnabled("new-fleet-device", {}, true), false);
+});
 
 test("central delivery is disabled unless explicitly enabled for this device", async () => {
   const fetcher = (async () => { throw new Error("must not send"); }) as typeof fetch;

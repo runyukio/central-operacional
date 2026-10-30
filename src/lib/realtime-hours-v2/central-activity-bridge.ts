@@ -2,7 +2,7 @@ import { normalizeDomain, type ActivitySourceTypeV2 } from "@/lib/realtime-hours
 
 const centralEndpoint = "https://eastriverbrasil.com/api/realtime-hours/agent-activity";
 type BridgeEnvironment = Record<string, string | undefined>;
-type BridgeDevice = { id: string; hostname: string; windowsUser: string; wbLogin: string | null };
+type BridgeDevice = { id: string; hostname: string; windowsUser: string; wbLogin: string | null; centralDeliveryAllowed?: boolean };
 export type BridgeActivityRecord = {
   eventId: string;
   sourceType: ActivitySourceTypeV2;
@@ -13,9 +13,9 @@ export type BridgeActivityRecord = {
   durationSeconds: number;
 };
 
-export function centralActivityBridgeEnabled(deviceId: string, env: BridgeEnvironment = process.env) {
+export function centralActivityBridgeEnabled(deviceId: string, env: BridgeEnvironment = process.env, centralDeliveryAllowed = false) {
   return env.REALTIME_HOURS_V2_CENTRAL_BRIDGE_ENABLED === "true"
-    && (env.REALTIME_HOURS_V2_CENTRAL_BRIDGE_DEVICE_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean).includes(deviceId);
+    && (centralDeliveryAllowed || (env.REALTIME_HOURS_V2_CENTRAL_BRIDGE_DEVICE_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean).includes(deviceId));
 }
 
 export async function publishActivityToCentral(input: {
@@ -25,7 +25,7 @@ export async function publishActivityToCentral(input: {
   records: BridgeActivityRecord[];
 }, options: { env?: BridgeEnvironment; fetcher?: typeof fetch } = {}) {
   const env = options.env ?? process.env;
-  if (!centralActivityBridgeEnabled(input.device.id, env)) return { forwarded: false, records: 0 };
+  if (!centralActivityBridgeEnabled(input.device.id, env, input.device.centralDeliveryAllowed)) return { forwarded: false, records: 0 };
   const token = env.REALTIME_HOURS_AGENT_TOKEN?.trim();
   if (!token) throw new Error("Central activity delivery is not configured.");
   if (!input.records.length) return { forwarded: true, records: 0 };

@@ -3,10 +3,10 @@ import type { HeartbeatPayloadV2 } from "@/lib/realtime-hours-v2/contract";
 import { centralActivityBridgeEnabled } from "@/lib/realtime-hours-v2/central-activity-bridge";
 
 type Environment = Record<string, string | undefined>;
-type Device = { id: string; hostname: string; windowsUser: string; wbLogin: string | null };
+type Device = { id: string; hostname: string; windowsUser: string; wbLogin: string | null; centralDeliveryAllowed?: boolean };
 
-export function centralPresenceBridgeEnabled(deviceId: string, env: Environment = process.env) {
-  return env.REALTIME_HOURS_V2_PRESENCE_BRIDGE_ENABLED === "true" && centralActivityBridgeEnabled(deviceId, env);
+export function centralPresenceBridgeEnabled(deviceId: string, env: Environment = process.env, centralDeliveryAllowed = false) {
+  return env.REALTIME_HOURS_V2_PRESENCE_BRIDGE_ENABLED === "true" && centralActivityBridgeEnabled(deviceId, env, centralDeliveryAllowed);
 }
 
 export function centralPresenceRecord(device: Device, snapshot: HeartbeatPayloadV2) {
@@ -33,7 +33,7 @@ export function centralPresenceRecord(device: Device, snapshot: HeartbeatPayload
 
 export async function publishPresenceToCentral(input: { device: Device; snapshot: HeartbeatPayloadV2 }, options: { env?: Environment; fetcher?: typeof fetch } = {}) {
   const env = options.env ?? process.env;
-  if (!centralPresenceBridgeEnabled(input.device.id, env)) return { forwarded: false, records: 0 };
+  if (!centralPresenceBridgeEnabled(input.device.id, env, input.device.centralDeliveryAllowed)) return { forwarded: false, records: 0 };
   const token = env.REALTIME_HOURS_AGENT_TOKEN?.trim();
   if (!token) throw new Error("Central presence delivery is not configured.");
   const response = await (options.fetcher ?? fetch)("https://eastriverbrasil.com/api/realtime-hours/agent-snapshot", {
