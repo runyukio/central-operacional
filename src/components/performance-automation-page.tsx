@@ -1,5 +1,8 @@
 "use client";
 
+import { SupervisorSlaMetric } from "@/components/performance-supervisor-sla";
+import { formatSupervisorLatency, type SupervisorSla } from "@/lib/performance-supervisors-sla";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildForecastDisplay, forecastCycleLabel, type ForecastDisplayRow, type ForecastPayload } from "@/lib/volume-forecast-display";
 import dynamic from "next/dynamic";
@@ -215,6 +218,7 @@ type PerformanceAgentsResponse = {
 };
 
 type PerformanceSupervisorRow = TeamWorkMetric & {
+  sla: SupervisorSla;
   supervisorId: string;
   supervisor: string;
   teamSize: number;
@@ -1267,7 +1271,7 @@ function SupervisorsView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Consolidado por supervisor</h2>
-          <p className="mt-1 text-xs font-bold text-muted">Supervisores ativos: ABS, humor, AHT/CPD, qualidade, aderência e pontualidade. Clique no nome para abrir os agentes.</p>
+          <p className="mt-1 text-xs font-bold text-muted">Supervisores ativos: ABS, humor, AHT/CPD, latência/SLA, qualidade, aderência e pontualidade. Clique no nome para abrir os agentes.</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SlicerGroup label="Visão">
@@ -1304,6 +1308,14 @@ function SupervisorsView({
           <StatCard title="Qualidade do time" value={formatQualityPercent(summary?.quality)} helper={`${formatNumber(summary?.qualityTotal ?? 0)} caso(s)`} icon={ShieldCheck} tone="green" />
         </div>
 
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard title="Latência ADS" value={formatSupervisorLatency(summary?.sla.ads.minutes)} helper="hh:mm · Meta ≤ 02:00" icon={Clock} tone="blue" />
+          <StatCard title="Latência TNS Vídeo" value={formatSupervisorLatency(summary?.sla.tns.minutes)} helper="hh:mm · Filas de 15 min · Meta ≤ 00:15" icon={Clock} tone="blue" />
+          <StatCard title="SLA/FRT CEC · Normal" value={summary?.sla.cec.normalSla == null ? "Sem dados" : formatQualityPercent(summary.sla.cec.normalSla)} helper="FRT ≤ 24h · Meta ≥ 97%" icon={Target} tone="green" />
+          <StatCard title="SLA/FRT CEC · P0 + HM" value={summary?.sla.cec.urgentSla == null ? "Sem dados" : formatQualityPercent(summary.sla.cec.urgentSla)} helper="FRT ≤ 4h · Meta ≥ 97%" icon={Target} tone="green" />
+        </div>
+        <p className="text-xs text-muted">Latência: soma dos minutos dividida pelos submits com latência válida; TNS considera somente Vídeo de 15 minutos. CEC: percentual de primeiras respostas dentro do prazo, pela data de criação do ticket, como no Meu Espaço.</p>
+
         <details className="rounded-xl border border-border p-3 text-xs leading-6 text-muted"><summary className="cursor-pointer font-bold">Como ler horas e pontualidade</summary><p>Aderência: horas oficiais de cada dia, limitadas a 8h, divididas por 8h por dia com registro. Dias sem horas não viram zero; a cobertura aparece em cada linha. Horas extras não compensam déficits de outros dias.</p><p>Taxas: dias com atraso ou saída antecipada observados na Captura / dias com entrada ou saída observada. Considera qualquer diferença positiva em segundos, sem desconto de tolerância. Somente turnos encerrados entram nesses indicadores. Hora extra soma as horas oficiais acima do previsto, sem incluir excedentes em validação.</p></details>
         {punctuality.error ? <div role="alert" className="rounded-xl border border-amber-300 p-3 text-sm">Os resultados do time já estão disponíveis. A pontualidade não pôde ser carregada. <button type="button" onClick={punctuality.retry} className="font-bold underline">Tentar novamente</button></div> : null}
         {punctuality.data?.workWarnings.map((warning) => <p key={warning} role="status" className="p-3 text-sm text-amber-700">{warning}</p>)}
@@ -1318,7 +1330,7 @@ function SupervisorsView({
               {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1500px] text-left text-sm">
+              <table className="w-full min-w-[1700px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                   <tr>
                     <th className="sticky left-0 z-20 bg-slate-50 px-4 py-3">Supervisor</th>
@@ -1327,6 +1339,7 @@ function SupervisorsView({
                     <th className="px-3 py-3 text-right">Attrition</th>
                     <th className="px-3 py-3 text-right">Humor</th>
                     <th className="px-3 py-3 text-right">AHT / CPD</th>
+                    <th className="px-3 py-3 text-right">Latência / SLA</th>
                     <th className="px-4 py-3 text-right">Qualidade</th>
                     <th className="px-3 py-3 text-right">Aderência · 8h</th>
                     <th className="px-3 py-3 text-right">Taxa de atraso</th>
@@ -1350,13 +1363,14 @@ function SupervisorsView({
                             : `${formatNumber(row.submit)} output`}
                         />
                       </td>
+                      <td className="px-3 py-3 text-right"><SupervisorSlaMetric sla={row.sla} /></td>
                       <td className="px-4 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.quality)} detail={`${formatNumber(row.qualityTotal)} casos`} /></td>
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.adherenceRate)} detail={`${row.recordedDays}/${row.expectedDays} dias com horas`} /></td>
                       <SupervisorPunctualityCells metric={punctuality.data?.supervisors.find((work) => work.supervisorId === row.supervisorId)} loading={punctuality.loading} error={Boolean(punctuality.error)} />
                       <td className="px-3 py-3 text-right font-bold">{row.officialOvertimeHours == null ? "Sem dados" : formatMinutesToHHMM(row.officialOvertimeHours * 60)}</td>
                     </tr>
                   ))}
-                  {!payload?.supervisors.length ? <tr><td colSpan={11} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum supervisor encontrado para o período.</td></tr> : null}
+                  {!payload?.supervisors.length ? <tr><td colSpan={12} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum supervisor encontrado para o período.</td></tr> : null}
                 </tbody>
               </table>
             </div>

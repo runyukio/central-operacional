@@ -111,3 +111,75 @@ test("base dashboard and agent detail return official indicators without waiting
   assert.equal(total.supervisors[0].lateRate, null);
   assert.equal(captureRead.mock.callCount(), 0);
 });
+
+test("ADS latency weights supervisors by valid submits and preserves missing values", async (t) => {
+  const { employees } = fixture(t);
+  employees[1].supervisorId = "sup-2";
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    if (!sql.text.includes('AS "latencySubmits"')) return [];
+    assert.ok(sql.text.includes('p."latencyMinutesSum" IS NOT NULL'));
+    assert.ok(sql.text.includes('p."latencyMinutesSum" >= 0 AND p."submitNum" > 0'));
+    assert.ok(sql.values.some((value: unknown) => value instanceof Date && value.toISOString() === "2026-10-02T00:00:00.000Z"));
+    return [
+      { supervisorId: "sup", latencyMinutesSum: 1000, latencySubmits: 10 },
+      { supervisorId: "sup-2", latencyMinutesSum: 900, latencySubmits: 90 }
+    ];
+  });
+  const result = await getPerformanceSupervisorsDashboard(actor, { ...query, includePunctuality: false });
+  assert.equal(result.supervisors.find((row) => row.supervisorId === "sup")!.sla.ads.minutes, 100);
+  assert.equal(result.supervisors.find((row) => row.supervisorId === "sup-2")!.sla.ads.minutes, 10);
+  assert.equal(result.summary.sla.ads.minutes, 19);
+  assert.equal(result.summary.sla.ads.submits, 100);
+  assert.equal(result.summary.sla.tns.minutes, null);
+  assert.equal(result.summary.sla.cec.normalSla, null);
+});
+
+test("TNS latency accepts only VIDEO queues with a 15 minute SLA, as Meu Espaço", async (t) => {
+  const { employees } = fixture(t);
+  employees.forEach((employee) => { employee.lob.name = "VIDEO"; });
+  const { allPerformanceQueueIds, getPerformanceQueueMetadataById } = await import("./performance-service");
+  const eligible = allPerformanceQueueIds().filter((id) => {
+    const queue = getPerformanceQueueMetadataById(id);
+    return queue.lob === "VIDEO" && queue.slaTargetMinutes === 15;
+  });
+  assert.ok(eligible.length > 0);
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    if (!sql.text.includes('AS "latencySubmits"')) return [];
+    const queueValues = sql.values.filter((value: unknown) => typeof value === "string" && allPerformanceQueueIds().includes(value as string));
+    assert.deepEqual(queueValues.sort(), eligible.sort());
+    return [{ supervisorId: "sup", latencyMinutesSum: 1530, latencySubmits: 100 }];
+  });
+  const result = await getPerformanceSupervisorsDashboard(actor, { ...query, includePunctuality: false });
+  assert.equal(result.supervisors[0].sla.tns.minutes, 15.3);
+  assert.equal(result.summary.sla.tns.minutes, 15.3);
+  assert.equal(result.supervisors[0].sla.ads.minutes, null);
+  assert.deepEqual(result.supervisors[0].sla.lobs, ["TNS"]);
+});
+
+test("CEC FRT reuses ticket creation, successful imports, Normal and P0 + HM denominators", async (t) => {
+  const { employees } = fixture(t);
+  employees.forEach((employee) => { employee.lob.name = "CEC"; });
+  employees[1].supervisorId = "sup-2";
+  let frtReads = 0;
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    if (!sql.text.includes('FROM "PerformanceCecFrtRecord"')) return [];
+    frtReads++;
+    assert.ok(sql.text.includes('b.status=\'SUCCESS\''));
+    assert.ok(sql.text.includes('f."ticketCreatedDay">='));
+    assert.ok(sql.text.includes("f.priority IN ('P0','HM')"));
+    assert.ok(sql.text.includes('SUM(f."over1440")'));
+    assert.ok(sql.text.includes('SUM(f."over240")'));
+    assert.ok(sql.values.includes("a") && sql.values.includes("b"));
+    return [
+      { employeeId: "a", normalTotal: 10, normalOver: 10, urgentTotal: 10, urgentOver: 2 },
+      { employeeId: "b", normalTotal: 90, normalOver: 0, urgentTotal: 30, urgentOver: 2 }
+    ];
+  });
+  const result = await getPerformanceSupervisorsDashboard(actor, { ...query, includePunctuality: false });
+  assert.equal(frtReads, 1);
+  assert.equal(result.summary.sla.cec.normalSla, 90);
+  assert.equal(result.summary.sla.cec.urgentSla, 90);
+  assert.equal(result.supervisors.find((row) => row.supervisorId === "sup")!.sla.cec.normalSla, 0);
+  assert.equal(result.supervisors.find((row) => row.supervisorId === "sup-2")!.sla.cec.normalSla, 100);
+  assert.equal(result.summary.sla.ads.minutes, null);
+});

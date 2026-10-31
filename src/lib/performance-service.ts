@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { addCecFrt } from "@/lib/cec-frt";
+import { spaceLatencyQueueKind, spaceLobFamily } from "@/lib/meu-espaco-metrics";
+import { emptySupervisorSlaTotals, finishSupervisorSla } from "@/lib/performance-supervisors-sla";
 import { loadTeamWorkMetrics } from "@/lib/team-work-metrics-service";
 import { combineTeamWorkMetrics } from "@/lib/team-work-metrics";
 import { isActivePerformanceSupervisor, isVisiblePerformanceAgent } from "@/lib/performance-supervisors-scope";
@@ -1499,6 +1502,62 @@ async function getPerformanceAgentExportRowsByPeriod(
   return rows;
 }
 
+// Uses the same queue eligibility, valid latency rows and FRT loader as Meu Espaço.
+async function loadSupervisorSla(
+  employees: Array<{ id: string; supervisorId: string | null; lob: { name: string } | null }>,
+  period: Period
+) {
+  const totals = new Map<string, ReturnType<typeof emptySupervisorSlaTotals>>();
+  const summary = emptySupervisorSlaTotals();
+  const ensure = (id: string) => {
+    if (!totals.has(id)) totals.set(id, emptySupervisorSlaTotals());
+    return totals.get(id)!;
+  };
+  const production = ["ADS", "TNS"].map(async (family) => {
+    const ids = employees.filter((employee) => spaceLobFamily(employee.lob?.name ?? "") === family).map((employee) => employee.id);
+    const queues = allPerformanceQueueIds().filter((id) => {
+      const queue = getPerformanceQueueMetadataById(id);
+      return spaceLobFamily(queue.lob) === family && spaceLatencyQueueKind(queue) === "primary";
+    });
+    if (!ids.length || !queues.length) return;
+    const endExclusive = new Date(+period.end + 86400000);
+    const rows = await prisma.$queryRaw<Array<{ supervisorId: string; latencyMinutesSum: number; latencySubmits: number }>>(Prisma.sql`
+      SELECT e."supervisorId",
+        SUM(p."latencyMinutesSum")::double precision AS "latencyMinutesSum",
+        SUM(p."submitNum")::double precision AS "latencySubmits"
+      FROM "ProductionRecord" p
+      JOIN "EmployeeProfile" e ON e.id = p."employeeId"
+      WHERE p."employeeId" IN (${Prisma.join(ids)})
+        AND p."queueId" IN (${Prisma.join(queues)})
+        AND p."bzDay" >= ${period.start} AND p."bzDay" < ${endExclusive}
+        AND p."latencyMinutesSum" IS NOT NULL AND p."latencyMinutesSum" >= 0 AND p."submitNum" > 0
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `);
+    for (const row of rows) for (const target of [ensure(row.supervisorId), summary]) {
+      if (family === "ADS") {
+        target.adsMinutesSum += Number(row.latencyMinutesSum); target.adsSubmits += Number(row.latencySubmits);
+      } else {
+        target.tnsMinutesSum += Number(row.latencyMinutesSum); target.tnsSubmits += Number(row.latencySubmits);
+      }
+    }
+  });
+  const cec = async () => {
+    const ids = employees.filter((employee) => spaceLobFamily(employee.lob?.name ?? "") === "CEC").map((employee) => employee.id);
+    if (!ids.length) return;
+    const { loadCecFrtDays } = await import("@/lib/cec-frt-service");
+    const rows = await loadCecFrtDays(period.start, period.end, ids);
+    const supervisorByEmployee = new Map(employees.map((employee) => [employee.id, employee.supervisorId]));
+    for (const row of rows) {
+      const id = row.employeeId && supervisorByEmployee.get(row.employeeId);
+      if (id) { addCecFrt(ensure(id).cec, row); addCecFrt(summary.cec, row); }
+    }
+  };
+  await Promise.all([...production, cec()]);
+  return { summary: finishSupervisorSla(summary, employees.map((employee) => spaceLobFamily(employee.lob?.name ?? ""))),
+    bySupervisor: new Map([...totals].map(([id, value]) => [id, finishSupervisorSla(value, employees.filter((employee) => employee.supervisorId === id).map((employee) => spaceLobFamily(employee.lob?.name ?? "")))])) };
+}
+
 export async function getPerformanceSupervisorsDashboard(actor: Actor, query: PerformanceSupervisorsQuery = {}) {
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
@@ -1568,7 +1627,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     tnsKapQualityDailyRows,
     tnsLegacyQualityDailyRows,
     cecQualityRows,
-    workMetrics
+    workMetrics,
+    sla
   ] = await Promise.all([
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
@@ -1667,7 +1727,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
     `) : Promise.resolve([]),
-    loadTeamWorkMetrics(employees, period.start, period.end, new Date(), query.includePunctuality !== false)
+    loadTeamWorkMetrics(employees, period.start, period.end, new Date(), query.includePunctuality !== false),
+    loadSupervisorSla(employees, period)
   ]);
   const tnsQualityRows = mergeSupervisorQualityDailyRows(
     tnsKapQualityDailyRows,
@@ -1742,6 +1803,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     const isCecSupervisor = team.some((employee) => employee.lob?.name?.trim().toUpperCase() === "CEC");
     return {
       ...combineTeamWorkMetrics(team.map((employee) => workMetrics.byEmployee.get(employee.id))),
+      sla: sla.bySupervisor.get(supervisorId) ?? finishSupervisorSla(emptySupervisorSlaTotals(), team.map((employee) => spaceLobFamily(employee.lob?.name ?? ""))),
       supervisorId,
       supervisor: supervisorNames.get(supervisorId) ?? "Sem supervisor",
       teamSize: team.filter((employee) => supervisorEmployeeActiveAt(employee, period.end, "end")).length,
@@ -1808,6 +1870,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     workWarnings: workMetrics.warnings,
     summary: {
       ...combineTeamWorkMetrics(supervisors),
+      sla: sla.summary,
       supervisors: summary.supervisors,
       teamSize: summary.teamSize,
       planned: summary.planned,
@@ -1893,6 +1956,7 @@ function emptyPerformanceSupervisorsPayload(
       : null,
     workWarnings: [] as string[],
     summary: {
+      sla: finishSupervisorSla(emptySupervisorSlaTotals()),
       ...combineTeamWorkMetrics([]),
       supervisors: 0,
       teamSize: 0,
