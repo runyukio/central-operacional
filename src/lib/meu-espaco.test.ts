@@ -207,7 +207,7 @@ test("active directory checks operational and account statuses, deletion and sup
   for (const status of ["Desligado", "Inativo", "Desativado"]) assert.equal(isCurrentSpacePartner({ ...active, operationalStatus: status }), false);
 });
 
-test("current Meu Espaço excludes quality supervision and terminated partners before consulting any metrics", async (t) => {
+test("Meu Espaço keeps former partners only in read-only results, excluding them from the directory and pending items", async (t) => {
   t.mock.method(prisma.user, "findUnique", async () => ({ id: "u", email: "test@example.test", status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" }, employeeProfile: null }));
   t.mock.method(prisma.employeeProfile, "findMany", async () => [employee("sup", "manager", { roleTitle: "Supervisor" }),
     employee("hailene", "manager", { roleTitle: "Supervisor", wbLogin: "wb_hailene" }), employee(),
@@ -216,6 +216,7 @@ test("current Meu Espaço excludes quality supervision and terminated partners b
   const result = await getMeuEspacoScope(actor);
   assert.deepEqual(result.activeSupervisorIds, ["sup"]); assert.deepEqual(result.employeeIds, ["agent"]);
   assert.equal(result.profiles.some((p) => p.id === "terminated"), false);
+  assert.deepEqual(result.resultEmployees.map((p) => p.id), ["agent", "terminated"]);
   await assert.rejects(() => getMeuEspacoScope(actor, "hailene"), /Supervisor ativo/);
 });
 
@@ -449,4 +450,68 @@ test("gestor recebe ação para faltas, horas e excedentes no Meu Espaço", asyn
   const result = await listSpacePending(manager, new URLSearchParams());
   assert.deepEqual(result.data.map((item) => [item.kind, item.canRespond]), [["absence", true], ["hours", true], ["overtime", true]]);
   await assert.rejects(() => respondSpacePending({ ...manager, canRespond: false }, "absence", "absence", { justification: "texto" }), (error: any) => error.status === 403);
+});
+
+test("former partner output, AHT, quality, latency and ABS remain in team/daily results but not the list", async (t) => {
+  const active = employee(), former = employee("former", "sup", { operationalStatus: "Desligado", user: { status: "INACTIVE", deletedAt: null } });
+  const date = new Date("2026-10-01");
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    if (sql.text.includes('FROM "ProductionRecord"')) {
+      assert.ok(sql.values.includes("agent") && sql.values.includes("former"));
+      return [
+        { employeeId: "agent", day: date, output: 100, ahtSubmit: 100, duration: 1000, active: true, latencyMinutesSum: 1000, latencySubmits: 100 },
+        { employeeId: "former", day: date, output: 300, ahtSubmit: 300, duration: 9000, active: true, latencyMinutesSum: 9000, latencySubmits: 300 }
+      ];
+    }
+    if (sql.text.includes('FROM "QualityRecord"')) return [
+      { employeeId: "agent", qualityDay: date, correct: 1, total: 10 },
+      { employeeId: "former", qualityDay: date, correct: 90, total: 100 }
+    ];
+    return [];
+  });
+  t.mock.method(prisma.schedule, "groupBy", async () => [
+    { employeeId: "agent", date, status: "PRESENTE", _count: { _all: 2 }, _max: {} },
+    { employeeId: "former", date, status: "FALTA", _count: { _all: 1 }, _max: {} }
+  ]);
+  const result = await getSpaceResults(scope({ employees: [active], resultEmployees: [active, former] }), new URLSearchParams("startDate=2026-10-01&endDate=2026-10-30"));
+  const group = result.groups[0];
+  assert.equal(group.teamSize, 1); assert.equal(group.historicalPartners, 1); assert.equal(group.coverage.productionPartners, 2);
+  assert.equal(group.metric.production, 400); assert.equal(group.metric.ahtSeconds, 25); assert.equal(group.metric.latencyMinutes, 25);
+  assert.equal(group.metric.quality, 82.73); assert.equal(group.metric.abs, 33.3);
+  assert.equal(group.daily[0].metric.production, 400); assert.equal(result.supervisors[0].groups[0].metric.latencyMinutes, 25);
+  assert.deepEqual(result.partners.map((partner) => partner.id), ["agent"]);
+});
+
+test("former CEC partner contributes tickets, CPD and both FRT priorities to weighted results", async (t) => {
+  const active = employee("agent", "sup", { lob: { name: "CEC" } });
+  const former = employee("former", "sup", { lob: { name: "CEC" }, operationalStatus: "Desligado" });
+  const date = new Date("2026-10-01");
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    if (sql.text.includes('FROM "PerformanceCecCpdRecord"')) return [
+      { employeeId: "agent", day: date, output: 10, active: true, ahtSubmit: 0, duration: 0 },
+      { employeeId: "former", day: date, output: 90, active: true, ahtSubmit: 0, duration: 0 }
+    ];
+    if (sql.text.includes('FROM "PerformanceCecFrtRecord"')) return [
+      { employeeId: "agent", day: date, normalTotal: 10, normalOver: 10, urgentTotal: 10, urgentOver: 2 },
+      { employeeId: "former", day: date, normalTotal: 90, normalOver: 0, urgentTotal: 30, urgentOver: 2 }
+    ];
+    return [];
+  });
+  t.mock.method(prisma.schedule, "groupBy", async () => []);
+  const result = await getSpaceResults(scope({ employees: [active], resultEmployees: [active, former] }), new URLSearchParams("startDate=2026-10-01&endDate=2026-10-30"));
+  assert.equal(result.groups[0].metric.production, 100); assert.equal(result.groups[0].metric.cpd, 50);
+  assert.equal(result.groups[0].metric.cecFrt?.normalSla, 90); assert.equal(result.groups[0].metric.cecFrt?.urgentSla, 90);
+  assert.deepEqual(result.partners.map((partner) => partner.id), ["agent"]);
+});
+
+test("coverage counts a former partner with only nonproductive schedule records, without creating absences", async (t) => {
+  const active = employee(), former = employee("former", "sup", { operationalStatus: "Desligado" });
+  t.mock.method(prisma, "$queryRaw", async () => []);
+  t.mock.method(prisma.schedule, "groupBy", async () => [
+    { employeeId: "former", date: new Date("2026-10-01"), status: "FOLGA", _count: { _all: 1 }, _max: {} }
+  ]);
+  const result = await getSpaceResults(scope({ employees: [active], resultEmployees: [active, former] }), new URLSearchParams("startDate=2026-10-01&endDate=2026-10-30"));
+  assert.equal(result.groups[0].historicalPartners, 1); assert.equal(result.groups[0].coverage.schedulePartners, 1);
+  assert.equal(result.groups[0].metric.planned, 0); assert.equal(result.groups[0].metric.abs, null);
+  assert.equal(result.partners.length, 1);
 });

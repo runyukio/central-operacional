@@ -3133,6 +3133,76 @@ async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: 
   });
 }
 
+const centralAttendanceScheduleSelect = {
+  id: true,
+  status: true,
+  shift: { select: { name: true } },
+  supervisorId: true,
+  employee: {
+    select: {
+      id: true,
+      fullName: true,
+      wbLogin: true,
+      roleTitle: true,
+      supervisorId: true,
+      shift: { select: { name: true } },
+      lob: { select: { name: true } }
+    }
+  }
+} satisfies Prisma.ScheduleSelect;
+type CentralAttendanceSchedule = Prisma.ScheduleGetPayload<{ select: typeof centralAttendanceScheduleSelect }>;
+
+async function centralAttendanceSupervisorContext(schedules: CentralAttendanceSchedule[]) {
+  const absenceScheduleIds = schedules.filter((schedule) => isAbsenceStatus(schedule.status)).map((schedule) => schedule.id);
+  const attendanceRecords = await latestAttendanceRecordsForSchedules(absenceScheduleIds);
+  const attendanceRecordByScheduleId = new Map<string, LatestAttendanceRecordBySchedule>();
+  for (const record of attendanceRecords) if (record.scheduleId && !attendanceRecordByScheduleId.has(record.scheduleId)) attendanceRecordByScheduleId.set(record.scheduleId, record);
+  const [supervisorNameById, justifiedByNameById] = await Promise.all([
+    scheduleSupervisorNames(schedules), userNameMap(attendanceRecords.map((record) => record.justifiedById))
+  ]);
+  return { absenceScheduleIds, attendanceRecords, attendanceRecordByScheduleId, supervisorNameById, justifiedByNameById };
+}
+
+function centralAttendanceBySupervisor(schedules: CentralAttendanceSchedule[], context: Awaited<ReturnType<typeof centralAttendanceSupervisorContext>>) {
+  const { attendanceRecordByScheduleId, supervisorNameById, justifiedByNameById } = context;
+  const statusFor = (schedule: CentralAttendanceSchedule) => normalizeOperationalStatus(schedule.status);
+  return schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
+    const status = statusFor(schedule);
+    const record = attendanceRecordByScheduleId.get(schedule.id);
+    const supervisorName = isAbsenceStatus(status)
+      ? resolveAbsSupervisorName(schedule, record, supervisorNameById, justifiedByNameById)
+      : resolveSupervisorName(schedule, supervisorNameById);
+    acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
+    if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
+    if (isPresentStatus(status)) acc[supervisorName].present += 1;
+    if (isAbsenceStatus(status)) {
+      acc[supervisorName].absent += 1;
+      if (isPendingJustificationForSchedule(schedule.status, record)) {
+        acc[supervisorName].unjustified += 1;
+      } else if (isJustifiedAbsenceForSchedule(schedule.status, record)) {
+        acc[supervisorName].justified += 1;
+      } else if (isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record)) {
+        acc[supervisorName].classifiedUnjustified += 1;
+      }
+    }
+    acc[supervisorName].absRate = calculateAbsenceRate(acc[supervisorName].planned, acc[supervisorName].absent);
+    return acc;
+  }, {});
+}
+
+// Read-only metric source shared with Performance. Employment and account status
+// never remove a historical scheduled day from the Central's ABS calculation.
+export async function loadCentralSupervisorAbs(period: { start: Date; end: Date }) {
+  const schedules = (await prisma.schedule.findMany({
+    where: { deletedAt: null, date: { gte: period.start, lte: period.end } },
+    select: centralAttendanceScheduleSelect
+  })).filter((schedule) => isAgentJobTitle(schedule.employee.roleTitle));
+  const context = await centralAttendanceSupervisorContext(schedules);
+  const planned = schedules.filter((schedule) => isScheduledStatus(schedule.status)).length;
+  const absences = schedules.filter((schedule) => isAbsenceStatus(schedule.status)).length;
+  return { planned, absences, absRate: calculateAbsenceRate(planned, absences), bySupervisor: centralAttendanceBySupervisor(schedules, context) };
+}
+
 async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeriod>, filters: AttendanceSummaryFilters = {}) {
   const startedAt = Date.now();
   const shiftFilter = shiftCategoryName(filters.shift);
@@ -3178,34 +3248,11 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       ...(scheduleAndFilters.length ? { AND: scheduleAndFilters } : {}),
       employee: employeeWhere
     },
-    select: {
-      id: true,
-      status: true,
-      shift: { select: { name: true } },
-      supervisorId: true,
-      employee: {
-        select: {
-          id: true,
-          fullName: true,
-          wbLogin: true,
-          roleTitle: true,
-          supervisorId: true,
-          shift: { select: { name: true } },
-          lob: { select: { name: true } }
-        }
-      }
-    }
+    select: centralAttendanceScheduleSelect
   });
   const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
-  const absenceScheduleIds = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).map((schedule) => schedule.id);
-  const attendanceRecords = await latestAttendanceRecordsForSchedules(absenceScheduleIds);
-  const attendanceRecordByScheduleId = new Map<string, (typeof attendanceRecords)[number]>();
-  attendanceRecords.forEach((record) => {
-    if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
-    attendanceRecordByScheduleId.set(record.scheduleId, record);
-  });
-  const supervisorNameById = await scheduleSupervisorNames(schedules);
-  const justifiedByNameById = await userNameMap(attendanceRecords.map((record) => record.justifiedById));
+  const context = await centralAttendanceSupervisorContext(schedules);
+  const { absenceScheduleIds, attendanceRecords, attendanceRecordByScheduleId, supervisorNameById } = context;
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
   const absent = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).length;
@@ -3229,28 +3276,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     acc[key] = (acc[key] ?? 0) + 1;
     return acc;
   }, {});
-  const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
-    const status = statusFor(schedule);
-    const record = attendanceRecordByScheduleId.get(schedule.id);
-    const supervisorName = isAbsenceStatus(status)
-      ? resolveAbsSupervisorName(schedule, record, supervisorNameById, justifiedByNameById)
-      : resolveSupervisorName(schedule, supervisorNameById);
-    acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
-    if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
-    if (isPresentStatus(status)) acc[supervisorName].present += 1;
-    if (isAbsenceStatus(status)) {
-      acc[supervisorName].absent += 1;
-      if (isPendingJustificationForSchedule(schedule.status, record)) {
-        acc[supervisorName].unjustified += 1;
-      } else if (isJustifiedAbsenceForSchedule(schedule.status, record)) {
-        acc[supervisorName].justified += 1;
-      } else if (isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record)) {
-        acc[supervisorName].classifiedUnjustified += 1;
-      }
-    }
-    acc[supervisorName].absRate = calculateAbsenceRate(acc[supervisorName].planned, acc[supervisorName].absent);
-    return acc;
-  }, {});
+  const bySupervisor = centralAttendanceBySupervisor(schedules, context);
   const byLob = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
     const lobName = schedule.employee.lob?.name?.trim() || "Sem LOB";
     const status = statusFor(schedule);

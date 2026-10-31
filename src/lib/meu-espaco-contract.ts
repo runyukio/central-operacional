@@ -29,9 +29,9 @@ export type SpaceMetric = {
 export type SpaceResults = {
   period: SpacePeriod;
   supervisors: Array<{ id: string; name: string; groups: Array<{ lob: string; metric: SpaceMetric }> }>;
-  groups: Array<{ lob: string; teamSize: number; metric: SpaceMetric; daily: Array<{ date: string; metric: SpaceMetric }>;
+  groups: Array<{ lob: string; teamSize: number; historicalPartners?: number; metric: SpaceMetric; daily: Array<{ date: string; metric: SpaceMetric }>;
     coverage: { frtPartners?: number; frtLatest?: string | null; productionPartners: number; qualityPartners: number; schedulePartners: number; productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; updatedAt: string | null } }>;
-  partners: Array<{ id: string; name: string; wbLogin: string; skill: string; lob: string; metric: SpaceMetric }>;
+  partners: Array<{ id: string; hasRecords?: boolean; name: string; wbLogin: string; skill: string; lob: string; metric: SpaceMetric }>;
 };
 export type SpaceHours = {
   period: SpacePeriod;

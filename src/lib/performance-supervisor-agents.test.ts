@@ -10,15 +10,18 @@ const actor = { email: "test@example.test", name: "Test", role: "ADMIN" as const
 function fixture(t: TestContext, role = "ADMIN", supervisorPatch: Record<string, unknown> = {}) {
   const employees = ["a", "b"].map((id) => ({ id, fullName: `Agente ${id}`, wbLogin: `wb_${id}`, roleTitle: "Agente", skill: "Material Queues",
     operationalStatus: "Ativo", admissionDate: new Date("2025-01-01"), terminationDate: null, supervisorId: "sup", supervisor: { id: "sup", fullName: "Supervisor de teste", operationalStatus: "Ativo", deletedAt: null, user: { status: "ACTIVE", deletedAt: null }, ...supervisorPatch }, lob: { name: "ADS" } }));
-  const schedules = employees.map((employee) => ({ id: `slot-${employee.id}`, employeeId: employee.id, date: day, status: "PRESENTE", startsAt: "08:00", endsAt: "17:00", shift: { name: "Manhã", startsAt: "08:00", endsAt: "17:00" } }));
+  const schedules = employees.map((employee) => ({ id: `slot-${employee.id}`, employeeId: employee.id, date: day, status: "PRESENTE", startsAt: "08:00", endsAt: "17:00", supervisorId: employee.supervisorId, employee,
+    shift: { name: "Manhã", startsAt: "08:00", endsAt: "17:00" } }));
   const profile = mockPrismaDelegate(t, "employeeProfile", { findMany: async (args: any) => {
+    if (args.select?.fullName && !args.select?.roleTitle) return [{ id: "sup", fullName: "Supervisor de teste" }, { id: "sup-2", fullName: "Outro supervisor" }];
     assert.equal(args.where.deletedAt, null);
     return typeof args.where.supervisorId === "string" && args.where.supervisorId !== "sup" ? [] : employees;
   } });
-  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "user", role: { name: role }, status: "ACTIVE", deletedAt: null, employeeProfile: null }) });
+  mockPrismaDelegate(t, "auditLog", { findMany: async () => [] });
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "user", role: { name: role }, status: "ACTIVE", deletedAt: null, employeeProfile: null }), findMany: async () => [] });
   mockPrismaDelegate(t, "productionRecord", { aggregate: async () => ({ _min: { bzDay: day }, _max: { bzDay: day } }) });
   mockPrismaDelegate(t, "schedule", { findMany: async () => schedules,
-    groupBy: async () => schedules.map((row) => ({ employeeId: row.employeeId, date: day, status: row.status, _count: { _all: 1 }, _max: { updatedAt: day } })) });
+    groupBy: async (args: any) => schedules.filter((row) => args.where.employeeId.in.includes(row.employeeId)).map((row) => ({ employeeId: row.employeeId, date: day, status: row.status, _count: { _all: 1 }, _max: { updatedAt: day } })) });
   mockPrismaDelegate(t, "workHourRecord", { findMany: async () => schedules.map((row, index) => ({ employeeId: row.employeeId, date: day, scheduleId: row.id, effectiveHours: index ? 10 : 4, plannedHours: 8 })) });
   mockPrismaDelegate(t, "employeeMoodRecord", { findMany: async () => [{ employeeId: "a", moodScore: 4 }],
     groupBy: async (args: any) => { assert.deepEqual(args.where.employeeId.in, ["a", "b"]); return [{ employeeId: "a", _sum: { moodScore: 4 }, _count: { _all: 1 } }]; } });
@@ -36,7 +39,7 @@ function fixture(t: TestContext, role = "ADMIN", supervisorPatch: Record<string,
       : [{ supervisorId: "sup", correct: 19, total: 20 }];
     return [];
   });
-  return { profile, captureRead, employees };
+  return { profile, captureRead, employees, schedules };
 }
 
 test("supervisors return weighted adherence, capture rates and official overtime together", async (t) => {
@@ -182,4 +185,35 @@ test("CEC FRT reuses ticket creation, successful imports, Normal and P0 + HM den
   assert.equal(result.supervisors.find((row) => row.supervisorId === "sup")!.sla.cec.normalSla, 0);
   assert.equal(result.supervisors.find((row) => row.supervisorId === "sup-2")!.sla.cec.normalSla, 100);
   assert.equal(result.summary.sla.ads.minutes, null);
+});
+
+test("ABS reconciles with the Central's schedule and justification owner, retaining former partners", async (t) => {
+  const { employees, schedules } = fixture(t);
+  employees[1].operationalStatus = "Desligado";
+  const original = schedules[0];
+  schedules.splice(0, schedules.length,
+    { ...original, id: "present", status: "PRESENTE", supervisorId: "sup-2" },
+    { ...original, id: "former-absence", employeeId: "b", employee: employees[1], status: "FALTA", supervisorId: "sup" },
+    { ...original, id: "justified", status: "FALTA_JUSTIFICADA", supervisorId: "sup-2" },
+    { ...original, id: "archived", employeeId: "archived", status: "FALTA", supervisorId: "sup", employee: { ...employees[1], id: "archived", supervisorId: "another-team" } },
+    { ...original, id: "staff", employeeId: "staff", status: "FALTA", supervisorId: "sup", employee: { ...employees[1], id: "staff", roleTitle: "Supervisor" } }
+  );
+  t.mock.method(prisma.user, "findMany", async () => [
+    { id: "justifier-1", name: "Supervisor de teste", employeeProfile: { fullName: "Supervisor de teste", roleTitle: "Supervisor" } },
+    { id: "justifier-2", name: "Outro supervisor", employeeProfile: { fullName: "Outro supervisor", roleTitle: "Supervisor" } }
+  ]);
+  const read = prisma.$queryRaw.bind(prisma);
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => sql.text.includes('FROM "AttendanceRecord"') ? [
+    { scheduleId: "former-absence", status: "FALTA_JUSTIFICADA", isJustified: true, absenceReason: "Problema de saúde", justifiedById: "justifier-2" },
+    { scheduleId: "justified", status: "FALTA_JUSTIFICADA", isJustified: true, absenceReason: "Problema de saúde", justifiedById: "justifier-1" }
+  ] : read(sql));
+  const { loadCentralSupervisorAbs } = await import("./schedule-service");
+  const central = await loadCentralSupervisorAbs({ start: day, end: day });
+  const result = await getPerformanceSupervisorsDashboard(actor, { ...query, includePunctuality: false });
+  const row = result.supervisors[0], expected = central.bySupervisor[row.supervisor];
+  assert.equal(row.planned, expected.planned); assert.equal(row.absences, expected.absent); assert.equal(row.absRate, expected.absRate);
+  assert.equal(row.planned, 2); assert.equal(row.absences, 2); assert.equal(row.absRate, 100);
+  assert.equal(central.bySupervisor["Outro supervisor"].absent, 1);
+  assert.equal(result.summary.planned, 4); assert.equal(result.summary.absences, 3); assert.equal(result.summary.absRate, 75);
+  assert.equal((await getPerformanceSupervisorAgentsDashboard(actor, "sup", { ...query, includePunctuality: false })).agents.some((agent) => agent.id === "b"), false);
 });
