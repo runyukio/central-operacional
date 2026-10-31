@@ -24,15 +24,20 @@ export async function getMeuEspacoScope(actor: Actor, requestedSupervisor?: stri
   const role = normalizeRole(user.role.name);
   const broad = role !== "SUPERVISOR";
   // Includes transferred partners only when they have hours still assigned to the selected owner.
-  const profiles = (await prisma.employeeProfile.findMany({
+  const resultProfiles = await prisma.employeeProfile.findMany({
     where: { deletedAt: null, ...(supervisorId ? { OR: [{ supervisorId }, { id: supervisorId }, { adherenceJustifications: { some: { supervisorId } } }, { overtimeReviews: { some: { supervisorId } } }] } : {}) },
     select: profileSelect
-  })).filter(isCurrentSpacePartner);
+  });
+  const profiles = resultProfiles.filter(isCurrentSpacePartner);
   const activeSupervisorIds = profiles.filter(isActiveSpaceSupervisor).map((profile) => profile.id);
   if (supervisorId && !activeSupervisorIds.includes(supervisorId)) throw new MeuEspacoError("Supervisor ativo não encontrado. Atualize a lista.", 404);
   const employees = profiles.filter((employee) => isAgentJobTitle(employee.roleTitle) && employee.supervisorId !== null
     && activeSupervisorIds.includes(employee.supervisorId) && (!supervisorId || employee.supervisorId === supervisorId));
+  // Read-only results retain former partners; current profiles still govern
+  // the directory, pending items, permissions and future-hour planning.
+  const resultEmployees = resultProfiles.filter((employee) => isAgentJobTitle(employee.roleTitle) && employee.supervisorId !== null
+    && activeSupervisorIds.includes(employee.supervisorId) && (!supervisorId || employee.supervisorId === supervisorId));
   const employeeIds = employees.map((employee) => employee.id);
-  return { user, actor: { email: user.email, name: user.name, role } as Actor, role, broad, supervisorId, activeSupervisorIds, employees, employeeIds, profiles, canRespond: canRespondMeuEspaco(permissionUser) };
+  return { user, actor: { email: user.email, name: user.name, role } as Actor, role, broad, supervisorId, activeSupervisorIds, employees, resultEmployees, employeeIds, profiles, canRespond: canRespondMeuEspaco(permissionUser) };
 }
 export type MeuEspacoScope = Awaited<ReturnType<typeof getMeuEspacoScope>>;

@@ -18,7 +18,17 @@ const iso = (date: Date) => date.toISOString().slice(0, 10);
 type ResultsEmployee = Pick<MeuEspacoScope["employees"][number], "id" | "fullName" | "wbLogin" | "skill" | "lob" | "supervisorId" | "supervisor">;
 
 export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchParams): Promise<SpaceResults> {
-  return loadTeamPerformanceResults(scope.employees, spacePeriod(query), query.get("lob"));
+  const results = await loadTeamPerformanceResults(scope.resultEmployees ?? scope.employees, spacePeriod(query), query.get("lob"));
+  const currentIds = new Set(scope.employees.map((employee) => employee.id));
+  const historical = results.partners.filter((partner) => !currentIds.has(partner.id) && (partner.hasRecords ?? (
+    partner.metric.production != null || partner.metric.qualitySamples > 0 || partner.metric.planned > 0
+    || (partner.metric.cecFrt?.normalTotal ?? 0) + (partner.metric.cecFrt?.urgentTotal ?? 0) > 0
+  )));
+  return { ...results, partners: results.partners.filter((partner) => currentIds.has(partner.id)),
+    groups: results.groups.map((group) => ({ ...group,
+      teamSize: scope.employees.filter((employee) => spaceLobFamily(employee.lob.name) === group.lob).length,
+      historicalPartners: historical.filter((partner) => partner.lob === group.lob).length
+    })).filter((group) => group.teamSize > 0 || group.historicalPartners > 0) };
 }
 
 // Shared calculations; callers resolve their active user and authorized employee IDs.
@@ -91,7 +101,9 @@ export async function loadTeamPerformanceResults(sourceEmployees: ResultsEmploye
     if (!groups.has(lob)) groups.set(lob, { metric: emptySpaceMetric(), daily: new Map(), employees: 0, productionPartners: new Set(), qualityPartners: new Set(), schedulePartners: new Set(), frtPartners: new Set(), productionLatest: null, qualityLatest: null, scheduleLatest: null, frtLatest: null, updatedAt: null });
     groups.get(lob)!.employees++;
   }
+  const partnersWithRecords = new Set<string>();
   function targets(employeeId: string, date: string, updatedAt: Date | null, source: "production" | "quality" | "schedule" | "frt") {
+    partnersWithRecords.add(employeeId);
     const employee = byEmployee.get(employeeId)!;
     const group = groups.get(spaceLobFamily(employee.employee.lob.name))!;
     if (!group.daily.has(date)) group.daily.set(date, emptySpaceMetric());
@@ -135,7 +147,7 @@ export async function loadTeamPerformanceResults(sourceEmployees: ResultsEmploye
     partners: [...byEmployee.values()].map(({ employee, metric }) => {
       const finished = finishSpaceMetric(metric, spaceLobFamily(employee.lob.name));
       if (!isSpaceMaterialSkill(employee.skill)) finished.targets = finished.targets?.filter((target) => target.id !== "materialDaily");
-      return { id: employee.id, name: employee.fullName, wbLogin: employee.wbLogin,
+      return { id: employee.id, hasRecords: partnersWithRecords.has(employee.id), name: employee.fullName, wbLogin: employee.wbLogin,
         skill: employee.skill || "Sem skill principal", lob: spaceLobFamily(employee.lob.name), metric: finished };
     }).sort((a,b) => a.name.localeCompare(b.name, "pt-BR")) };
 }

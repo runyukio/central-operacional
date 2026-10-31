@@ -1619,7 +1619,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     return isSupervisorAhtQueue(metadata);
   });
   const [
-    schedules,
+    attendance,
     moods,
     ahtRows,
     cecCpdRows,
@@ -1630,10 +1630,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     workMetrics,
     sla
   ] = await Promise.all([
-    prisma.schedule.findMany({
-      where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
-      select: { employeeId: true, status: true }
-    }),
+    import("@/lib/schedule-service").then(({ loadCentralSupervisorAbs }) => loadCentralSupervisorAbs(period)),
     prisma.employeeMoodRecord.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end } },
       select: { employeeId: true, moodScore: true }
@@ -1737,8 +1734,6 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
 
   const supervisorByEmployee = new Map(employees.map((employee) => [employee.id, employee.supervisorId!]));
   const aggregates = new Map<string, {
-    planned: number;
-    absences: number;
     moodTotal: number;
     moodResponses: number;
     submit: number;
@@ -1750,8 +1745,6 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
   }>();
   const ensureAggregate = (supervisorId: string) => {
     const aggregate = aggregates.get(supervisorId) ?? {
-      planned: 0,
-      absences: 0,
       moodTotal: 0,
       moodResponses: 0,
       submit: 0,
@@ -1765,13 +1758,6 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     return aggregate;
   };
 
-  for (const schedule of schedules) {
-    const supervisorId = supervisorByEmployee.get(schedule.employeeId);
-    if (!supervisorId) continue;
-    const aggregate = ensureAggregate(supervisorId);
-    if (isScheduledStatus(schedule.status)) aggregate.planned += 1;
-    if (isAbsenceStatus(schedule.status)) aggregate.absences += 1;
-  }
   for (const mood of moods) {
     const supervisorId = supervisorByEmployee.get(mood.employeeId);
     if (!supervisorId) continue;
@@ -1800,16 +1786,18 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
   const supervisors = Array.from(employeesBySupervisor.entries()).map(([supervisorId, team]) => {
     const aggregate = ensureAggregate(supervisorId);
     const attrition = supervisorAttrition(team, period);
+    const supervisor = supervisorNames.get(supervisorId) ?? "Sem supervisor";
+    const abs = attendance.bySupervisor[supervisor];
     const isCecSupervisor = team.some((employee) => employee.lob?.name?.trim().toUpperCase() === "CEC");
     return {
       ...combineTeamWorkMetrics(team.map((employee) => workMetrics.byEmployee.get(employee.id))),
       sla: sla.bySupervisor.get(supervisorId) ?? finishSupervisorSla(emptySupervisorSlaTotals(), team.map((employee) => spaceLobFamily(employee.lob?.name ?? ""))),
       supervisorId,
-      supervisor: supervisorNames.get(supervisorId) ?? "Sem supervisor",
+      supervisor,
       teamSize: team.filter((employee) => supervisorEmployeeActiveAt(employee, period.end, "end")).length,
-      planned: aggregate.planned,
-      absences: aggregate.absences,
-      absRate: calculateAbsenceRate(aggregate.planned, aggregate.absences),
+      planned: abs?.planned ?? 0,
+      absences: abs?.absent ?? 0,
+      absRate: abs?.absRate ?? 0,
       terminations: attrition.terminations,
       hcAverage: attrition.hcAverage,
       attritionRate: attrition.rate,
@@ -1873,9 +1861,9 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       sla: sla.summary,
       supervisors: summary.supervisors,
       teamSize: summary.teamSize,
-      planned: summary.planned,
-      absences: summary.absences,
-      absRate: calculateAbsenceRate(summary.planned, summary.absences),
+      planned: attendance.planned,
+      absences: attendance.absences,
+      absRate: attendance.absRate,
       terminations: summary.terminations,
       hcAverage: round2(summary.hcAverage),
       attritionRate: summary.hcAverage > 0 ? round2((summary.terminations / summary.hcAverage) * 100) : 0,
