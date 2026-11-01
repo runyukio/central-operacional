@@ -1,5 +1,6 @@
 "use client";
 
+import { isDirectWfmRequest } from "@/lib/request-routing";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { type InputHTMLAttributes, useState } from "react";
 import { AlertTriangle, CalendarCheck, ClipboardList, Frown, Headphones, HeartPulse, Laptop, Meh, ShieldCheck, Smile } from "lucide-react";
@@ -1126,8 +1127,9 @@ export function RequestDetailContent({
   const dayOffKind = dayOffKindFromRequest(selected);
   const isProcessed = ["Recusado", "Concluído", "Cancelado"].includes(selected.status);
   const isApproved = selected.status === "Aprovado";
-  const canSupervisorStep = selected.status === "Aberto" && Boolean(selected.canSupervisorStep);
-  const canWfmFinal = selected.status === "Em análise" && Boolean(selected.canWfmFinal);
+  const directWfm = isDirectWfmRequest(selected.type);
+  const canSupervisorStep = !directWfm && selected.status === "Aberto" && Boolean(selected.canSupervisorStep);
+  const canWfmFinal = (selected.status === "Em análise" || (directWfm && selected.status === "Aberto")) && Boolean(selected.canWfmFinal);
   const canPartnerAccept = Boolean(selected.canPartnerAccept) && selected.status === "Aberto";
   const canReject = canSupervisorStep || canWfmFinal || canPartnerAccept;
   const canConclude = selected.status === "Aprovado" && Boolean(selected.canConclude ?? selected.canWfmFinal);
@@ -1135,9 +1137,9 @@ export function RequestDetailContent({
   const buttonsDisabled = Boolean(actionPending) || isProcessed;
   const actionInput = dayOffKind === "DAY_OFF_SELL" && canWfmFinal ? approvalData : undefined;
   const stageText: Record<string, string> = {
-    Aberto: "Aguardando supervisor",
+    Aberto: directWfm ? "Aguardando WFM" : "Aguardando supervisor",
     "Em análise": "Aguardando WFM",
-    Aprovado: "Cronograma atualizado",
+    Aprovado: directWfm ? "Aprovada pelo WFM" : "Cronograma atualizado",
     Recusado: "Solicitação recusada",
     Concluído: "Processo encerrado",
     Cancelado: "Processo cancelado"

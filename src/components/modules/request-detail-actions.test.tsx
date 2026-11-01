@@ -35,3 +35,27 @@ test("explicit completion denial wins over legacy approval permission", () => {
   assert.doesNotMatch(render("Aprovado", false, true), />Concluir<\/button>/);
   assert.match(render("Aprovado", undefined, true), />Concluir<\/button>/);
 });
+
+function renderWfm(status: string, canWfmFinal: boolean, type = "WFM") {
+  return renderToStaticMarkup(createElement(result.exports.RequestDetailContent, {
+    selected: { id: "REQ-3144", type, status, requester: "Solicitante", priority: "Média", area: "WFM", time: "", canWfmFinal, canSupervisorStep: true },
+    actorRole: canWfmFinal ? "WFM" : "SUPERVISOR", actionReason: "", setActionReason() {}, comment: "", setComment() {}, onMove() {}, onComment() {}
+  }));
+}
+
+test("open WFM requests expose final approval and refusal without a supervisor stage", () => {
+  const html = renderWfm("Aberto", true);
+  assert.match(html, /Aguardando WFM/);
+  assert.match(html, />Aprovar final<\/button>/);
+  assert.match(html, />Recusar<\/button>/);
+  assert.doesNotMatch(html, /Aguardando supervisor|Aprovar etapa|Cronograma atualizado/);
+  assert.doesNotMatch(renderWfm("Aberto", false), />Aprovar|>Recusar/);
+});
+
+test("WFM final actions stay hidden after processing; other open types keep their supervisor stage", () => {
+  for (const status of ["Aprovado", "Recusado", "Cancelado", "Concluído"]) {
+    assert.doesNotMatch(renderWfm(status, true), />Aprovar final<\/button>|>Recusar<\/button>/);
+  }
+  assert.match(renderWfm("Aberto", true, "Troca de Turno"), /Aguardando supervisor/);
+  assert.match(renderWfm("Aberto", true, "Troca de Turno"), />Aprovar etapa<\/button>/);
+});

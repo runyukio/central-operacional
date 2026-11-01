@@ -1,3 +1,4 @@
+import { isDirectWfmRequest } from "@/lib/request-routing";
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 
@@ -985,7 +986,7 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     if (role === "SUPERVISOR") {
       andFilters.push({ OR: [{ status: "ABERTO", ...supervisorStepRequestTypeWhere() }, { status: "ABERTO", type: { name: "Troca Casada" }, employee: { supervisor: { userId: user.id } }, payload: { path: ["stage"], equals: "SUPERVISOR" } }] });
     } else if (role === "WFM") {
-      andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
+      andFilters.push(wfmPendingRequestWhere());
     } else if (roleHasCapability(actor.role, "PIPELINES")) {
       andFilters.push({ status: { in: [...pendingStatuses] } });
     }
@@ -1016,9 +1017,9 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
   if (filters.assignedTo && filters.assignedTo !== "Todos") {
     const assignedTo = filters.assignedTo.toLowerCase();
     if (assignedTo === "supervisor") {
-      andFilters.push({ OR: [{ status: "ABERTO", type: { name: { not: "Troca Casada" } } }, { status: "ABERTO", type: { name: "Troca Casada" }, payload: { path: ["stage"], equals: "SUPERVISOR" } }] });
+      andFilters.push({ OR: [{ status: "ABERTO", NOT: { type: { name: { equals: "WFM", mode: "insensitive" } } }, type: { name: { not: "Troca Casada" } } }, { status: "ABERTO", type: { name: "Troca Casada" }, payload: { path: ["stage"], equals: "SUPERVISOR" } }] });
     } else if (assignedTo === "wfm") {
-      andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
+      andFilters.push(wfmPendingRequestWhere());
     } else if (assignedTo === "wfm/admin") {
       andFilters.push({ status: "APROVADO" });
     } else if (assignedTo === "nenhum") {
@@ -1102,6 +1103,15 @@ function dayOffRequestTypeWhere(): Prisma.RequestWhereInput {
     OR: [
       { type: { name: { contains: "folga", mode: "insensitive" } } },
       { type: { name: { contains: "day off", mode: "insensitive" } } }
+    ]
+  };
+}
+
+function wfmPendingRequestWhere(): Prisma.RequestWhereInput {
+  return {
+    OR: [
+      { status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } },
+      { status: "ABERTO", type: { name: { equals: "WFM", mode: "insensitive" } } }
     ]
   };
 }
@@ -1340,6 +1350,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   const current = normalizeDbRequestStatus(request.status);
   const isRequester = request.requesterId === user.id;
   const isShiftChange = isShiftChangeRequest(request);
+  const directWfm = isDirectWfmRequest(request.type.name);
   const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isDayOffRequest(request) || isShiftChange);
   const isFinalApprover = wfmFinalRoles.includes(role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
@@ -1365,8 +1376,10 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
     return "FORBIDDEN";
   }
 
+  if (directWfm && !isFinalApprover) return "FORBIDDEN";
+
   if (target === "APROVADO") {
-    if (current === "ABERTO") {
+    if (current === "ABERTO" && !directWfm) {
       if (isAdvanceChange && isFinalApprover) {
         return {
           nextStatus: "APROVADO",
@@ -1396,7 +1409,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
       };
     }
 
-    if (current === "EM_ANALISE") {
+    if (current === "EM_ANALISE" || (directWfm && current === "ABERTO")) {
       if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
       if (!isFinalApprover) return "FORBIDDEN";
       return {
@@ -1419,21 +1432,21 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   }
 
   if (target === "RECUSADO") {
-    if (current === "ABERTO") {
+    if (current === "ABERTO" && !directWfm) {
       if (role === "WFM" && !isAdvanceChange) return { error: "A solicitação precisa da primeira aprovação do supervisor antes da decisão final do WFM." };
       if (!isSupervisorStep && !isAdminLike && !(isAdvanceChange && isFinalApprover)) return "FORBIDDEN";
     }
-    if (current === "EM_ANALISE") {
+    if (current === "EM_ANALISE" || (directWfm && current === "ABERTO")) {
       if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
       if (!isFinalApprover) return "FORBIDDEN";
     }
     return {
       nextStatus: "RECUSADO",
       applySchedule: false,
-      historyAction: current === "EM_ANALISE" ? "Recusa WFM" : "Recusa do supervisor",
+      historyAction: current === "EM_ANALISE" || directWfm ? "Recusa WFM" : "Recusa do supervisor",
       auditAction: "RECUSA",
-      requesterTitle: "Sua solicitação de folga foi recusada",
-      requesterBody: "Sua solicitação de folga foi recusada. Consulte o motivo no histórico.",
+      requesterTitle: directWfm ? "Solicitação WFM recusada" : "Sua solicitação de folga foi recusada",
+      requesterBody: directWfm ? "Sua solicitação WFM foi recusada. Consulte o motivo no histórico." : "Sua solicitação de folga foi recusada. Consulte o motivo no histórico.",
       requesterNotificationType: "ERROR",
       notifySupervisor: current === "EM_ANALISE",
       supervisorTitle: "Solicitação recusada pelo WFM",
@@ -1473,7 +1486,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
     };
   }
 
-  if (target === "EM_ANALISE" && current === "ABERTO" && isSupervisorStep) {
+  if (target === "EM_ANALISE" && current === "ABERTO" && !directWfm && isSupervisorStep) {
     return {
       nextStatus: "EM_ANALISE",
       applySchedule: false,
@@ -1500,7 +1513,7 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   const role = normalizeRole(actor?.role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
-  const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && (isDayOffRequest(request) || isShiftChangeRequest(request)));
+  const canSupervisorStep = !isDirectWfmRequest(request.type.name) && (isAdminLike || (role === "SUPERVISOR" && (isDayOffRequest(request) || isShiftChangeRequest(request))));
   const canWfmFinal = wfmFinalRoles.includes(role);
   const history = "history" in request ? request.history : [];
   const comments = "comments" in request ? request.comments : [];
@@ -1517,7 +1530,7 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
     status: dbToUiStatus[request.status] ?? "Aberto",
     area: request.assignedArea,
     assignee: request.assignee?.name,
-    nextStep: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? "Aceite do parceiro" : isPairedSwap(request.type.name, payload) && request.status === "APROVADO" ? "Cronogramas atualizados" : nextStepForRequest(request.status),
+    nextStep: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? "Aceite do parceiro" : isPairedSwap(request.type.name, payload) && request.status === "APROVADO" ? "Cronogramas atualizados" : nextStepForRequest(request.status, request.type.name),
     nextOwner: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? String(payload.partnerName) : isPairedSwap(request.type.name, payload) && payload.stage === "DONE" ? "Sem próxima ação" : nextOwnerForRequest(request),
     canSupervisorStep: isPairedSwap(request.type.name, payload) ? payload.stage === "SUPERVISOR" && role === "SUPERVISOR" && request.employee?.supervisor?.userId === user?.id : canSupervisorStep,
     canWfmFinal: isPairedSwap(request.type.name, payload) ? payload.stage === "WFM" && canWfmFinal : canWfmFinal,
@@ -2004,9 +2017,9 @@ function formatSignedNumber(value: number) {
   return value > 0 ? `+${value}` : String(value);
 }
 
-function nextStepForRequest(status: string) {
+function nextStepForRequest(status: string, type: string) {
   const normalized = normalizeDbRequestStatus(status);
-  if (normalized === "ABERTO") return "Aprovação do supervisor";
+  if (normalized === "ABERTO") return isDirectWfmRequest(type) ? "Análise WFM" : "Aprovação do supervisor";
   if (normalized === "EM_ANALISE") return "Análise final WFM";
   if (normalized === "APROVADO") return "Conclusão administrativa";
   if (normalized === "RECUSADO") return "Encerrada por recusa";
@@ -2017,7 +2030,7 @@ function nextStepForRequest(status: string) {
 
 function nextOwnerForRequest(request: PrismaRequestForDisplay) {
   const normalized = normalizeDbRequestStatus(request.status);
-  if (normalized === "ABERTO") return request.employee?.supervisor?.fullName ?? "Supervisor responsável";
+  if (normalized === "ABERTO") return isDirectWfmRequest(request.type.name) ? "WFM" : request.employee?.supervisor?.fullName ?? "Supervisor responsável";
   if (normalized === "EM_ANALISE") return "WFM";
   if (normalized === "APROVADO") return "WFM/Admin";
   return "Sem próxima ação";
@@ -2815,7 +2828,7 @@ async function notifyRequestCreationSafely(
       data: {
         userId,
         title: isDayOffRequest(type) ? "Solicitação de folga criada" : "Solicitação criada",
-        body: isDayOffRequest(type) ? "Sua solicitação foi enviada para aprovação." : `${code} foi registrada com status Aberto.`,
+        body: isDirectWfmRequest(type) ? `${code} foi enviada diretamente para análise do WFM.` : isDayOffRequest(type) ? "Sua solicitação foi enviada para aprovação." : `${code} foi registrada com status Aberto.`,
         category: "Solicitações",
         type: "REQUEST",
         entity: "Request",
@@ -2852,7 +2865,7 @@ async function notifyApprovers(
         ? ["ADMIN", "RH", "FINANCEIRO"]
         : ["ADMIN", "GESTOR", "WFM"];
   const users = await tx.user.findMany({ where: { status: "ACTIVE", role: { name: { in: roleNames } } } });
-  const supervisor = supervisorId ? await tx.employeeProfile.findUnique({ where: { id: supervisorId }, include: { user: true } }) : null;
+  const supervisor = supervisorId && !isDirectWfmRequest(type) ? await tx.employeeProfile.findUnique({ where: { id: supervisorId }, include: { user: true } }) : null;
   const recipients = new Map(users.map((user) => [user.id, user]));
   if (supervisor?.user) recipients.set(supervisor.user.id, supervisor.user);
 
