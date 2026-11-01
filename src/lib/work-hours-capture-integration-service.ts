@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { captureOvertimeOutcome, type OvertimeSource } from "@/lib/work-hours-overtime";
 import { saveCaptureOvertimeReview, cancelOvertimeReviews } from "@/lib/work-hours-overtime-service";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
+import { readCaptureRealtimeProductivity } from "@/lib/capture-realtime-productivity-service";
 import { getCaptureRegistrationIssue, isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
 import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
@@ -50,7 +51,7 @@ type AdherenceQueryFilters = CaptureImportFilters & {
 };
 
 // Explicit I/O boundary also lets regression tests use captured fixtures without a live database.
-export const captureWorkHoursData = { timelineRange: getRealtimeHoursTimelineRange };
+export const captureWorkHoursData = { timelineRange: getRealtimeHoursTimelineRange, productivity: readCaptureRealtimeProductivity };
 
 type CaptureImportProposal = {
   reconciliationKey: string;
@@ -352,11 +353,22 @@ export async function listCaptureWorkHourDivergences(actor: Actor, filters: Capt
   });
   const employees = await prisma.employeeProfile.findMany({ where: { deletedAt: null }, include: captureEmployeeInclude });
   const registrationWarnings = await captureRegistrationWarnings(employees, period);
+  const eligibleRecords = records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))
+    && !isProtectedCaptureScheduleStatus(record.schedule?.status)
+    && !isProtectedCaptureScheduleStatus(record.scheduleStatus));
+  // Production is read-only context for the decision; it must never change the
+  // proposed hours, choice, or optimistic-concurrency revision of a divergence.
+  const productivity = await captureWorkHoursData.productivity(eligibleRecords.map((record) => ({
+    id: record.id, wbLogin: record.wbLogin, date: formatDate(record.date),
+    startsAt: record.schedule?.startsAt ?? record.plannedStart,
+    endsAt: record.schedule?.endsAt ?? record.plannedEnd
+  }))).catch((error) => {
+    console.warn("Não foi possível consultar a produtividade das divergências.", error);
+    return null;
+  });
   return {
     registrationWarnings,
-    data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))
-      && !isProtectedCaptureScheduleStatus(record.schedule?.status)
-      && !isProtectedCaptureScheduleStatus(record.scheduleStatus)).map((record) => ({
+    data: eligibleRecords.map((record) => ({
       id: record.id,
       revision: record.updatedAt.toISOString(),
       employeeName: record.employee.fullName,
@@ -367,6 +379,8 @@ export async function listCaptureWorkHourDivergences(actor: Actor, filters: Capt
       classification: classificationFor(record.employee as CaptureImportEmployee).classificationLabel,
       scheduleStatus: scheduleStatusLabel(record.schedule?.status ?? "SEM_ESCALA"),
       capturedDuration: formatDuration(record.sourceDurationMs),
+      productivity: productivity?.get(record.id) ?? { status: "unavailable", submit: null, moderationMs: null },
+      productivityError: productivity === null,
       proposedHours: formatHours(calculateOperationalHours(record.sourceDurationMs ?? 0, classificationInput(record.employee as CaptureImportEmployee, record.date)).operationalHours),
       reasons: jsonStringArray(record.reasons).map((reason) => captureDivergenceReasonLabel(reason as CaptureDivergenceReason)),
       actions: CAPTURE_DIVERGENCE_ACTIONS.map((value) => ({ value, label: captureDivergenceActionLabel(value) })),

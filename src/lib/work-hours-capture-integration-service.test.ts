@@ -132,16 +132,48 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
     try { return await fn(delegates); } catch (error) { state = before; throw error; }
   }) as any);
   const timeline = { date: day, rows: [] as Row[] };
+  const productivity = t.mock.method(captureWorkHoursData, "productivity", async () => new Map());
   t.mock.method(captureWorkHoursData, "timelineRange", (async (options: any) => {
     calls.push({ model: "capture", op: "timeline", args: clone(options) });
     return [clone(timeline)];
   }) as any);
-  return { get state() { return state; }, calls, timeline, tx: delegates,
+  return { get state() { return state; }, calls, timeline, tx: delegates, productivity,
     capture(id = "agent", hours = 1, data = day) { timeline.rows.push({ employeeId: id, wbLogin: `wb_${id}`, slotId: `slot-${id}`, data, activeMs: hours * hour }); },
     decision(id: string, action: any) { return { id, action, revision: state.workHourCaptureDivergence.find((row) => row.id === id)!.updatedAt.toISOString() }; }
   };
 }
 const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "findUniqueOrThrow", "timeline"].includes(call.op));
+
+test("divergências incluem produtividade pela janela histórica de cada linha, sem mutações", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee(), employee("future", { goLiveDate: new Date("2026-10-01") })],
+    schedule: [{ ...slot(), startsAt: "22:00", endsAt: "07:00" }, slot("future")],
+    workHourCaptureDivergence: [divergence(), divergence("future")] });
+  f.productivity.mock.mockImplementation(async (slots) => {
+    assert.deepEqual(slots, [{ id: "div-agent", wbLogin: "wb_agent", date: day, startsAt: "22:00", endsAt: "07:00" }]);
+    return new Map([["div-agent", { status: "complete" as const, submit: 100, moderationMs: 2 * hour }]]);
+  });
+  const result: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.equal(result.data.length, 1);
+  assert.deepEqual(result.data[0].productivity, { status: "complete", submit: 100, moderationMs: 2 * hour });
+  assert.equal(result.data[0].productivityError, false);
+  assert.equal(result.data[0].capturedDuration, "01:00:00");
+  assert.equal(result.data[0].proposedHours, "01:30:00");
+  assert.deepEqual(mutations(f.calls), []);
+});
+
+test("falha no Real Time mantém a revisão disponível e distingue erro de produtividade zero", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()], workHourCaptureDivergence: [divergence()] });
+  f.productivity.mock.mockImplementation(async () => { throw new Error("Real Time unavailable"); });
+  t.mock.method(console, "warn", () => undefined);
+  const result: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.equal(result.data.length, 1);
+  assert.deepEqual(result.data[0].productivity, { status: "unavailable", submit: null, moderationMs: null });
+  assert.equal(result.data[0].productivityError, true);
+  assert.deepEqual(mutations(f.calls), []);
+  f.state.user[0].role.name = "AGENTE";
+  assert.ok("error" in await listCaptureWorkHourDivergences(actor, { shiftDate: day }));
+  assert.equal(f.productivity.mock.callCount(), 1);
+});
 
 for (const [captured, calculated, pending] of [[7, 7.5, false], [7.5, 8, false], [(7 * 60 + 40) / 60, (8 * 60 + 10) / 60, false], [8, 8.5, true]] as const) {
   test(`importação de ${captured}h capturadas contabiliza ${Math.min(calculated, 8)}h e ${pending ? "valida" : "dispensa revisão do"} excedente`, async (t) => {

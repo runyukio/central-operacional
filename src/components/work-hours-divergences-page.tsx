@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import { formatWorkHours } from "@/lib/work-hours-rules";
+import type { CaptureProductivity } from "@/lib/capture-realtime-productivity";
 import { resolveCapturePeriod, type CapturePeriod } from "@/lib/work-hours-capture-period";
 import { CAPTURE_DIVERGENCE_ACTIONS, captureDivergenceActionLabel } from "@/lib/work-hours-capture-integration-core";
 import {
@@ -16,6 +17,7 @@ import {
 type DivergenceRow = CaptureReviewRow & {
   employeeName: string; wbLogin: string; date: string; slot: string; classification: string;
   scheduleStatus: string; capturedDuration: string; proposedHours: string; reasons: string[];
+  productivity: CaptureProductivity; productivityError: boolean;
 };
 
 export function WorkHoursDivergencesPage() {
@@ -162,7 +164,7 @@ export function WorkHoursDivergencesPage() {
         {visible.map((row) => (
           <article key={row.id} className="card p-4" style={{ contentVisibility: "auto", containIntrinsicSize: "0 290px" }}>
             <h2 className="font-extrabold text-navy-950">{row.employeeName} <span className="text-sm font-semibold text-muted">· {row.wbLogin}</span></h2>
-            <dl className="mt-3 grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+            <dl className="mt-3 grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-5">
               <CompactField label="Shift Date" value={row.date} />
               <CompactField label="Slot previsto" value={row.slot} />
               <CompactField label="LOB / classificação" value={`${row.lob} · ${row.classification}`} />
@@ -170,6 +172,7 @@ export function WorkHoursDivergencesPage() {
               <CompactField label="Turno" value={row.shift} />
               <CompactField label="Status atual" value={row.scheduleStatus} />
               <CompactField label="Captura original" value={row.capturedDuration} />
+              <ProductivityField productivity={row.productivity} failed={row.productivityError} />
               <CompactField label="Horas Operacionais propostas" value={row.proposedHours} />
             </dl>
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
@@ -213,4 +216,17 @@ function Slicer({ label, options, value, onChange }: { label: string; options: s
 
 function CompactField({ label, value }: { label: string; value: string }) {
   return <div><dt className="text-[11px] font-bold uppercase tracking-wide text-muted">{label}</dt><dd className="mt-1 text-sm font-semibold text-navy-950">{value}</dd></div>;
+}
+
+function ProductivityField({ productivity, failed }: { productivity: CaptureProductivity; failed: boolean }) {
+  const available = productivity?.moderationMs !== null && productivity?.moderationMs !== undefined;
+  return <div className="sm:col-span-2 lg:col-span-2">
+    <dt className="text-[11px] font-bold uppercase tracking-wide text-muted">Produtividade</dt>
+    <dd className="mt-1 text-sm font-semibold text-navy-950">
+      {available ? `${formatWorkHours(productivity.moderationMs! / 3_600_000)} de moderação · ${productivity.submit?.toLocaleString("pt-BR")} submits` : failed ? "Consulta indisponível" : "Sem dados no turno"}
+      <span className={cn("mt-1 block text-xs", productivity?.status === "partial" || failed ? "text-amber-800" : "text-muted")}>
+        {failed ? "Atualize para tentar novamente." : productivity?.status === "partial" ? "Real Time · Parcial: faltam leituras na janela do turno." : "Real Time · Janela do turno pelo Shift Date"}
+      </span>
+    </dd>
+  </div>;
 }
