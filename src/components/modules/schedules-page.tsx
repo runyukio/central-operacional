@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { CalendarCheck, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
 import { ScheduleSlotStatusFilter } from "@/components/schedule-slot-status-filter";
-import { DonutLegend, EmptyState, MetricPill, MiniAlertList, PageHeader, Panel, StatusBadge } from "@/components/ui/primitives";
+import { EmptyState, MetricPill, PageHeader, Panel, StatusBadge } from "@/components/ui/primitives";
 import { scheduleGridRows } from "@/lib/demo-data";
 import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
 import { canAdminOverrideWorkflowScheduleStatus, canEditSchedule, canEditWorkHours, canViewSchedules, normalizeRole } from "@/lib/permissions";
@@ -147,27 +147,6 @@ function normalizeScheduleMetrics(metrics: ScheduleMetricsPayload | undefined, r
 
 
 type ScheduleRangeMode = "day" | "week" | "month" | "custom";
-
-
-type ScheduleImportHistory = {
-  id: string;
-  fileName: string;
-  importedRows: number;
-  totalRows?: number;
-  errorRows?: number;
-  warningRows?: number;
-  status: string;
-  createdAt: string;
-  user: string;
-};
-
-
-type ScheduleAlertItem = {
-  title: string;
-  status: string;
-  tone: "red" | "orange" | "blue" | "green";
-  detail: string;
-};
 
 
 function statusNeedsReason(status: string) {
@@ -340,9 +319,6 @@ export function SchedulesPage() {
   const [loadingScheduleEmployeeSearch, setLoadingScheduleEmployeeSearch] = useState(false);
   const [scheduleSettings, setScheduleSettings] = useState<SystemSettings | null>(null);
   const [scheduleSkillFilterOptions, setScheduleSkillFilterOptions] = useState<string[]>([]);
-  const [importHistory, setImportHistory] = useState<ScheduleImportHistory[]>([]);
-  const [showScheduleAlerts, setShowScheduleAlerts] = useState(false);
-  const [showScheduleImports, setShowScheduleImports] = useState(false);
   const [scheduleAnalysisPanelOpen, setScheduleAnalysisPanelOpen] = useState(true);
   const [showPendingJustifications, setShowPendingJustifications] = useState(false);
   const [attendanceMessage, setAttendanceMessage] = useState("");
@@ -424,7 +400,7 @@ export function SchedulesPage() {
   });
 
   useEffect(() => {
-    void refreshSchedules(1, scheduleFilters, scheduleDateRange, { includeImports: true });
+    void refreshSchedules(1, scheduleFilters, scheduleDateRange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedulePeriod.month, schedulePeriod.year, scheduleFilters.lob]);
 
@@ -473,7 +449,7 @@ export function SchedulesPage() {
     }
   }
 
-  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange, options: { includeImports?: boolean } = {}) {
+  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange) {
     try {
       const params = new URLSearchParams({
         month: String(schedulePeriod.month),
@@ -491,11 +467,11 @@ export function SchedulesPage() {
         roleTitle: filtersOverride.roleTitle,
         employeeId: filtersOverride.employeeId,
         skipSummary: "true",
-        includeImports: options.includeImports ? "true" : "false"
+        includeImports: "false"
       });
       const batchWbs = scheduleBatchValues(filtersOverride);
       if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports?: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number }; batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number }; batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setScheduleMetrics(normalizeScheduleMetrics(payload.data.scheduleMetrics, payload.data.scheduleGridRows));
@@ -505,7 +481,6 @@ export function SchedulesPage() {
         setAttendanceForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id });
         setScheduleEditForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id, lob: payload.data.scheduleGridRows[0].employee.lob, supervisor: payload.data.scheduleGridRows[0].employee.supervisor });
       }
-      if (payload.data.imports) setImportHistory(payload.data.imports);
       if (payload.data.attendanceSummary) setAttendanceSummary(payload.data.attendanceSummary);
       else setAttendanceSummary(null);
       if (payload.data.batchWb?.notFound.length) {
@@ -673,7 +648,6 @@ export function SchedulesPage() {
       body: JSON.stringify({ fileName: previewFileName, allowPartial: true, rows: previewRows })
     });
     setImported(`${result.data.status}. ${result.data.importedRows} linhas registradas em auditoria.`);
-    setImportHistory((items) => [result.data as (typeof importHistory)[number], ...items]);
     setShowPreview(false);
     await refreshSchedules();
   }
@@ -1152,43 +1126,10 @@ export function SchedulesPage() {
   const attendanceRequiresReason = statusNeedsReason(attendanceForm.status);
   const scheduleEditRequiresReason = statusNeedsReason(scheduleEditForm.status);
   const scheduleEditRequiresTime = statusNeedsTime(scheduleEditForm.status);
-  const scheduleCellValues = scheduleRows.flatMap((row) => row.days);
-  const scheduledCells = scheduleCellValues.filter((value) => !["Folga", "Sem cronograma", "Férias"].includes(value)).length;
-  const conflictCount = scheduleCellValues.filter((value) => value === "Conflito").length;
-  const unscheduledCount = scheduleCellValues.filter((value) => value === "Sem cronograma" || value === "Descoberto").length;
   const filteredPendingJustifications =
     pendingSupervisorFilter === "Todos"
       ? pendingJustifications
       : pendingJustifications.filter((record) => (record.supervisor || "Sem supervisor") === pendingSupervisorFilter);
-  const scheduleAlertItems = ([
-    conflictCount > 0 ? {
-      title: `${conflictCount} conflitos de cronograma`,
-      status: String(conflictCount),
-      tone: "red" as const,
-      detail: "Revise células marcadas como conflito no período selecionado."
-    } : null,
-    unscheduledCount > 0 ? {
-      title: `${unscheduledCount} células sem cronograma/descobertas`,
-      status: String(unscheduledCount),
-      tone: "orange" as const,
-      detail: "Há dias sem cronograma vinculado ou descoberta nos filtros atuais."
-    } : null,
-    filteredPendingJustifications.length > 0 ? {
-      title: `${filteredPendingJustifications.length} justificativas pendentes`,
-      status: String(filteredPendingJustifications.length),
-      tone: "orange" as const,
-      detail: "Faltas ou erros de cronograma aguardando justificativa do supervisor."
-    } : null,
-    ...importHistory
-      .filter((file) => (file.errorRows ?? 0) > 0 || (file.warningRows ?? 0) > 0 || /erro|falha|partial|parcial/i.test(file.status))
-      .map((file) => ({
-        title: `Importação com alerta: ${file.fileName}`,
-        status: file.status,
-        tone: ((file.errorRows ?? 0) > 0 || /erro|falha/i.test(file.status) ? "red" : "orange") as "red" | "orange",
-        detail: `${file.errorRows ?? 0} erro(s), ${file.warningRows ?? 0} alerta(s), ${file.importedRows} linha(s) válidas.`
-      }))
-  ] as Array<ScheduleAlertItem | null>).filter((item): item is ScheduleAlertItem => item !== null);
-  const plannedHours = scheduledCells * DEFAULT_PRODUCTIVE_HOURS;
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
   const scheduleQuantity = scheduleMetrics.quantity;
   const scheduleSummaryItems = [
@@ -1710,34 +1651,6 @@ export function SchedulesPage() {
               />
             )}
           </Panel>
-          <Panel title="Cobertura">
-            <DonutLegend
-              total={`${attendanceSummary?.coverageRate ?? 0}%`}
-              items={[
-                { label: "Produtivo programado", value: formatWorkHourValue(plannedHours, "0:00"), color: "#10B981" },
-                { label: "Atenção", value: "0:00", color: "#F59E0B" },
-                { label: "Descoberto", value: formatWorkHourValue(unscheduledCount * DEFAULT_PRODUCTIVE_HOURS, "0:00"), color: "#EF4444" },
-                { label: "Sem programação", value: formatWorkHourValue(unscheduledCount * DEFAULT_PRODUCTIVE_HOURS, "0:00"), color: "#CBD5E1" }
-              ]}
-            />
-          </Panel>
-          <Panel title="Alertas e Conflitos" action="Ver todos os alertas" actionOnClick={() => setShowScheduleAlerts(true)}>
-            {scheduleAlertItems.length ? (
-              <MiniAlertList items={scheduleAlertItems.slice(0, 3)} />
-            ) : <EmptyState title="Sem alertas" description="Alertas aparecerão após importação e validação do cronograma real." />}
-          </Panel>
-          <Panel title="Importações Recentes" action="Ver todas" actionOnClick={() => setShowScheduleImports(true)}>
-            {importHistory.length ? importHistory.slice(0, 5).map((file) => (
-              <div key={file.id} className="mb-3 flex items-center gap-3 last:mb-0">
-                <FileSpreadsheet className="h-8 w-8 text-emerald-600" />
-                <div className="flex-1">
-                  <p className="text-sm font-bold text-navy-950">{file.fileName}</p>
-                  <p className="text-xs text-muted">Importado por {file.user} • {file.importedRows} linhas</p>
-                </div>
-                <StatusBadge status={file.status} />
-              </div>
-            )) : <EmptyState title="Nenhuma importação" description="Os arquivos importados aparecerão aqui." />}
-          </Panel>
         </aside>
         ) : null}
       </div>
@@ -1807,71 +1720,6 @@ export function SchedulesPage() {
                 title="Nenhuma pendência aberta para os filtros selecionados."
                 description={pendingSupervisorFilter === "Todos" ? "Quando surgir falta, atraso ou saída antecipada sem justificativa, o item aparecerá aqui." : "Nenhuma pendência de justificativa encontrada para este supervisor."}
               />
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {showScheduleAlerts ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
-            <div className="mb-5 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Alertas e conflitos do cronograma</h2>
-                <p className="text-sm text-muted">Período atual, filtros aplicados e pendências reais carregadas da operação.</p>
-              </div>
-              <button type="button" onClick={() => setShowScheduleAlerts(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
-            </div>
-            {scheduleAlertItems.length ? (
-              <div className="space-y-3">
-                {scheduleAlertItems.map((item) => (
-                  <div key={`${item.title}-${item.status}`} className="rounded-xl border border-border p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-extrabold text-navy-950">{item.title}</p>
-                        <p className="mt-1 text-xs font-semibold text-muted">{item.detail}</p>
-                      </div>
-                      <StatusBadge status={item.status} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState title="Nenhum alerta encontrado para o período selecionado." description="Ao surgir conflito, falta pendente ou importação com erro, o item aparecerá aqui." />
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {showScheduleImports ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[88vh] w-full max-w-4xl overflow-y-auto p-5">
-            <div className="mb-5 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Histórico de importações</h2>
-                <p className="text-sm text-muted">Últimas importações reais de cronograma registradas no banco.</p>
-              </div>
-              <button type="button" onClick={() => setShowScheduleImports(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
-            </div>
-            {importHistory.length ? (
-              <div className="space-y-3">
-                {importHistory.map((file) => (
-                  <div key={file.id} className="rounded-xl border border-border p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-extrabold text-navy-950" title={file.fileName}>{file.fileName}</p>
-                        <p className="mt-1 text-xs font-semibold text-muted">Importado por {file.user} • {file.createdAt}</p>
-                        <p className="mt-2 text-xs text-muted">
-                          Total: {file.totalRows ?? file.importedRows} • Válidas: {file.importedRows} • Erros: {file.errorRows ?? 0} • Alertas: {file.warningRows ?? 0}
-                        </p>
-                      </div>
-                      <StatusBadge status={file.status} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState title="Nenhuma importação recente encontrada." description="Quando um cronograma for importado, o histórico aparecerá aqui." />
             )}
           </div>
         </div>
