@@ -28,7 +28,15 @@ var (
 )
 
 func ProtectAndWrite(path string, plain []byte) error {
-	protected, err := protect(plain)
+	return protectAndWrite(path, plain, cryptProtectLocalMachine|1)
+}
+
+func ProtectForCurrentUser(path string, plain []byte) error {
+	return protectAndWrite(path, plain, 1)
+}
+
+func protectAndWrite(path string, plain []byte, flags uintptr) error {
+	protected, err := protectWithFlags(plain, flags)
 	if err != nil {
 		return err
 	}
@@ -54,6 +62,10 @@ func ReadAndUnprotect(path string) ([]byte, error) {
 }
 
 func protect(plain []byte) ([]byte, error) {
+	return protectWithFlags(plain, cryptProtectLocalMachine)
+}
+
+func protectWithFlags(plain []byte, flags uintptr) ([]byte, error) {
 	if len(plain) == 0 {
 		return nil, fmt.Errorf("secret is empty")
 	}
@@ -65,7 +77,7 @@ func protect(plain []byte) ([]byte, error) {
 		0,
 		0,
 		0,
-		cryptProtectLocalMachine,
+		flags,
 		uintptr(unsafe.Pointer(&output)),
 	)
 	if ok == 0 {

@@ -31,6 +31,26 @@ type Config struct {
 	IdleThresholdSeconds      int    `json:"idleThresholdSeconds"`
 	MaxSegmentSeconds         int    `json:"maxSegmentSeconds"`
 	BrowserStateMaxAgeSeconds int    `json:"browserStateMaxAgeSeconds"`
+	PerUserProfiles           bool   `json:"perUserProfiles,omitempty"`
+	BootstrapFile             string `json:"bootstrapFile,omitempty"`
+	StatusFile                string `json:"statusFile,omitempty"`
+	EnrolledAt                string `json:"enrolledAt,omitempty"`
+}
+
+func UserRoot() (string, error) {
+	root, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "CentralOperacional", "RealtimeHoursV2"), nil
+}
+
+func UserStateDir(sessionID uint32) (string, error) {
+	root, err := UserRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "browser-state", fmt.Sprint(sessionID)), nil
 }
 
 func DefaultRoot() string {
@@ -101,6 +121,9 @@ func Save(path string, cfg Config) error {
 }
 
 func (c Config) Validate() error {
+	if c.PerUserProfiles && strings.TrimSpace(c.BootstrapFile) == "" {
+		return errors.New("bootstrapFile is required for per-user installation")
+	}
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported config schema version %d", c.SchemaVersion)
 	}

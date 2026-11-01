@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/config"
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/fileutil"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/platform"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/queue"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/secret"
@@ -20,19 +22,24 @@ import (
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/transport"
 )
 
-const Version = "1.0.0-alpha.1"
+const Version = "1.0.0-alpha.2"
 
 type Runtime struct {
-	Config     config.Config
-	ConfigPath string
-	DeviceKey  []byte
-	Logger     *log.Logger
-	Queue      queue.Queue
-	Client     transport.Client
-	Hostname   string
-	User       string
-	Tracker    *segment.Tracker
-	mu         sync.Mutex
+	Config                  config.Config
+	ConfigPath              string
+	DeviceKey               []byte
+	Logger                  *log.Logger
+	Queue                   queue.Queue
+	Client                  transport.Client
+	Hostname                string
+	User                    string
+	Tracker                 *segment.Tracker
+	mu                      sync.Mutex
+	queueMu                 sync.Mutex
+	statusMu                sync.Mutex
+	SessionManaged          bool
+	startedAt               time.Time
+	heartbeatAcknowledgedAt time.Time
 }
 
 type HeartbeatPayload struct {
@@ -116,72 +123,158 @@ func New(cfg config.Config, configPath string) (*Runtime, error) {
 			DeviceID: cfg.DeviceID,
 			Secret:   key,
 		},
-		Hostname: hostname,
-		User:     strings.ToLower(user),
-		Tracker:  segment.New(time.Duration(cfg.MaxSegmentSeconds) * time.Second),
+		Hostname:  hostname,
+		User:      strings.ToLower(user),
+		startedAt: time.Now().UTC(),
+		Tracker:   segment.New(time.Duration(cfg.MaxSegmentSeconds) * time.Second),
 	}, nil
 }
 
 func (r *Runtime) RunDaemon(ctx context.Context) error {
-	r.Logger.Printf("agent %s started in daemon mode", Version)
+	if r.SessionManaged && !platform.SessionActive() {
+		return nil
+	}
+	r.Logger.Printf("agent %s started in session %d", Version, platform.SessionID())
 	sampleTicker := time.NewTicker(time.Duration(r.Config.SampleIntervalSeconds) * time.Second)
 	heartbeatTicker := time.NewTicker(time.Duration(r.Config.HeartbeatIntervalSeconds) * time.Second)
 	uploadTicker := time.NewTicker(time.Duration(r.Config.UploadIntervalSeconds) * time.Second)
 	defer sampleTicker.Stop()
 	defer heartbeatTicker.Stop()
 	defer uploadTicker.Stop()
-
-	lastContext, err := r.SampleContext(time.Now().UTC())
-	if err != nil {
-		r.Logger.Printf("initial context error: %v", err)
-		lastContext = segment.Context{Type: segment.TypeUnknown}
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	pending := make(chan struct{}, 1)
+	workerDone := make(chan struct{})
+	requestUpload := func() {
+		select {
+		case pending <- struct{}{}:
+		default:
+		}
 	}
-	_ = r.Tracker.Update(lastContext, time.Now().UTC())
+	go func() {
+		defer close(workerDone)
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-pending:
+				if err := r.flush(workerCtx, "heartbeat"); err != nil {
+					r.Logger.Printf("heartbeat retry pending: %v", err)
+				}
+				if err := r.flush(workerCtx, "activity"); err != nil {
+					r.Logger.Printf("activity retry pending: %v", err)
+				}
+			}
+		}
+	}()
+	lastContext := segment.Context{Type: segment.TypeUnknown}
+	var lastObservation time.Time
+	defer func() {
+		stopWorker()
+		<-workerDone
+		if closed := r.Tracker.Flush(lastObservation); closed != nil {
+			_ = r.enqueueActivity([]segment.Segment{*closed})
+		}
+		_ = r.enqueueOfflineHeartbeat(time.Now().UTC())
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = r.flush(shutdown, "heartbeat")
+		_ = r.flush(shutdown, "activity")
+		r.writeStatus(lastObservation)
+	}()
+	observe := func() {
+		now := time.Now().UTC()
+		current, err := r.SampleContext(now)
+		if err != nil {
+			r.Logger.Printf("sample context error: %v", err)
+			return
+		}
+		records := observedSegments(r.Tracker, current, lastObservation, now, time.Duration(r.Config.SampleIntervalSeconds)*3*time.Second)
+		if err := r.enqueueActivity(records); err != nil {
+			r.Logger.Printf("checkpoint error: %v", err)
+		}
+		lastContext, lastObservation = current, now
+		r.writeStatus(now)
+	}
+	observe()
 	_ = r.enqueueHeartbeat(lastContext, time.Now().UTC())
-	_ = r.flush(ctx, "heartbeat")
-
+	requestUpload()
 	for {
 		select {
 		case <-ctx.Done():
-			if closed := r.Tracker.Flush(time.Now().UTC()); closed != nil {
-				_ = r.enqueueActivity([]segment.Segment{*closed})
-			}
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			_ = r.flush(shutdownCtx, "activity")
-			cancel()
-			r.Logger.Printf("agent stopped: %v", ctx.Err())
 			return ctx.Err()
-		case now := <-sampleTicker.C:
-			current, err := r.SampleContext(now.UTC())
-			if err != nil {
-				r.Logger.Printf("sample context error: %v", err)
-				continue
+		case <-sampleTicker.C:
+			if r.SessionManaged && !platform.SessionActive() {
+				return nil
 			}
-			closed := r.Tracker.Update(current, now.UTC())
-			if len(closed) > 0 {
-				if err := r.enqueueActivity(closed); err != nil {
-					r.Logger.Printf("enqueue closed activity error: %v", err)
-				}
+			observe()
+		case <-heartbeatTicker.C:
+			if r.SessionManaged && !platform.SessionActive() {
+				return nil
 			}
-			lastContext = current
-		case now := <-heartbeatTicker.C:
-			if err := r.enqueueHeartbeat(lastContext, now.UTC()); err != nil {
-				r.Logger.Printf("enqueue heartbeat error: %v", err)
-			}
-			if err := r.flush(ctx, "heartbeat"); err != nil {
-				r.Logger.Printf("flush heartbeat error: %v", err)
-			}
+			observe()
+			_ = r.enqueueHeartbeat(lastContext, time.Now().UTC())
+			requestUpload()
 		case <-uploadTicker.C:
-			if snapshot := r.Tracker.Snapshot(time.Now().UTC()); snapshot != nil {
-				if err := r.enqueueActivity([]segment.Segment{*snapshot}); err != nil {
-					r.Logger.Printf("enqueue activity snapshot error: %v", err)
-				}
-			}
-			if err := r.flush(ctx, "activity"); err != nil {
-				r.Logger.Printf("flush activity error: %v", err)
-			}
+			requestUpload()
 		}
 	}
+}
+
+// Persist only observed time. Sleep, hibernation and a suspended process must
+// never extend the previous website's interval across an unobserved gap.
+func observedSegments(tracker *segment.Tracker, current segment.Context, previous, now time.Time, gap time.Duration) []segment.Segment {
+	var records []segment.Segment
+	if gap < 10*time.Second {
+		gap = 10 * time.Second
+	}
+	if !previous.IsZero() && now.Sub(previous) > gap {
+		if closed := tracker.Flush(previous); closed != nil {
+			records = append(records, *closed)
+		}
+	}
+	records = append(records, tracker.Update(current, now)...)
+	if snapshot := tracker.Snapshot(now); snapshot != nil {
+		records = append(records, *snapshot)
+	}
+	return records
+}
+
+func (r *Runtime) writeStatus(observed time.Time) {
+	if r.Config.StatusFile == "" {
+		return
+	}
+	r.statusMu.Lock()
+	acknowledged := r.heartbeatAcknowledgedAt
+	r.statusMu.Unlock()
+	value := struct {
+		AgentVersion       string    `json:"agentVersion"`
+		WindowsUser        string    `json:"windowsUser"`
+		DeviceID           string    `json:"deviceId"`
+		PID                int       `json:"pid"`
+		SessionID          uint32    `json:"sessionId"`
+		StartedAt          time.Time `json:"startedAt"`
+		LastSampleAt       time.Time `json:"lastSampleAt"`
+		LastHeartbeatAckAt time.Time `json:"lastHeartbeatAckAt"`
+		EnrolledAt         string    `json:"enrolledAt"`
+		ConfigPath         string    `json:"configPath"`
+		StateDir           string    `json:"stateDir"`
+		CredentialOK       bool      `json:"credentialOk"`
+	}{Version, r.User, r.Config.DeviceID, os.Getpid(), platform.SessionID(), r.startedAt, observed, acknowledged, r.Config.EnrolledAt, r.ConfigPath, r.Config.StateDir, len(r.DeviceKey) >= 32}
+	data, err := json.Marshal(value)
+	if err == nil {
+		tmp := r.Config.StatusFile + ".tmp"
+		if os.WriteFile(tmp, data, 0o600) == nil {
+			_ = fileutil.Replace(tmp, r.Config.StatusFile)
+		}
+	}
+}
+
+func (r *Runtime) enqueueOfflineHeartbeat(now time.Time) error {
+	payload := HeartbeatPayload{SchemaVersion: 2, AgentVersion: Version, CapturedAt: now, Hostname: r.Hostname, WindowsUser: r.User, WBLogin: r.User, SessionState: "OFFLINE", CurrentType: "UNKNOWN", DetectionMethod: "windows-session"}
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
+	_, err := r.Queue.Upsert("heartbeat", "current", payload)
+	return err
 }
 
 func (r *Runtime) RunOnce(ctx context.Context) error {
@@ -293,6 +386,8 @@ func (r *Runtime) Diagnose() DiagnoseResult {
 }
 
 func (r *Runtime) enqueueHeartbeat(current segment.Context, now time.Time) error {
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
 	foreground, _ := platform.Snapshot()
 	stateValue := "ACTIVE"
 	if current.Type == segment.TypeLocked {
@@ -319,6 +414,8 @@ func (r *Runtime) enqueueHeartbeat(current segment.Context, now time.Time) error
 }
 
 func (r *Runtime) enqueueActivity(records []segment.Segment) error {
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
 	for _, record := range records {
 		payload := ActivityPayload{
 			SchemaVersion: 2,
@@ -339,7 +436,9 @@ func (r *Runtime) enqueueActivity(records []segment.Segment) error {
 func (r *Runtime) flush(ctx context.Context, kind string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.queueMu.Lock()
 	items, err := r.Queue.List(kind, 100)
+	r.queueMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -350,7 +449,7 @@ func (r *Runtime) flush(ctx context.Context, kind string) error {
 	for _, item := range items {
 		var payload any
 		if err := json.Unmarshal(item.Data, &payload); err != nil {
-			_ = r.Queue.Quarantine(kind, item.Path)
+			_ = r.finishItem(kind, item, true)
 			continue
 		}
 		status, body, postErr := r.Client.PostJSON(ctx, path, payload)
@@ -364,14 +463,22 @@ func (r *Runtime) flush(ctx context.Context, kind string) error {
 			if err := json.Unmarshal(body, &acknowledgement); err != nil || !acknowledgement.Success {
 				return fmt.Errorf("%s upload did not receive a success acknowledgement", kind)
 			}
-			if err := r.Queue.Remove(item.Path); err != nil {
+			if kind == "heartbeat" {
+				r.statusMu.Lock()
+				r.heartbeatAcknowledgedAt = time.Now().UTC()
+				r.statusMu.Unlock()
+			}
+			if err := r.finishItem(kind, item, false); err != nil {
 				return err
 			}
 			continue
 		}
+		if status == 401 || status == 403 {
+			return fmt.Errorf("%s credential authorization requires attention: status=%d", kind, status)
+		}
 		if status >= 400 && status < 500 && status != 408 && status != 429 {
 			r.Logger.Printf("permanent %s rejection status=%d body=%s", kind, status, strings.TrimSpace(string(body)))
-			if err := r.Queue.Quarantine(kind, item.Path); err != nil {
+			if err := r.finishItem(kind, item, true); err != nil {
 				return err
 			}
 			return fmt.Errorf("%s upload rejected: status=%d", kind, status)
@@ -379,4 +486,25 @@ func (r *Runtime) flush(ctx context.Context, kind string) error {
 		return fmt.Errorf("temporary %s upload failure: status=%d body=%s", kind, status, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+// An upload may acknowledge an older checkpoint while sampling continues.
+// Keep a newer version of the same event until the server acknowledges it.
+func (r *Runtime) finishItem(kind string, item queue.Item, quarantine bool) error {
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
+	current, err := os.ReadFile(item.Path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(current, item.Data) {
+		return nil
+	}
+	if quarantine {
+		return r.Queue.Quarantine(kind, item.Path)
+	}
+	return r.Queue.Remove(item.Path)
 }

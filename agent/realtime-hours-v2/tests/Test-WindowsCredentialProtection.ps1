@@ -12,7 +12,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($installer, [ref]$null, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw 'Installer syntax must be valid.' }
 $preflight = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Initialize-WindowsCredentialProtection' }, $true))
-$enroll = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in @('Get-RealtimeOneTimeEnrollment', 'Invoke-RealtimeEnrollmentRequest') }, $true))
+$enroll = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in @('Register-RealtimeSessionTask', 'Start-RealtimeSessionTask') }, $true))
 if ($preflight.Count -ne 1 -or $enroll.Count -lt 1) { throw 'The protection and enrollment checkpoints must be present.' }
 foreach ($command in $enroll) {
   if ($command.Extent.StartOffset -le $preflight[0].Extent.StartOffset) { throw 'DPAPI must be verified before server enrollment.' }

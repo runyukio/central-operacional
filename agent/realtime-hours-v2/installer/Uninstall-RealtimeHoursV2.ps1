@@ -66,6 +66,21 @@ if ($PSCmdlet.ShouldProcess($InstallDir, 'Remover Realtime Hours V2')) {
     Write-Host "Dados operacionais preservados em: $backup" -ForegroundColor Yellow
   }
 
+  foreach ($profile in @(Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue | Where-Object { -not $_.Special -and $_.LocalPath })) {
+    $userRoot = Join-Path ([string]$profile.LocalPath) 'AppData\Local\CentralOperacional\RealtimeHoursV2'
+    if (-not (Test-Path -LiteralPath $userRoot)) { continue }
+    $safe = $true
+    $cursor = [IO.DirectoryInfo]::new($userRoot)
+    while ($null -ne $cursor -and $cursor.FullName -ine [string]$profile.LocalPath) {
+      if (($cursor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $safe = $false; break }
+      $cursor = $cursor.Parent
+    }
+    if (-not $safe) { Write-Warning 'Dados em diretorio redirecionado foram preservados.'; continue }
+    if ($PreserveData) {
+      Move-Item -LiteralPath $userRoot -Destination ($userRoot + '.uninstall-backup.' + (Get-Date -Format 'yyyyMMddHHmmss')) -ErrorAction Stop
+    } else { Remove-Item -LiteralPath $userRoot -Recurse -Force -ErrorAction Stop }
+  }
+
   Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\CentralOperacionalRealtimeHoursV2' -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "Realtime Hours V2 removido." -ForegroundColor Green

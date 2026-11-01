@@ -21,7 +21,7 @@ func TestUploadAcknowledgementAndOfflineRecovery(t *testing.T) {
 		wantErr, quarantined bool
 	}{
 		{"accepted", 200, `{"success":true}`, false, false},
-		{"unauthorized", 401, `{"success":false}`, true, true},
+		{"unauthorized", 401, `{"success":false}`, true, false},
 		{"refused-with-200", 200, `{"success":false}`, true, false},
 		{"login-html", 200, `<html>Sign in</html>`, true, false},
 		{"offline", 503, `unavailable`, true, false},

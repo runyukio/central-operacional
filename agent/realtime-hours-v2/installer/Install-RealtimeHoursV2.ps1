@@ -13,7 +13,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$ExpectedVersion = "1.0.0-alpha.1"
+$ExpectedVersion = "1.0.0-alpha.2"
 $TaskName = "Central Operacional - Realtime Hours V2"
 $HostName = "com.centraloperacional.realtimehours.v2"
 $LegacyHostName = "com.eastriver.realtime_hours"
@@ -26,13 +26,9 @@ $StoppedTasks = @()
 $LocalMutationStarted = $false
 $RegistrySnapshot = @()
 $secretBytes = $null
-$enroll = $null
-$enrollBody = $null
 $enrollment = $null
-$Enrolled = $false
 $OldPersistence = @()
 $OldStartupBackup = $null
-$stageConfig = $null
 
 function Write-Utf8NoBom {
   param([string]$Path, [string]$Content)
@@ -46,18 +42,6 @@ function Assert-Administrator {
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Execute o instalador como Administrador."
   }
-}
-
-function Get-InteractiveUser {
-  $value = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName
-  if ([string]::IsNullOrWhiteSpace($value)) { throw "Nenhum usuario interativo foi identificado." }
-  try {
-    $account = [Security.Principal.NTAccount]::new($value)
-    [void]$account.Translate([Security.Principal.SecurityIdentifier])
-  } catch {
-    throw "O usuario interativo '$value' nao pode ser validado."
-  }
-  return $value.Trim()
 }
 
 function Get-RelatedTasks {
@@ -218,18 +202,11 @@ function Restore-LegacyPersistence {
 }
 
 function Set-InstallPermissions {
-  param([string]$InteractiveUser, [string[]]$RuntimeDirectories, [string]$SecretPath)
-  & icacls.exe $InstallDir /inheritance:r /grant:r `
-    '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${InteractiveUser}:(OI)(CI)RX" | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger a pasta de instalacao." }
-  foreach ($directory in $RuntimeDirectories) {
-    & icacls.exe $directory /inheritance:r /grant:r `
-      '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${InteractiveUser}:(OI)(CI)M" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger os dados de execucao." }
-  }
-  & icacls.exe $SecretPath /inheritance:r /grant:r `
-    '*S-1-5-18:F' '*S-1-5-32-544:F' "${InteractiveUser}:R" | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "Falha ao proteger a credencial do dispositivo." }
+  param([string]$SecretPath)
+  & icacls.exe $InstallDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-4:(OI)(CI)RX' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Falha ao proteger a pasta do programa.' }
+  & icacls.exe $SecretPath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-4:R' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Falha ao proteger a autorizacao local de cadastro.' }
 }
 
 function Invoke-AgentMode {
@@ -261,6 +238,7 @@ function Remove-V2Artifacts {
 Assert-Administrator
 . (Join-Path $PSScriptRoot 'Windows-CredentialProtection.ps1')
 . (Join-Path $PSScriptRoot 'Enrollment-RealtimeHoursV2.ps1')
+. (Join-Path $PSScriptRoot 'Sessions-RealtimeHoursV2.ps1')
 Initialize-WindowsCredentialProtection
 if (-not (Test-Path -LiteralPath $AgentExe -PathType Leaf)) { throw "AgentExe nao encontrado: $AgentExe" }
 if ($BaseUrl -notmatch '^https://') { throw "BaseUrl deve usar HTTPS." }
@@ -270,13 +248,13 @@ if ($EnrollmentFile) {
   Assert-RealtimeEnrollmentLifetime -Enrollment $enrollment
   if ($enrollment.PSObject.Properties['enrollmentCode']) { $EnrollmentCode = [string]$enrollment.enrollmentCode }
 }
-if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -and ($null -eq $enrollment -or -not $enrollment.PSObject.Properties['deploymentCode'])) { throw "Autorizacao de instalacao ausente." }
+if ($null -eq $enrollment -or -not $enrollment.PSObject.Properties['deploymentCode']) { throw "Use o pacote corporativo atualizado para habilitar todos os usuarios." }
 
-$interactiveUser = Get-InteractiveUser
-$windowsUser = ($interactiveUser -split '\\')[-1].Trim().ToLowerInvariant()
+$session = Get-RealtimeInteractiveSession
+$windowsUser = $session.WindowsUser
+$installStarted = [DateTimeOffset]::UtcNow
+$profileConfig = Join-Path $session.ProfileRoot 'config.json'
 $versionOutput = Join-Path $env:TEMP "RealtimeHoursV2-version-$([guid]::NewGuid().ToString('N')).txt"
-$diagnosticOutput = Join-Path $env:TEMP "RealtimeHoursV2-diagnostic-$([guid]::NewGuid().ToString('N')).json"
-$finalDiagnostic = Join-Path $env:TEMP "RealtimeHoursV2-final-$([guid]::NewGuid().ToString('N')).json"
 
 try {
   if (-not $PSCmdlet.ShouldProcess($InstallDir, 'Instalar Realtime Hours V2')) { return }
@@ -292,53 +270,13 @@ try {
   Copy-Item -LiteralPath $AgentExe -Destination $stageExe -Force
   Copy-Item -LiteralPath $AgentExe -Destination $stageNative -Force
 
-  if ($null -ne $enrollment) {
-    $EnrollmentCode = Get-RealtimeOneTimeEnrollment -Enrollment $enrollment -BaseUrl $BaseUrl -ComputerName $env:COMPUTERNAME -WindowsUser $windowsUser
-  }
-  $enrollBody = @{
-    enrollmentCode = $EnrollmentCode
-    hostname = $env:COMPUTERNAME
-    windowsUser = $windowsUser
-    agentVersion = $ExpectedVersion
-  } | ConvertTo-Json -Compress
-  $enroll = Invoke-RealtimeEnrollmentRequest -Uri "$($BaseUrl.TrimEnd('/'))/api/realtime-hours/v2/enroll" -Body $enrollBody
-  if (-not $enroll.success -or [string]::IsNullOrWhiteSpace([string]$enroll.deviceId) -or [string]::IsNullOrWhiteSpace([string]$enroll.deviceSecret)) {
-    throw "A Central recusou o enrollment do dispositivo."
-  }
-
-  $Enrolled = $true
-  $encodedSecret = ([string]$enroll.deviceSecret).Replace('-', '+').Replace('_', '/')
-  while (($encodedSecret.Length % 4) -ne 0) { $encodedSecret += '=' }
-  try { $secretBytes = [Convert]::FromBase64String($encodedSecret) }
-  catch { throw "A Central retornou um segredo de dispositivo invalido." }
-  if ($secretBytes.Length -lt 32) { throw "O segredo de dispositivo retornado e muito curto." }
-  $stageSecret = Join-Path $StagingDir 'device-secret.dpapi'
+  $stageSecret = Join-Path $StagingDir 'deployment-authorization.dpapi'
+  $secretBytes = [Text.Encoding]::UTF8.GetBytes(($enrollment | ConvertTo-Json -Compress))
   $protected = [System.Security.Cryptography.ProtectedData]::Protect($secretBytes, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
   [IO.File]::WriteAllBytes($stageSecret, $protected)
-  # Only the single-use enrollment lives in the extracted package. The device
-  # credential is generated by the server and protected on this Windows machine.
-  if ($EnrollmentFile) { Remove-Item -LiteralPath $EnrollmentFile -Force -ErrorAction Stop }
-  $EnrollmentCode = $null
-  $enrollBody = $null
-  $enrollment = $null
-
-  $stageState = Join-Path $StagingDir 'browser-state'
-  $stageQueue = Join-Path $StagingDir 'queue'
-  $stageFailed = Join-Path $StagingDir 'failed'
-  $stageLogs = Join-Path $StagingDir 'logs'
-  New-Item -ItemType Directory -Path $stageState, $stageQueue, $stageFailed, $stageLogs -Force | Out-Null
-  $stageConfig = Join-Path $StagingDir 'config.json'
-  [ordered]@{
-    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId; windowsUser = $windowsUser
-    secretFile = $stageSecret; stateDir = $stageState; queueDir = $stageQueue; failedDir = $stageFailed; logDir = $stageLogs
-    sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 300; uploadIntervalSeconds = 300
-    idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45
-  } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path $stageConfig -Content $_ }
-  Invoke-AgentMode -Exe $stageExe -Mode 'diagnose' -ConfigPath $stageConfig -OutputPath $diagnosticOutput
-  $diagnostic = Get-Content -LiteralPath $diagnosticOutput -Raw | ConvertFrom-Json
-  if (-not $diagnostic.success -or $diagnostic.agentVersion -ne $ExpectedVersion -or -not $diagnostic.credentialOk) {
-    throw "O diagnostico de pre-instalacao do agente falhou."
-  }
+  [Array]::Clear($secretBytes, 0, $secretBytes.Length)
+  $legacyTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  $legacyPrincipal = if ($null -ne $legacyTask) { [string]$legacyTask.Principal.UserId } else { '' }
 
   Backup-RegistryArtifacts
   $LocalMutationStarted = $true
@@ -346,13 +284,15 @@ try {
   Remove-LegacyPersistence
   Remove-LegacyBrowserArtifacts
   Stop-RelatedProcesses
+  Migrate-RealtimeLegacyProfile -InstallDir $InstallDir -TaskName $TaskName -PrincipalUser $legacyPrincipal
+  Set-RealtimeProfilePermissions -Root $session.ProfileRoot -Sid $session.Sid
   if (Test-Path -LiteralPath $InstallDir) { Move-Item -LiteralPath $InstallDir -Destination $BackupDir -Force }
   Move-Item -LiteralPath $StagingDir -Destination $InstallDir -Force
   $CreatedFinalInstall = $true
 
   $exeTarget = Join-Path $InstallDir 'RealtimeHoursAgentV2.exe'
   $nativeTarget = Join-Path $InstallDir 'RealtimeHoursNativeHostV2.exe'
-  $secretPath = Join-Path $InstallDir 'device-secret.dpapi'
+  $secretPath = Join-Path $InstallDir 'deployment-authorization.dpapi'
   $configPath = Join-Path $InstallDir 'config.json'
   $stateDir = Join-Path $InstallDir 'browser-state'
   $queueDir = Join-Path $InstallDir 'queue'
@@ -360,9 +300,9 @@ try {
   $logDir = Join-Path $InstallDir 'logs'
 
   [ordered]@{
-    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); deviceId = [string]$enroll.deviceId; windowsUser = $windowsUser
+    schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); perUserProfiles = $true; bootstrapFile = $secretPath
     secretFile = $secretPath; stateDir = $stateDir; queueDir = $queueDir; failedDir = $failedDir; logDir = $logDir
-    sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 300; uploadIntervalSeconds = 300
+    sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 60; uploadIntervalSeconds = 30
     idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45
   } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path $configPath -Content $_ }
 
@@ -376,7 +316,7 @@ try {
     installedAt = (Get-Date).ToUniversalTime().ToString('o')
   } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path (Join-Path $InstallDir 'install-metadata.json') -Content $_ }
 
-  foreach ($tool in @('Uninstall-RealtimeHoursV2.ps1', 'Collect-RealtimeHoursV2Diagnostics.ps1')) {
+  foreach ($tool in @('Uninstall-RealtimeHoursV2.ps1', 'Collect-RealtimeHoursV2Diagnostics.ps1', 'Sessions-RealtimeHoursV2.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $tool) -Destination (Join-Path $InstallDir $tool) -Force
   }
 
@@ -386,7 +326,7 @@ try {
     type = 'stdio'; allowed_origins = @("chrome-extension://$ExtensionId/")
   } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path $hostManifest -Content $_ }
 
-  Set-InstallPermissions -InteractiveUser $interactiveUser -RuntimeDirectories @($stateDir, $queueDir, $failedDir, $logDir) -SecretPath $secretPath
+  Set-InstallPermissions -SecretPath $secretPath
 
   foreach ($registryPath in @(
     "HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\$HostName",
@@ -398,23 +338,21 @@ try {
   Set-ExtensionPolicy -BrowserPath 'HKLM:\SOFTWARE\Policies\Google\Chrome'
   Set-ExtensionPolicy -BrowserPath 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
 
-  $arguments = "-mode daemon -config `"$configPath`""
-  $action = New-ScheduledTaskAction -Execute $exeTarget -Argument $arguments -WorkingDirectory $InstallDir
-  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
-  $principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType Interactive -RunLevel Limited
-  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Central Operacional Realtime Hours V2' -Force | Out-Null
-
-  # Activate the pending device and validate the API before starting the daemon.
-  Invoke-AgentMode -Exe $exeTarget -Mode 'once' -ConfigPath $configPath
-  Start-ScheduledTask -TaskName $TaskName
-  Start-Sleep -Seconds 5
-
-  Invoke-AgentMode -Exe $exeTarget -Mode 'diagnose' -ConfigPath $configPath -OutputPath $finalDiagnostic
-  $diagnostic = Get-Content -LiteralPath $finalDiagnostic -Raw | ConvertFrom-Json
-  if (-not $diagnostic.success -or $diagnostic.agentVersion -ne $ExpectedVersion -or -not $diagnostic.credentialOk) {
-    throw "O diagnostico final do agente falhou."
-  }
+  Register-RealtimeSessionTask -TaskName $TaskName -Exe $exeTarget -InstallDir $InstallDir | Out-Null
+  Start-RealtimeSessionTask -TaskName $TaskName -SessionId $session.SessionId | Out-Null
+  $statusPath = Join-Path $session.ProfileRoot 'agent-status.json'
+  $confirmed = $false
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds(55)
+  do {
+    Start-Sleep -Seconds 1
+    if (Test-Path -LiteralPath $statusPath) {
+      try {
+        $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+        $confirmed = $status.agentVersion -eq $ExpectedVersion -and $status.windowsUser -eq $windowsUser -and $status.sessionId -eq $session.SessionId -and $status.credentialOk -and ([DateTimeOffset]::Parse([string]$status.lastSampleAt) -ge $installStarted) -and ([DateTimeOffset]::Parse([string]$status.lastHeartbeatAckAt) -ge $installStarted)
+      } catch { $confirmed = $false }
+    }
+  } until ($confirmed -or [DateTimeOffset]::UtcNow -ge $deadline)
+  if (-not $confirmed) { throw 'O agente nao confirmou o envio na sessao ativa. Verifique a conexao e tente novamente.' }
 
   $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     [string]$_.ExecutablePath -ieq $exeTarget -and [string]$_.CommandLine -match '(?i)-mode\s+daemon'
@@ -423,7 +361,11 @@ try {
   if ($remainingTasks.Count -ne 1 -or $remainingTasks[0].TaskName -ne $TaskName) {
     throw "Era esperada exatamente uma tarefa V2; encontrado: $($remainingTasks.Count)."
   }
+  if ($processes.Count -eq 1 -and ($processes[0].SessionId -ne $session.SessionId -or $processes[0].ProcessId -ne $status.pid)) { throw "O agente iniciou fora da sessao interativa esperada." }
   if ($processes.Count -ne 1) { throw "Era esperado exatamente um processo daemon, encontrado: $($processes.Count)." }
+
+  if ($EnrollmentFile) { Remove-Item -LiteralPath $EnrollmentFile -Force -ErrorAction Stop }
+  $enrollment = $null
 
   # Backups are retained for the pilot so an operator can inspect recovery.
   # Do not let nonessential cleanup turn a completed activation into a rollback.
@@ -442,11 +384,19 @@ catch {
   if ($LocalMutationStarted) {
     try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; Stop-RelatedProcesses } catch {}
   }
-  if ($Enrolled) {
+  if ($CreatedFinalInstall -and (Test-Path -LiteralPath $profileConfig)) {
     try {
-      if ($CreatedFinalInstall) { Invoke-AgentMode -Exe $exeTarget -Mode 'rollback' -ConfigPath $configPath }
-      elseif ($stageConfig -and (Test-Path -LiteralPath $stageConfig -ErrorAction SilentlyContinue)) { Invoke-AgentMode -Exe $stageExe -Mode 'rollback' -ConfigPath $stageConfig }
-    } catch { Write-Warning "Rollback remoto pendente: $($_.Exception.Message). O cadastro temporario precisa ser revisado na Central." }
+      $profile = Get-Content -LiteralPath $profileConfig -Raw | ConvertFrom-Json
+      if ($null -ne $profile.PSObject.Properties['enrolledAt'] -and [DateTimeOffset]::Parse([string]$profile.enrolledAt) -ge $installStarted) {
+        Register-RealtimeSessionTask -TaskName $TaskName -Exe $exeTarget -InstallDir $InstallDir -Mode rollback | Out-Null
+        $rollback = Start-RealtimeSessionTask -TaskName $TaskName -SessionId $session.SessionId
+        $rollbackDeadline = [DateTimeOffset]::UtcNow.AddSeconds(35)
+        while ($rollback.State -eq 4 -and [DateTimeOffset]::UtcNow -lt $rollbackDeadline) { Start-Sleep -Seconds 1; $rollback.Refresh() }
+        $task = Get-ScheduledTaskInfo -TaskName $TaskName
+        if ($rollback.State -eq 4 -or $task.LastTaskResult -ne 0) { throw 'Rollback da credencial individual nao foi confirmado.' }
+        Remove-Item -LiteralPath $profileConfig, ([string]$profile.secretFile) -Force -ErrorAction Stop
+      }
+    } catch { Write-Warning "Rollback remoto pendente: $($_.Exception.Message)" }
   }
   if (-not $LocalMutationStarted) { throw $installationError }
   try { Remove-V2Artifacts } catch {}
@@ -479,9 +429,7 @@ catch {
 finally {
   $EnrollmentCode = $null
   $enrollment = $null
-  $enrollBody = $null
-  if ($null -ne $secretBytes) { [Array]::Clear($secretBytes, 0, $secretBytes.Length) }
-  $enroll = $null
-  Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $versionOutput, $diagnosticOutput, $finalDiagnostic -Force -ErrorAction SilentlyContinue
+    if ($null -ne $secretBytes) { [Array]::Clear($secretBytes, 0, $secretBytes.Length) }
+    Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $versionOutput -Force -ErrorAction SilentlyContinue
 }

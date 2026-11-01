@@ -61,7 +61,7 @@ def make_package(root, enrollment_file, output, commit):
     files.update({'RealtimeHoursAgentV2.exe': binary, 'extension.crx': remote_crx})
     release = {'schemaVersion': 1, 'environment': 'homologation', 'baseUrl': base_url,
                'extensionId': extension['extensionId'], 'extensionUpdateUrl': update_url,
-               'commit': commit, 'pilot': True, 'installerExpiresAt': enrollment['expiresAt'], 'enrollmentMode': 'fleet' if fleet else 'single-use',
+               'commit': commit, 'pilot': True, 'installationMode': 'per-user', 'installerExpiresAt': enrollment['expiresAt'], 'enrollmentMode': 'fleet' if fleet else 'single-use',
                'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     files['release.json'] = (json.dumps(release, indent=2) + '\n').encode()
     files['enrollment.json'] = (json.dumps(enrollment, indent=2) + '\n').encode()
@@ -81,6 +81,10 @@ Maquinas ja instaladas continuam funcionando apos o vencimento deste ZIP.
 Para instalar em outra maquina, extraia novamente o ZIP original nessa maquina.
 
 A coleta inclui dominio da aba ativa e presenca. Nao coleta caminho da URL, conteudo ou senha.
+O agente inicia para qualquer usuario ao entrar, reconectar ou desbloquear a sessao Windows.
+Dados e credenciais ficam separados por usuario, sem herdar os sites de outra sessao.
+Com o computador desligado nao ha coleta. Ao retomar, os registros pendentes sao reenviados.
+A primeira entrada de cada usuario precisa de internet para o cadastro automatico.
 A autorizacao e apagada da pasta extraida apos o cadastro da maquina.
 Nao publique este ZIP: distribua somente entre os computadores autorizados da empresa.
 A autorizacao deste ZIP serve somente para cadastrar novas maquinas.
@@ -89,7 +93,8 @@ Token global de envio, service role do Supabase e chave mestra do servidor nao e
 
 DIAGNOSTICO
 Apos instalar, envie RealtimeHoursV2-Diagnostico.json da area de trabalho publica para validar o piloto.
-Ele nao inclui credenciais. Logs: C:\\ProgramData\\CentralOperacional\\RealtimeHoursV2-Installer
+Ele nao inclui credenciais. Logs de instalacao: C:\\ProgramData\\CentralOperacional\\RealtimeHoursV2-Installer
+Dados e logs do usuario: %LOCALAPPDATA%\\CentralOperacional\\RealtimeHoursV2
 Para coletar novamente: botao direito em Collect-RealtimeHoursV2Diagnostics.ps1 > Executar com PowerShell.
 
 DESINSTALACAO
@@ -98,7 +103,7 @@ Configuracoes do Windows > Aplicativos > Central Operacional - Realtime Hours V2
 PENDENTES NO WINDOWS
 Instalacao limpa, upgrade, reinicio, Chrome, Edge, desconexao/reconexao e desinstalacao.
 Este pacote e piloto. A aprovacao final depende desses testes.
-Em falha apos o consumo do cadastro, envie o log para receber outro pacote.
+Em falha, envie o diagnostico. O mesmo ZIP pode ser extraido novamente para repetir a instalacao.
 Se faltar rede durante o rollback, a restauracao remota pode exigir revisao na Central.
 ''').encode()
     if sum(name.lower().endswith('.bat') for name in files) != 1:
