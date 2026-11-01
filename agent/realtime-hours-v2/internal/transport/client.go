@@ -54,7 +54,12 @@ func (c Client) PostJSON(ctx context.Context, path string, payload any) (int, []
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	resp, err := client.Do(req)
+	// Signed device credentials must never follow a redirect to another endpoint.
+	requestClient := *client
+	requestClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := requestClient.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("send request: %w", err)
 	}

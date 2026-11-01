@@ -7,19 +7,22 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/app"
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/bootstrap"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/config"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/instance"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/nativehost"
+	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/platform"
 )
 
 func main() {
-	mode := flag.String("mode", inferMode(), "daemon, once, diagnose, native-host or version")
+	mode := flag.String("mode", inferMode(), "daemon, once, diagnose, native-host, rollback or version")
 	configPath := flag.String("config", config.DefaultPath(), "path to config.json")
 	stateDir := flag.String("state-dir", "", "browser state directory for native host")
 	outputPath := flag.String("output", "", "optional output file for version and diagnose modes")
@@ -35,6 +38,12 @@ func main() {
 		if dir == "" {
 			if cfg, err := config.Load(*configPath); err == nil {
 				dir = cfg.StateDir
+				if cfg.PerUserProfiles {
+					dir, err = config.UserStateDir(platform.SessionID())
+					if err != nil {
+						fatal(err)
+					}
+				}
 			} else {
 				dir = config.Default().StateDir
 			}
@@ -50,19 +59,61 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	runtime, err := app.New(cfg, *configPath)
-	if err != nil {
-		fatal(err)
-	}
-
 	var guard instance.Guard
-	if *mode == "daemon" {
-		guard, err = instance.Acquire(`Global\CentralOperacionalRealtimeHoursV2`)
+	if *mode == "daemon" || *mode == "once" {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			guard, err = instance.Acquire(`Global\CentralOperacionalRealtimeHoursV2`)
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		if err != nil {
 			fatal(err)
 		}
 		defer guard.Close()
 	}
+	sessionManaged := cfg.PerUserProfiles
+	if sessionManaged {
+		if *mode == "daemon" && !platform.SessionActive() {
+			return
+		}
+		root, pathErr := config.UserRoot()
+		if pathErr != nil {
+			fatal(pathErr)
+		}
+		profilePath := filepath.Join(root, "config.json")
+		if *mode == "daemon" {
+			account, accountErr := user.Current()
+			if accountErr != nil {
+				fatal(accountErr)
+			}
+			hostname, _ := os.Hostname()
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+			result, bootstrapErr := bootstrap.Ensure(ctx, cfg, bootstrap.Options{Root: root, Hostname: hostname, User: account.Username, SessionID: platform.SessionID(), Version: app.Version})
+			cancel()
+			if bootstrapErr != nil {
+				_ = os.MkdirAll(root, 0o700)
+				status, _ := json.Marshal(map[string]any{"success": false, "agentVersion": app.Version, "windowsUser": bootstrap.NormalizeUser(account.Username), "error": bootstrapErr.Error(), "capturedAt": time.Now().UTC()})
+				_ = os.WriteFile(filepath.Join(root, "bootstrap-status.json"), status, 0o600)
+				fatal(bootstrapErr)
+			}
+			cfg, profilePath = result.Config, result.Path
+		} else {
+			cfg, err = config.Load(profilePath)
+			if err != nil {
+				fatal(err)
+			}
+			cfg.StateDir = filepath.Join(root, "browser-state", fmt.Sprint(platform.SessionID()))
+		}
+		*configPath = profilePath
+	}
+	runtime, err := app.New(cfg, *configPath)
+	if err != nil {
+		fatal(err)
+	}
+	runtime.SessionManaged = sessionManaged
 
 	switch *mode {
 	case "daemon":
@@ -76,6 +127,16 @@ func main() {
 		defer cancel()
 		if err := runtime.RunOnce(ctx); err != nil {
 			fatal(err)
+		}
+	case "rollback":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		status, body, err := runtime.Client.PostJSON(ctx, "/api/realtime-hours/v2/rollback", map[string]any{})
+		var result struct {
+			Success bool `json:"success"`
+		}
+		if err != nil || status != 200 || json.Unmarshal(body, &result) != nil || !result.Success {
+			fatal(fmt.Errorf("server rollback failed: status=%d", status))
 		}
 	case "diagnose":
 		data, _ := json.MarshalIndent(runtime.Diagnose(), "", "  ")

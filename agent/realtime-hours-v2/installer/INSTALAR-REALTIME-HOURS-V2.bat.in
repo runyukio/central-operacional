@@ -1,0 +1,9 @@
+@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+title Central Operacional - Realtime Hours V2
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0Start-RealtimeHoursV2.ps1"
+set "INSTALL_RESULT=%ERRORLEVEL%"
+echo.
+if not "%INSTALL_RESULT%"=="0" echo A instalacao nao foi concluida. Nenhuma configuracao precisa ser digitada.
+pause
+exit /b %INSTALL_RESULT%
