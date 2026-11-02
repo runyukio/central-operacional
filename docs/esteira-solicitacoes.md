@@ -5,7 +5,8 @@ A rota `/esteiras` usa somente tabela, abre em Todos e solicita 50 registros por
 ## Prazo WFM
 
 - São 48 horas de segunda a sexta, durante todo o dia, no fuso `America/Sao_Paulo`. Sábado e domingo pausam a contagem; feriados contam.
-- WFM genérico começa na criação. Outros tipos começam na primeira transição para análise WFM; o aceite do parceiro não inicia o prazo.
+- WFM genérico começa na criação, pois já segue diretamente para WFM. Outros tipos começam na primeira transição para análise WFM após a aprovação/encaminhamento do supervisor; o aceite do parceiro não inicia o prazo.
+- Antes desse envio, os badges mostram “Aguardando parceiro” ou “Aguardando supervisor”, sem entrada no WFM, vencimento ou tempo de SLA. A idade desde a criação é informada separadamente no card. A etapa atual de parceiro/supervisor prevalece sobre evidência histórica inconsistente.
 - Aprovação mantém o prazo ativo. Conclusão, recusa e cancelamento congelam o resultado no encerramento.
 - O limite exato de 48h ainda está dentro do prazo; o atraso começa depois dele.
 - A evidência vem do histórico completo, sem limite de 30 eventos. Na troca casada, `supervisorApprovedAt` também é evidência válida de entrada.
@@ -23,15 +24,19 @@ O cálculo está centralizado em `src/lib/request-pipeline.ts`. Não há migraç
 | `deadline` | `WAITING_WFM`, `WITHIN_DEADLINE`, `OVERDUE`; omitido equivale a Todos |
 | `sort` | `created` (padrão, mais recentes), `oldest` (mais antigos), `deadline` |
 
-O clique no card “Pendente mais antigo” mostra a lista na própria tabela com `status=Pendentes` e `sort=oldest`, preservando os demais filtros e retornando à primeira página. O usuário escolhe então o pedido para abrir o detalhe. “Pendentes” reúne abertos, em análise e aprovados ainda não encerrados.
+O clique no card “Pendente mais antigo” abre uma janela com `status=Pendentes` e `sort=oldest`, preservando a busca e os filtros aplicados. A janela tem paginação própria de 50 registros e não altera a tabela principal. O usuário escolhe então o pedido para abrir o detalhe. “Pendentes” reúne abertos, em análise e aprovados ainda não encerrados.
 
 O filtro de prazo seleciona somente pendências. A ordenação por vencimento prioriza pendências vencidas e coloca registros sem vencimento ao final.
 
-Cada registro inclui `createdAtIso` e `sla`: `receivedAt`, `closedAt`, `dueAt`, `state`, `closed` e `remainingBusinessMinutes`. Datas de cálculo são ISO; a apresentação usa São Paulo.
+Cada registro inclui `createdAtIso` e `sla`: `receivedAt`, `closedAt`, `dueAt`, `state`, `closed`, `remainingBusinessMinutes` e, antes do envio, `waitingFor` (`PARTNER` ou `SUPERVISOR`). O valor legado `WAITING_WFM` é mantido no contrato e no filtro de prazo para “Prazo não iniciado”. Datas de cálculo são ISO; a apresentação usa São Paulo.
 
 `summary` considera todos os filtros, antes da paginação. `statusSummary` ignora somente o status selecionado e alimenta os contadores dos botões. Os cards de prazo excluem pedidos encerrados; o mais antigo considera abertos, em análise e aprovados ainda não concluídos.
 
 A consulta obtém a evidência de prazo em lote e carrega os dados completos de apresentação apenas dos IDs da página atual. O acesso por perfil, o escopo pessoal e os filtros legados continuam aplicados nas duas leituras. O impacto no requerido permanece no detalhe.
+
+## Recusa administrativa
+
+ADMIN pode recusar nas etapas de aceite do parceiro, supervisor e WFM, com motivo obrigatório, histórico e auditoria. A autorização de recusa é independente da autorização para aprovar a etapa. A recusa fica indisponível e é negada também no serviço se o pedido já foi aprovado, encerrado ou teve cronograma/efeitos aplicados. Não há reversão de cronogramas. A API informa `canReject` para a interface.
 
 ## Validação
 

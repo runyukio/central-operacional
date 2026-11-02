@@ -1,5 +1,5 @@
 import { calculateRequestSla, requestDateBoundary, requestNextAction, selectPipeline } from "@/lib/request-pipeline";
-import { isDirectWfmRequest } from "@/lib/request-routing";
+import { canAdminRejectRequest, isDirectWfmRequest } from "@/lib/request-routing";
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 
@@ -1323,6 +1323,10 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
     return { error: "Esta solicitação já foi processada." };
   }
 
+  if (role === "ADMIN" && target === "RECUSADO" && !canAdminRejectRequest(role, request.status, request.payload as Record<string, unknown> | null)) {
+    return { error: "Não é possível recusar uma solicitação já aprovada ou aplicada ao cronograma." };
+  }
+
   if (role === "COLABORADOR") {
     if (target === "CANCELADO" && isRequester && current === "ABERTO") {
       return {
@@ -1405,7 +1409,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
     return {
       nextStatus: "RECUSADO",
       applySchedule: false,
-      historyAction: current === "EM_ANALISE" || directWfm ? "Recusa WFM" : "Recusa do supervisor",
+      historyAction: role === "ADMIN" ? "Recusa administrativa" : current === "EM_ANALISE" || directWfm ? "Recusa WFM" : "Recusa do supervisor",
       auditAction: "RECUSA",
       requesterTitle: directWfm ? "Solicitação WFM recusada" : "Sua solicitação de folga foi recusada",
       requesterBody: directWfm ? "Sua solicitação WFM foi recusada. Consulte o motivo no histórico." : "Sua solicitação de folga foi recusada. Consulte o motivo no histórico.",
@@ -1498,6 +1502,15 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
     createdAtIso: request.createdAt.toISOString(),
     canSupervisorStep: isPairedSwap(request.type.name, payload) ? payload.stage === "SUPERVISOR" && role === "SUPERVISOR" && request.employee?.supervisor?.userId === user?.id : canSupervisorStep,
     canWfmFinal: isPairedSwap(request.type.name, payload) ? payload.stage === "WFM" && canWfmFinal : canWfmFinal,
+    canReject: role === "ADMIN" ? canAdminRejectRequest(role, request.status, payload)
+      : isPairedSwap(request.type.name, payload)
+        ? request.status !== "APROVADO" && !(immutableStatuses as readonly string[]).includes(request.status) &&
+          ((payload.stage === "PARTNER" && payload.partnerUserId === user?.id) ||
+           (payload.stage === "SUPERVISOR" && role === "SUPERVISOR" && request.employee?.supervisor?.userId === user?.id) ||
+           (payload.stage === "WFM" && canWfmFinal))
+        : (request.status === "ABERTO" && !isDirectWfmRequest(request.type.name) && canSupervisorStep) ||
+          (request.status === "ABERTO" && isDirectWfmRequest(request.type.name) && canWfmFinal) ||
+          (["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"].includes(request.status) && canWfmFinal),
     canConclude: isPairedSwap(request.type.name, payload) ? canConcludePairedSwap(role, request.status, payload) : request.status === "APROVADO" && canWfmFinal,
     canPartnerAccept: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" && payload.partnerUserId === user?.id,
     canCancelPairedSwap: isPairedSwap(request.type.name, payload) && request.requesterId === user?.id && payload.stage !== "DONE",

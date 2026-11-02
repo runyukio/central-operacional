@@ -86,6 +86,7 @@ export type RequestSla = {
   dueAt: string | null;
   state: "WAITING_WFM" | "WITHIN_DEADLINE" | "OVERDUE" | "UNRECORDED" | "NOT_APPLICABLE";
   closed: boolean;
+  waitingFor?: "PARTNER" | "SUPERVISOR";
   remainingBusinessMinutes: number | null;
 };
 
@@ -98,17 +99,23 @@ export function calculateRequestSla(input: {
   // The paired swap payload is also authoritative evidence of supervisor approval.
   const approvedAt = input.payload?.supervisorApprovedAt;
   const pairedEntry = typeof approvedAt === "string" && Number.isFinite(Date.parse(approvedAt)) ? new Date(approvedAt) : null;
-  const received = isDirectWfmRequest(input.type) ? input.createdAt : entry?.createdAt ?? pairedEntry;
   const closed = closedStatuses.has(input.status);
+  const stage = String(input.payload?.stage ?? "");
+  const beforeWfm = !closed && !["APROVADO", "Aprovado"].includes(input.status) &&
+    (["PARTNER", "SUPERVISOR"].includes(stage) ||
+      (!isDirectWfmRequest(input.type) && ["ABERTO", "Aberto"].includes(input.status) && stage !== "WFM"));
+  const received = beforeWfm ? null : isDirectWfmRequest(input.type) ? input.createdAt : entry?.createdAt ?? pairedEntry;
   const closing = closed ? events.find(e => e.to === input.status || e.to === ({ "Concluído": "CONCLUIDO", "Recusado": "RECUSADO", "Cancelado": "CANCELADO" }[input.status]))?.createdAt ?? null : null;
   const result: RequestSla = {
     receivedAt: received?.toISOString() ?? null, closedAt: closing?.toISOString() ?? null,
     dueAt: null, state: "UNRECORDED", closed, remainingBusinessMinutes: null
   };
   if (!received) {
-    const beforeWfm = ["ABERTO", "Aberto"].includes(input.status) || ["PARTNER", "SUPERVISOR"].includes(String(input.payload?.stage));
     const endedBeforeWfm = closing && events.some(e => e.createdAt.getTime() === closing.getTime() && e.from === "ABERTO");
-    if (beforeWfm && !closed) result.state = "WAITING_WFM";
+    if (beforeWfm) {
+      result.state = "WAITING_WFM";
+      result.waitingFor = stage === "PARTNER" ? "PARTNER" : "SUPERVISOR";
+    }
     else if (endedBeforeWfm) result.state = "NOT_APPLICABLE";
     return result;
   }
@@ -125,6 +132,7 @@ export function requestNextAction(input: { type: string; status: string; payload
   if (["APROVADO", "Aprovado"].includes(status)) return { nextStep: "Aguardando conclusão", nextOwner: "WFM/Admin" };
   if (closedStatuses.has(status)) return { nextStep: status === "CONCLUIDO" || status === "Concluído" ? "Concluída" : status === "RECUSADO" || status === "Recusado" ? "Encerrada por recusa" : "Cancelada", nextOwner: "Sem próxima ação" };
   if (input.payload?.stage === "PARTNER") return { nextStep: "Aceite do parceiro", nextOwner: String(input.payload.partnerName ?? "Parceiro") };
+  if (input.payload?.stage === "SUPERVISOR") return { nextStep: "Aprovação do supervisor", nextOwner: input.supervisor || "Supervisor responsável" };
   if (isDirectWfmRequest(input.type) || wfmStatuses.has(status) || status === "Em análise" || input.payload?.stage === "WFM") {
     return { nextStep: "Análise WFM", nextOwner: input.assignee || "WFM" };
   }

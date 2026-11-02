@@ -74,6 +74,75 @@ function RequestCreateModal({ draft, setDraft, onClose, onSubmit, pending, messa
   </Dialog.Portal></Dialog.Root>;
 }
 
+function PendingRequestsModal({ filters, onClose, onSelect }: {
+  filters: typeof defaultPipelineFilters; onClose: () => void; onSelect: (request: ClientRequest) => void;
+}) {
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState<RequestListResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value && value !== "Todos" && value !== "false") params.set(key, value);
+    });
+    params.set("status", "Pendentes");
+    params.set("sort", "oldest");
+    params.set("limit", "50");
+    params.set("page", String(page));
+    setLoading(true);
+    setError("");
+    void apiJson<RequestListResponse>(`/api/requests?${params.toString()}`, { signal: controller.signal })
+      .then(payload => {
+        if (controller.signal.aborted) return;
+        if (payload.error) throw new Error(payload.error);
+        setResult(payload);
+      })
+      .catch(reason => {
+        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Não foi possível carregar as pendências.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [filters, page]);
+  const currentPage = result?.page ?? page;
+  const totalPages = result?.totalPages ?? 1;
+  return <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}><Dialog.Portal>
+    <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40" />
+    <div className="pointer-events-none fixed inset-0 z-[51] grid place-items-center p-4">
+      <Dialog.Content className="card pointer-events-auto flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden !bg-white p-5">
+        <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
+          <Dialog.Title className="text-lg font-extrabold text-navy-950">Pendências mais antigas</Dialog.Title>
+          <button type="button" onClick={onClose} aria-label="Fechar lista de pendências" className="rounded-lg p-2"><X className="h-5 w-5" /></button>
+        </div>
+        <Dialog.Description className="mb-4 shrink-0 text-sm text-muted">Escolha um pedido para ver os detalhes. A lista segue os filtros da esteira e a data de criação, do mais antigo ao mais recente. O prazo de 48h só começa quando o pedido chega ao WFM.</Dialog.Description>
+        <div className="min-h-0 flex-1 overflow-auto" aria-busy={loading}>
+        {error ? <p role="alert" className="mb-3 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{error}</p> : null}
+        {loading ? <p role="status" className="py-6 text-sm font-bold text-muted">Carregando pendências...</p> : !error ? <>
+          {!result?.data.length ? <EmptyState title="Nenhuma pendência encontrada" description="Não há pedidos pendentes para os filtros selecionados." /> : <SimpleTable
+            columns={["Pedido", "Solicitante", "Pendente com", "Criado em", "Prazo WFM"]}
+            rows={result.data.map(request => [
+              <button key={`${request.id}-choose`} onClick={() => onSelect(request)} className="max-w-64 text-left"><span className="font-extrabold text-blue-600 underline-offset-2 hover:underline">{request.id}</span><span className="mt-1 block font-bold">{request.type}</span><span className="mt-1 line-clamp-2 text-xs text-muted">{request.title}</span></button>,
+              <div key={`${request.id}-requester`}><p className="font-bold">{request.requester}</p><p className="text-xs text-muted">{request.requesterWbLogin || "—"}</p></div>,
+              request.nextOwner ?? "—", formatPipelineDate(request.createdAtIso),
+              <RequestSlaBadge key={`${request.id}-sla`} sla={request.sla} />
+            ])}
+          />}
+        </> : null}
+        </div>
+        <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+          <p className="text-sm text-muted">{paginationRange(currentPage, 50, result?.total ?? 0)}</p>
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={loading || currentPage <= 1} onClick={() => setPage(currentPage - 1)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Anterior</button>
+            <span className="text-sm font-bold">Página {currentPage} de {totalPages}</span>
+            <button type="button" disabled={loading || currentPage >= totalPages} onClick={() => setPage(currentPage + 1)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Próxima</button>
+          </div>
+        </div>
+      </Dialog.Content>
+    </div>
+  </Dialog.Portal></Dialog.Root>;
+}
+
 export function RequestsKanbanPage() {
   const [requests, setRequests] = useState<ClientRequest[]>([]);
   const [selected, setSelected] = useState<ClientRequest | null>(null);
@@ -98,7 +167,7 @@ export function RequestsKanbanPage() {
   const detailSequence = useRef(0);
   const filtersRef = useRef(filters);
   const pageRef = useRef(1);
-  const requestListRef = useRef<HTMLDivElement>(null);
+  const [pendingListFilters, setPendingListFilters] = useState<typeof defaultPipelineFilters | null>(null);
   filtersRef.current = filters;
   const [loadError, setLoadError] = useState("");
   const [newRequest, setNewRequest] = useState(createDefaultRequestDraft);
@@ -365,7 +434,7 @@ export function RequestsKanbanPage() {
           <FormSelect label="LOB" value={filters.lob} options={["Todos", "ALL", "CEC", "TNS", "ADS"]} onChange={lob => applyFilters({ ...filters, lob })} />
           <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Prazo</span>
             <select aria-label="Prazo" value={filters.deadline} onChange={event => applyFilters({ ...filters, deadline: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm">
-              <option value="Todos">Todos</option><option value="WAITING_WFM">Aguardando WFM</option><option value="WITHIN_DEADLINE">Dentro do prazo</option><option value="OVERDUE">Fora do prazo</option>
+              <option value="Todos">Todos</option><option value="WAITING_WFM">Prazo não iniciado</option><option value="WITHIN_DEADLINE">Dentro do prazo</option><option value="OVERDUE">Fora do prazo</option>
             </select>
           </label>
         </div>
@@ -395,16 +464,14 @@ export function RequestsKanbanPage() {
         <StatCard title="Dentro do prazo" value={summary.withinDeadline} helper="Pendentes com prazo ativo" icon={CheckCircle2} tone="green" />
         <StatCard title="Fora do prazo" value={summary.overdue} helper="Pendentes acima de 48h" icon={AlertTriangle} tone="red" />
         <button type="button" disabled={!summary.oldestPending} aria-label="Ver lista de pendências, das mais antigas às mais recentes" onClick={() => {
-          applyFilters({ ...filters, status: "Pendentes", sort: "oldest" });
-          requestListRef.current?.focus({ preventScroll: true });
-          requestListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          setPendingListFilters({ ...filters });
         }} className="min-w-0 rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-default">
-          <StatCard title="Pendente mais antigo" value={summary.oldestPending?.id ?? "—"} helper={summary.oldestPending ? `Aberto há ${formatPipelineDuration((Date.now() - Date.parse(summary.oldestPending.createdAt)) / 60_000)} • Ver lista` : "Nenhuma pendência"} icon={Clock} tone="purple" />
+          <StatCard title="Pendente mais antigo" value={summary.oldestPending?.id ?? "—"} helper={summary.oldestPending ? `Criado há ${formatPipelineDuration((Date.now() - Date.parse(summary.oldestPending.createdAt)) / 60_000)} • Ver lista` : "Nenhuma pendência"} icon={Clock} tone="purple" />
         </button>
       </div>
       {loading ? <div className="mb-5 rounded-lg border border-border bg-white p-4 text-sm font-bold text-muted">Carregando solicitações...</div> : null}
       {!loading && !loadError && !requests.length ? <div className="mb-5"><EmptyState title="Nenhuma solicitação encontrada para os filtros selecionados." description="Ajuste os filtros ou limpe a busca para visualizar a esteira." /></div> : null}
-      <div ref={requestListRef} role="region" aria-label="Lista de solicitações" tabIndex={-1} className="scroll-mt-24 outline-none">
+      <div role="region" aria-label="Lista de solicitações" tabIndex={-1} className="scroll-mt-24 outline-none">
       <Panel title={filters.status === "Pendentes" ? "Pendências" : "Solicitações"}>
         {filters.status === "Pendentes" ? <p className="mb-3 text-sm font-semibold text-muted">{filters.sort === "oldest" ? "Da mais antiga para a mais recente. " : ""}Selecione um pedido na lista para ver os detalhes.</p> : null}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -412,7 +479,7 @@ export function RequestsKanbanPage() {
           <label className="flex items-center gap-2 text-sm font-bold"><span>Ordenar por</span><select aria-label="Ordenar por" value={filters.sort} onChange={event => applyFilters({ ...filters, sort: event.target.value })} className="h-10 rounded-lg border border-border px-3"><option value="created">Mais recentes</option><option value="oldest">Mais antigos</option><option value="deadline">Vencimento</option></select></label>
         </div>
         <div aria-busy={loading}>
-          <SimpleTable columns={["Pedido", "Solicitante", "Status", "Pendente com", "Próxima ação", "Entrada no WFM", "Vencimento", "Prazo"]} rows={requests.map(request => [
+          <SimpleTable columns={["Pedido", "Solicitante", "Status", "Pendente com", "Próxima ação", "Entrada no WFM", "Vencimento", "Prazo WFM"]} rows={requests.map(request => [
             <button key={`${request.id}-id`} onClick={() => openRequestDetail(request)} className="max-w-60 text-left"><span className="font-extrabold text-blue-600 underline-offset-2 hover:underline">{request.id}</span><span className="mt-1 block font-bold text-navy-950">{request.type}</span><span className="mt-1 line-clamp-2 text-xs text-muted">{request.title}</span><span className="mt-1 block text-xs text-muted">Criado em {formatPipelineDate(request.createdAtIso)}</span></button>,
             <div key={`${request.id}-requester`} className="max-w-48"><p className="font-bold">{request.requester}</p><p className="text-xs text-muted">{request.requesterWbLogin || "—"}</p></div>,
             <StatusBadge key={`${request.id}-status`} status={request.status} />,
@@ -450,6 +517,10 @@ export function RequestsKanbanPage() {
           </div>
         </Dialog.Portal></Dialog.Root>
       ) : null}
+      {pendingListFilters ? <PendingRequestsModal filters={pendingListFilters} onClose={() => setPendingListFilters(null)} onSelect={request => {
+        setPendingListFilters(null);
+        void openRequestDetail(request);
+      }} /> : null}
       {showCreate ? <RequestCreateModal draft={newRequest} setDraft={setNewRequest} onClose={() => setShowCreate(false)} onSubmit={submitRequest} pending={creating} message={actionMessage} /> : null}
       <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
