@@ -11,7 +11,7 @@ const target = (id: string, lob = "ADS") => spaceTargets(lob).find((row) => row.
 test("all operational targets, units and bounds are explicit", () => {
   assert.deepEqual(spaceTargets("ADS").map((row) => [row.id, row.target]), [["quality", 95], ["aht", 60], ["abs", 7.5], ["latency", 2], ["materialDaily", 300]]);
   assert.equal(target("quality", "TNS").target, 98);
-  assert.equal(target("aht", "TNS").target, 50);
+  assert.equal(target("aht", "TNS").target, 40);
   assert.equal(target("latency", "TNS").target, 15);
   assert.equal(target("commentsLatency", "TNS").target, 24);
   assert.equal(target("quality", "CEC").target, 95);
