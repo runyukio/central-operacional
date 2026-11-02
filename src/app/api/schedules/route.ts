@@ -6,6 +6,7 @@ import { createPermissionError, errorResponse } from "@/lib/api-errors";
 import { canUpdateScheduleSlot } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { editOperationalSchedule, getOperationalSchedules, removeOperationalSchedules } from "@/lib/schedule-service";
+import { scheduleEditResponse } from "@/lib/schedule-editor-response";
 
 const editSchema = z.object({
   employeeId: z.string().min(1),
@@ -73,7 +74,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: result.error }, { status: 409 });
   }
 
-  return NextResponse.json(result);
+  return NextResponse.json(scheduleEditResponse(result.data));
 }
 
 const removeSchema = z.object({
