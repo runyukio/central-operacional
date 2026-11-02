@@ -47,8 +47,9 @@ function RequestCreateModal({ draft, setDraft, onClose, onSubmit, pending, messa
   draft: RequestDraft; setDraft: Dispatch<SetStateAction<RequestDraft>>; onClose: () => void; onSubmit: () => void; pending: boolean; message: string;
 }) {
   return <Dialog.Root open onOpenChange={open => { if (!open && !pending) onClose(); }}><Dialog.Portal>
-    <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40 backdrop-blur-sm" />
-    <Dialog.Content className="card fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5">
+    <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40" />
+    <div className="pointer-events-none fixed inset-0 z-[51] grid place-items-center p-4">
+    <Dialog.Content className="card pointer-events-auto max-h-[88vh] w-full max-w-xl overflow-y-auto !bg-white p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <Dialog.Title className="text-lg font-extrabold text-navy-950">Nova solicitação WFM</Dialog.Title>
         <button type="button" onClick={onClose} disabled={pending} aria-label="Fechar nova solicitação" className="rounded-lg p-2"><X className="h-5 w-5" /></button>
@@ -69,6 +70,7 @@ function RequestCreateModal({ draft, setDraft, onClose, onSubmit, pending, messa
         <button disabled={pending} type="submit" className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">{pending ? "Enviando..." : "Enviar para o WFM"}</button>
       </form>
     </Dialog.Content>
+    </div>
   </Dialog.Portal></Dialog.Root>;
 }
 
@@ -423,8 +425,9 @@ export function RequestsKanbanPage() {
       </div>
       {selected ? (
         <Dialog.Root open onOpenChange={open => { if (!open && !actionPending) closeRequestDetail(); }}><Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40 backdrop-blur-sm" />
-          <Dialog.Content className="card fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5">
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40" />
+          <div className="pointer-events-none fixed inset-0 z-[51] grid place-items-center p-4">
+          <Dialog.Content className="card pointer-events-auto max-h-[88vh] w-full max-w-3xl overflow-y-auto !bg-white p-5">
             <div className="mb-5 flex items-center justify-between">
               <Dialog.Title className="text-lg font-extrabold text-navy-950">Detalhe da Solicitação</Dialog.Title>
               <button disabled={Boolean(actionPending)} aria-label="Fechar detalhe da solicitação" onClick={closeRequestDetail} className="rounded-lg p-2 text-muted"><X className="h-5 w-5" /></button>
@@ -434,6 +437,7 @@ export function RequestsKanbanPage() {
             {detailLoading ? <div className="mb-4 rounded-lg border border-border bg-slate-50 p-3 text-sm font-bold text-muted">Carregando detalhe completo...</div> : null}
             {!detailLoading ? <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} /> : null}
           </Dialog.Content>
+          </div>
         </Dialog.Portal></Dialog.Root>
       ) : null}
       {showCreate ? <RequestCreateModal draft={newRequest} setDraft={setNewRequest} onClose={() => setShowCreate(false)} onSubmit={submitRequest} pending={creating} message={actionMessage} /> : null}
