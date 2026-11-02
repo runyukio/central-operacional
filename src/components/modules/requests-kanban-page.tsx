@@ -1,271 +1,76 @@
 "use client";
 
-import { DAY_OFF_OCTOBER_START, DAY_OFF_REQUEST_NOTICE, DAY_OFF_OCTOBER_END, validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
-import { PairedSwapFields } from "./paired-swap-fields";
-
+import * as Dialog from "@radix-ui/react-dialog";
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Clock, ClipboardList, KanbanSquare, Plus, RefreshCw, Search, UsersRound, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, ClipboardList, Plus, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
-import { EmptyState, PageHeader, Panel, PriorityBadge, SimpleTable, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { cn, initials } from "@/lib/utils";
-import { standardShiftNames } from "@/lib/shift-display";
-import { isMonthlyAdvanceRequestPeriodOpen } from "@/lib/monthly-advance-constants";
-import { ClientRequest, CoverageImpactBadge, CoverageWarningDialog, CoverageWarningDialogState, DayOffKind, FormInput, FormSelect, RequestDetailContent, apiJson, coverageImpactFromError, dayOffKindFromRequest, dayOffKindLabels, getRequestIcon, offsetOperationalDateInput, queryParam, requestPriorities, requestStatuses, requestTypes } from './shared';
+import { EmptyState, PageHeader, Panel, SimpleTable, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { cn } from "@/lib/utils";
+import { formatPipelineDate, formatPipelineDuration, type PipelineSummary } from "@/lib/request-pipeline";
+import { RequestSlaBadge } from "./request-sla-badge";
+import { type ClientRequest, CoverageWarningDialog, type CoverageWarningDialogState, FormInput, FormSelect, RequestDetailContent, apiJson, coverageImpactFromError, queryParam, requestPriorities, requestTypes } from "./shared";
+
 type RequestListResponse = {
-  data: ClientRequest[];
-  total?: number;
-  page?: number;
-  limit?: number;
-  totalPages?: number;
-  summary?: {
-    total: number;
-    byStatus: Record<string, number>;
-  };
+  data: ClientRequest[]; total?: number; page?: number; limit?: number; totalPages?: number;
+  summary?: PipelineSummary; statusSummary?: PipelineSummary; error?: string;
   supervisors?: Array<{ id: string; name: string; wbLogin: string; email?: string }>;
   actor?: { role: string; name?: string };
 };
-
-const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
-
-
-function isDayOffRequest(type: string) {
-  return /troca casada|troca de folga|venda de folga|solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(type);
-}
-
-
+const statusOptions = [
+  ["Todos", "Todos"], ["Aberto", "Abertos"], ["Em análise", "Em análise"], ["Aprovado", "Aprovados"],
+  ["Concluído", "Concluídos"], ["Recusado", "Recusados"], ["Cancelado", "Cancelados"]
+];
 const defaultPipelineFilters = {
-  employeeId: queryParam("employeeId"),
-  search: "",
-  status: "Todos",
-  type: "Todos",
-  startDate: queryParam("startDate"),
-  endDate: queryParam("endDate"),
-  lob: "Todos",
-  supervisorId: "Todos",
-  collaborator: "",
-  wbLogin: "",
-  requester: "",
-  priority: "Todos",
-  assignedTo: "Todos",
-  pendingAction: "false",
-  limit: "50"
+  employeeId: queryParam("employeeId"), search: "", status: "Todos", type: "Todos",
+  startDate: queryParam("startDate"), endDate: queryParam("endDate"), lob: "Todos",
+  supervisorId: "Todos", priority: "Todos", pendingAction: "false", deadline: "Todos", sort: "created", limit: "50"
 };
-
-
-function requestedDateLabel(request: ClientRequest) {
-  const payload = request.payload ?? {};
-  return String(
-    payload.desiredDayOffRequestDate ??
-      payload.desiredDayOffDate ??
-      payload.requestedDate ??
-      payload.dayOffToSellDate ??
-      "-"
-  );
-}
-
-
+const emptySummary: PipelineSummary = { total: 0, byStatus: {}, open: 0, inAnalysis: 0, awaitingCompletion: 0, withinDeadline: 0, overdue: 0, oldestPending: null };
 function paginationRange(page: number, limit: number, total: number) {
-  if (!total) return "Exibindo 0 de 0 solicitações";
-  const start = (page - 1) * limit + 1;
-  const end = Math.min(page * limit, total);
-  return `Exibindo ${start}-${end} de ${total} solicitações`;
+  return total ? `Exibindo ${(page - 1) * limit + 1}–${Math.min(page * limit, total)} de ${total} solicitações` : "Exibindo 0 de 0 solicitações";
 }
-
-
 function createDefaultRequestDraft() {
-  return {
-    type: "Troca Casada",
-    title: "Troca Casada",
-    priority: "Média",
-    requestedDate: "",
-    dayOffKind: "PAIRED_DAY_OFF_SWAP" as DayOffKind,
-    partnerEmployeeId: "",
-    currentDayOffDate: offsetOperationalDateInput(1),
-    desiredDayOffDate: offsetOperationalDateInput(4),
-    dayOffToSellDate: offsetOperationalDateInput(1),
-    availabilityShift: "Manhã",
-    preferredStartTime: "",
-    preferredEndTime: "",
-    acknowledgement: false,
-    desiredDayOffRequestDate: offsetOperationalDateInput(5),
-    dayOffReason: "Pessoal",
-    urgency: "Média",
-    justification: "",
-    description: "",
-    attachmentUrl: ""
-  };
+  return { type: "WFM", title: "", priority: "Média", description: "", requestedDate: "", attachmentUrl: "" };
 }
-
-
 type RequestDraft = ReturnType<typeof createDefaultRequestDraft>;
-
-
 function validateRequestDraft(draft: RequestDraft) {
-  const policyError = validateDayOffRequestPolicy({ ...draft, dayOffKind: isDayOffRequest(draft.type) ? draft.dayOffKind : undefined });
-  if (policyError) return policyError;
-  const dayOffKind = isDayOffRequest(draft.type) ? draft.dayOffKind : null;
-  if (!dayOffKind) return "";
-  if (!draft.justification.trim()) return "Informe a justificativa da solicitação de folga.";
-  if (dayOffKind === "PAIRED_DAY_OFF_SWAP" && (!draft.partnerEmployeeId || !draft.acknowledgement)) return "Selecione o parceiro e confirme seu aceite da troca casada.";
-  if (dayOffKind === "DAY_OFF_SWAP" || dayOffKind === "PAIRED_DAY_OFF_SWAP") {
-    if (!draft.currentDayOffDate || !draft.desiredDayOffDate) return "Para troca de folga, informe data atual e nova data desejada.";
-    if (draft.currentDayOffDate === draft.desiredDayOffDate) return "A nova data não pode ser igual à data atual da folga.";
-  }
-  if (dayOffKind === "DAY_OFF_SELL") {
-    if (!draft.dayOffToSellDate) return "Informe a data da folga que deseja vender.";
-    if (!draft.availabilityShift && (!draft.preferredStartTime || !draft.preferredEndTime)) return "Informe o turno desejado ou a disponibilidade de horário.";
-    if (!draft.acknowledgement) return "Confirme a ciência de que a venda depende de aprovação.";
-  }
-  if (dayOffKind === "DAY_OFF_REQUEST" && (!draft.desiredDayOffRequestDate || !draft.dayOffReason)) return "Informe a data desejada e o motivo da folga.";
+  if (!draft.title.trim()) return "Informe o título da solicitação.";
+  if (!draft.description.trim()) return "Descreva sua solicitação para o WFM.";
   return "";
 }
-
-
 async function createRequestFromDraft(draft: RequestDraft) {
-  const dayOffKind = isDayOffRequest(draft.type) ? draft.dayOffKind : null;
   return apiJson<{ data: ClientRequest }>("/api/requests", {
-    method: "POST",
-    body: JSON.stringify({
-      type: draft.type,
-      title: draft.title || draft.type,
-      priority: dayOffKind === "DAY_OFF_REQUEST" ? draft.urgency : draft.priority,
-      description: draft.description || draft.justification || "Solicitação criada pelo portal operacional.",
-      requestedDate: draft.requestedDate || undefined,
-      dayOffKind: dayOffKind ?? undefined,
-      partnerEmployeeId: dayOffKind === "PAIRED_DAY_OFF_SWAP" ? draft.partnerEmployeeId : undefined,
-      currentDayOffDate: ["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffKind ?? "") ? draft.currentDayOffDate : undefined,
-      desiredDayOffDate: ["DAY_OFF_SWAP", "PAIRED_DAY_OFF_SWAP"].includes(dayOffKind ?? "") ? draft.desiredDayOffDate : undefined,
-      dayOffToSellDate: dayOffKind === "DAY_OFF_SELL" ? draft.dayOffToSellDate : undefined,
-      availabilityShift: dayOffKind === "DAY_OFF_SELL" ? draft.availabilityShift : undefined,
-      preferredStartTime: dayOffKind === "DAY_OFF_SELL" ? draft.preferredStartTime : undefined,
-      preferredEndTime: dayOffKind === "DAY_OFF_SELL" ? draft.preferredEndTime : undefined,
-      acknowledgement: ["DAY_OFF_SELL", "PAIRED_DAY_OFF_SWAP"].includes(dayOffKind ?? "") ? draft.acknowledgement : undefined,
-      desiredDayOffRequestDate: dayOffKind === "DAY_OFF_REQUEST" ? draft.desiredDayOffRequestDate : undefined,
-      dayOffReason: dayOffKind === "DAY_OFF_REQUEST" ? draft.dayOffReason : undefined,
-      urgency: dayOffKind === "DAY_OFF_REQUEST" ? draft.urgency : undefined,
-      justification: draft.justification || undefined,
-      attachmentUrl: draft.attachmentUrl || undefined
-    })
+    method: "POST", body: JSON.stringify({ ...draft, type: "WFM", source: "pipeline" })
   });
 }
-
-
-function RequestCreateModal({
-  draft,
-  setDraft,
-  onClose,
-  onSubmit
-}: {
-  draft: RequestDraft;
-  setDraft: Dispatch<SetStateAction<RequestDraft>>;
-  onClose: () => void;
-  onSubmit: () => void;
+function RequestCreateModal({ draft, setDraft, onClose, onSubmit, pending, message }: {
+  draft: RequestDraft; setDraft: Dispatch<SetStateAction<RequestDraft>>; onClose: () => void; onSubmit: () => void; pending: boolean; message: string;
 }) {
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-      <div className="card max-h-[88vh] w-full max-w-xl overflow-y-auto p-5">
-        <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-lg font-extrabold text-navy-950">Nova solicitação</h2>
-          <button onClick={onClose} className="text-2xl text-muted">×</button>
-        </div>
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-muted">Tipo</span>
-            <select
-              value={draft.type}
-              onChange={(event) => {
-                const type = event.target.value;
-                const dayOffKind = dayOffKindFromRequest({ type });
-                setDraft((current) => ({ ...current, type, title: type, acknowledgement: false, dayOffKind: dayOffKind ?? current.dayOffKind }));
-              }}
-              className="h-11 w-full rounded-lg border border-border px-3 outline-none"
-            >
-              {requestTypes.filter((type) => type !== "Alteração de Adiantamento" || isMonthlyAdvanceRequestPeriodOpen()).map((type) => (
-                <option key={type}>{type}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-muted">Título</span>
-            <input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" placeholder="Resumo da solicitação" />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-muted">Prioridade</span>
-            <select value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none">
-              {requestPriorities.map((priority) => (
-                <option key={priority}>{priority}</option>
-              ))}
-            </select>
-          </label>
-          {isDayOffRequest(draft.type) ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              <p className="text-sm text-muted md:col-span-2">{DAY_OFF_REQUEST_NOTICE}</p>
-              {draft.dayOffKind === "PAIRED_DAY_OFF_SWAP" ? <PairedSwapFields value={draft} onChange={patch => setDraft(current => ({ ...current, ...patch }))} /> : null}
-              {draft.dayOffKind === "DAY_OFF_SWAP" ? (
-                <>
-                  <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-muted">Data atual da folga</span>
-                    <input type="date" min={DAY_OFF_OCTOBER_START} max={DAY_OFF_OCTOBER_END} value={draft.currentDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, currentDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-muted">Nova data desejada</span>
-                    <input type="date" min={DAY_OFF_OCTOBER_START} max={DAY_OFF_OCTOBER_END} value={draft.desiredDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                  </label>
-                </>
-              ) : null}
-              {draft.dayOffKind === "DAY_OFF_SELL" ? (
-                <>
-                  <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-muted">Data da folga que deseja vender</span>
-                    <input type="date" value={draft.dayOffToSellDate} onChange={(event) => setDraft((current) => ({ ...current, dayOffToSellDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                  </label>
-                  <FormSelect label="Turno desejado" value={draft.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setDraft((current) => ({ ...current, availabilityShift: value }))} />
-                  <FormInput label="Entrada preferencial" value={draft.preferredStartTime} onChange={(value) => setDraft((current) => ({ ...current, preferredStartTime: value }))} />
-                  <FormInput label="Saída preferencial" value={draft.preferredEndTime} onChange={(value) => setDraft((current) => ({ ...current, preferredEndTime: value }))} />
-                  <label className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700 md:col-span-2">
-                    <input type="checkbox" checked={draft.acknowledgement} onChange={(event) => setDraft((current) => ({ ...current, acknowledgement: event.target.checked }))} />
-                    Estou ciente de que a venda de folga depende de aprovação da operação/WFM.
-                  </label>
-                </>
-              ) : null}
-              {draft.dayOffKind === "DAY_OFF_REQUEST" ? (
-                <>
-                  <label className="block">
-                    <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada para folga</span>
-                    <input type="date" min={DAY_OFF_OCTOBER_START} max={DAY_OFF_OCTOBER_END} value={draft.desiredDayOffRequestDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffRequestDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                  </label>
-                  <FormSelect label="Motivo" value={draft.dayOffReason} options={["Pessoal", "Saúde", "Familiar", "Compromisso externo", "Estudos", "Emergência", "Outro"]} onChange={(value) => setDraft((current) => ({ ...current, dayOffReason: value }))} />
-                  <FormSelect label="Urgência" value={draft.urgency} options={requestPriorities} onChange={(value) => setDraft((current) => ({ ...current, urgency: value }))} />
-                </>
-              ) : null}
-            </div>
-          ) : (
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada</span>
-              <input type="date" value={draft.requestedDate} onChange={(event) => setDraft((current) => ({ ...current, requestedDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-            </label>
-          )}
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-muted">Justificativa</span>
-            <textarea value={draft.justification} onChange={(event) => setDraft((current) => ({ ...current, justification: event.target.value }))} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Explique o motivo da solicitação" />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-muted">Descrição</span>
-            <textarea value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Detalhes adicionais" />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-muted">Anexo opcional</span>
-            <input value={draft.attachmentUrl} onChange={(event) => setDraft((current) => ({ ...current, attachmentUrl: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" placeholder="URL ou caminho do anexo" />
-          </label>
-          <button onClick={onSubmit} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">
-            Criar solicitação
-          </button>
-        </div>
+  return <Dialog.Root open onOpenChange={open => { if (!open && !pending) onClose(); }}><Dialog.Portal>
+    <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40 backdrop-blur-sm" />
+    <Dialog.Content className="card fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <Dialog.Title className="text-lg font-extrabold text-navy-950">Nova solicitação WFM</Dialog.Title>
+        <button type="button" onClick={onClose} disabled={pending} aria-label="Fechar nova solicitação" className="rounded-lg p-2"><X className="h-5 w-5" /></button>
       </div>
-    </div>
-  );
+      <Dialog.Description className="mb-4 text-sm text-muted">Enviada diretamente para o WFM. Trocas e outros pedidos devem ser abertos em suas telas de origem, como Meu Cronograma.</Dialog.Description>
+      {message ? <p role="alert" className="mb-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
+      <form className="space-y-4" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+        <p className="rounded-lg bg-blue-50 p-3 text-sm font-bold text-blue-700">Tipo: WFM • Prazo de 48h, sem sábado e domingo</p>
+        <FormInput label="Título" value={draft.title} onChange={title => setDraft(current => ({ ...current, title }))} />
+        <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Descrição</span>
+          <textarea required value={draft.description} onChange={event => setDraft(current => ({ ...current, description: event.target.value }))} className="min-h-28 w-full rounded-lg border border-border p-3 text-sm" />
+        </label>
+        <FormSelect label="Prioridade" value={draft.priority} options={requestPriorities} onChange={priority => setDraft(current => ({ ...current, priority }))} />
+        <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada (opcional)</span>
+          <input type="date" value={draft.requestedDate} onChange={event => setDraft(current => ({ ...current, requestedDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3" />
+        </label>
+        <FormInput label="Link do anexo (opcional)" value={draft.attachmentUrl} onChange={attachmentUrl => setDraft(current => ({ ...current, attachmentUrl }))} />
+        <button disabled={pending} type="submit" className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">{pending ? "Enviando..." : "Enviar para o WFM"}</button>
+      </form>
+    </Dialog.Content>
+  </Dialog.Portal></Dialog.Root>;
 }
-
 
 export function RequestsKanbanPage() {
   const [requests, setRequests] = useState<ClientRequest[]>([]);
@@ -279,20 +84,40 @@ export function RequestsKanbanPage() {
   const [coverageWarning, setCoverageWarning] = useState<CoverageWarningDialogState | null>(null);
   const [filters, setFilters] = useState(defaultPipelineFilters);
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
-  const [summary, setSummary] = useState<RequestListResponse["summary"]>({ total: 0, byStatus: {} });
+  const [summary, setSummary] = useState<PipelineSummary>(emptySummary);
   const [supervisors, setSupervisors] = useState<RequestListResponse["supervisors"]>([]);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const [searchInput, setSearchInput] = useState("");
+  const [moreFilters, setMoreFilters] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [statusSummary, setStatusSummary] = useState<PipelineSummary>(emptySummary);
+  const loadSequence = useRef(0);
+  const detailSequence = useRef(0);
+  const filtersRef = useRef(filters);
+  const pageRef = useRef(1);
+  filtersRef.current = filters;
   const [loadError, setLoadError] = useState("");
   const [newRequest, setNewRequest] = useState(createDefaultRequestDraft);
   const initialDeepLinkHandled = useRef(false);
-  const countByStatus = (status: string) => summary?.byStatus?.[status] ?? requests.filter((request) => request.status === status).length;
+  const countByStatus = (status: string) => status === "Todos" ? statusSummary.total : statusSummary.byStatus[status] ?? 0;
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      if (searchInput !== filtersRef.current.search) applyFilters({ ...filtersRef.current, search: searchInput });
+    }, 350);
+    return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
+  useEffect(() => {
+    const interval = window.setInterval(() => { void loadRequests(filtersRef.current, pageRef.current); }, 60_000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setSelected(null);
     setDetailLoading(false);
-    void loadKanbanRequests(defaultPipelineFilters, 1);
+    void loadRequests(defaultPipelineFilters, 1);
     const params = new URLSearchParams(window.location.search);
     const explicitRequestId = params.get("requestId") ?? params.get("request") ?? params.get("id") ?? params.get("taskId");
     if (explicitRequestId && !initialDeepLinkHandled.current) {
@@ -317,12 +142,16 @@ export function RequestsKanbanPage() {
     return params;
   }
 
-  async function loadKanbanRequests(nextFilters = filters, nextPage = pagination.page) {
+  async function loadRequests(nextFilters = filters, nextPage = pagination.page) {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setLoadError("");
     try {
       const payload = await apiJson<RequestListResponse>(`/api/requests?${buildPipelineParams(nextFilters, nextPage).toString()}`);
+      if (sequence !== loadSequence.current) return;
+      if (payload.error) throw new Error(payload.error);
       const page = payload.page ?? nextPage;
+      pageRef.current = page;
       const limit = payload.limit ?? Number(nextFilters.limit);
       setRequests(payload.data);
       setActorRole(payload.actor?.role ?? "ADMIN");
@@ -332,47 +161,60 @@ export function RequestsKanbanPage() {
         limit,
         totalPages: payload.totalPages ?? 1
       });
-      setSummary(payload.summary ?? { total: payload.total ?? payload.data.length, byStatus: {} });
+      setSummary(payload.summary ?? emptySummary);
+      setStatusSummary(payload.statusSummary ?? payload.summary ?? emptySummary);
       setSupervisors(payload.supervisors ?? []);
     } catch (error) {
+      if (sequence !== loadSequence.current) return;
+      setSummary(emptySummary);
+      setStatusSummary(emptySummary);
       setRequests([]);
       setPagination({ total: 0, page: 1, limit: Number(nextFilters.limit), totalPages: 1 });
       setLoadError(error instanceof Error ? error.message : "Não foi possível carregar a esteira.");
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }
 
   function applyFilters(nextFilters = filters) {
+    filtersRef.current = nextFilters;
     setFilters(nextFilters);
-    void loadKanbanRequests(nextFilters, 1);
+    void loadRequests(nextFilters, 1);
   }
 
   function clearFilters() {
-    setFilters(defaultPipelineFilters);
-    void loadKanbanRequests(defaultPipelineFilters, 1);
+    setSearchInput("");
+    applyFilters({ ...defaultPipelineFilters, employeeId: "", startDate: "", endDate: "" });
   }
 
   function goToPage(nextPage: number) {
     const safePage = Math.min(Math.max(nextPage, 1), pagination.totalPages);
-    void loadKanbanRequests(filters, safePage);
+    void loadRequests(filters, safePage);
   }
 
   async function openRequestDetail(request: ClientRequest) {
+    const sequence = ++detailSequence.current;
+    setActionMessage("");
+    setActionReason("");
+    setComment("");
     setSelected(request);
     setDetailLoading(true);
     try {
       const payload = await apiJson<{ data: ClientRequest; actor?: { role: string } }>(`/api/requests?id=${encodeURIComponent(request.id)}`);
+      if (sequence !== detailSequence.current) return;
       setSelected(payload.data);
       setActorRole(payload.actor?.role ?? actorRole);
     } catch (error) {
+      if (sequence !== detailSequence.current) return;
+      setSelected(null);
       setActionMessage(error instanceof Error ? error.message : "Não foi possível carregar o detalhe da solicitação.");
     } finally {
-      setDetailLoading(false);
+      if (sequence === detailSequence.current) setDetailLoading(false);
     }
   }
 
   function closeRequestDetail() {
+    ++detailSequence.current;
     setSelected(null);
     setDetailLoading(false);
     setActionReason("");
@@ -392,6 +234,7 @@ export function RequestsKanbanPage() {
   }
 
   async function submitRequest() {
+    if (creating) return;
     const validationMessage = validateRequestDraft(newRequest);
     if (validationMessage) {
       setActionMessage(validationMessage);
@@ -399,13 +242,16 @@ export function RequestsKanbanPage() {
     }
 
     try {
+      setCreating(true);
       const payload = await createRequestFromDraft(newRequest);
       setShowCreate(false);
       setNewRequest(createDefaultRequestDraft());
       setActionMessage(`Solicitação ${payload.data.id} criada com sucesso e enviada para a esteira.`);
-      void loadKanbanRequests(filters, 1);
+      void loadRequests(filters, 1);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível criar a solicitação.");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -418,7 +264,6 @@ export function RequestsKanbanPage() {
     }
 
     setActionPending(`${id}:${status}`);
-    const previousStatus = requests.find((request) => request.id === id)?.status;
     const patchStatus = (confirmed = false) => apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
       method: "PATCH",
       body: JSON.stringify({
@@ -431,19 +276,7 @@ export function RequestsKanbanPage() {
     const applyPayload = (payload: { data: ClientRequest; scheduleUpdated: boolean }) => {
       setRequests((items) => items.map((request) => (request.id === id ? payload.data : request)));
       setSelected(payload.data);
-      if (previousStatus && previousStatus !== payload.data.status) {
-        setSummary((current) => {
-          const base = current ?? { total: pagination.total, byStatus: {} };
-          return {
-            ...base,
-            byStatus: {
-              ...base.byStatus,
-              [previousStatus]: Math.max(0, (base.byStatus?.[previousStatus] ?? 0) - 1),
-              [payload.data.status]: (base.byStatus?.[payload.data.status] ?? 0) + 1
-            }
-          };
-        });
-      }
+      void loadRequests(filtersRef.current, pageRef.current);
       setActionReason("");
       setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : payload.data.status === "Em análise" ? "Solicitação enviada para análise do WFM." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
     };
@@ -490,7 +323,7 @@ export function RequestsKanbanPage() {
       setSelected(payload.data);
       setComment("");
       setActionMessage("Comentário registrado.");
-      void loadKanbanRequests(filters, pagination.page);
+      void loadRequests(filters, pagination.page);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível comentar.");
     }
@@ -501,16 +334,14 @@ export function RequestsKanbanPage() {
       <PageHeader
         title="Esteiras de Solicitações"
         description="Acompanhe e gerencie as solicitações do time em todas as etapas do processo."
-        icon={KanbanSquare}
+        icon={ClipboardList}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => setShowCreate(true)} className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">
+            <button onClick={() => { setActionMessage(""); setShowCreate(true); }} className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">
               <Plus className="h-4 w-4" />
               Nova solicitação
             </button>
-            <button onClick={() => setViewMode("table")} className={cn("h-10 rounded-lg border px-3 text-sm font-bold", viewMode === "table" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950")}>Tabela</button>
-            <button onClick={() => setViewMode("kanban")} className={cn("h-10 rounded-lg border px-3 text-sm font-bold", viewMode === "kanban" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950")}>Kanban</button>
-            <button onClick={() => loadKanbanRequests(filters, pagination.page)} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">
+            <button onClick={() => loadRequests(filters, pagination.page)} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
               Atualizar
             </button>
@@ -519,146 +350,69 @@ export function RequestsKanbanPage() {
         }
       />
       <div className="card mb-5 space-y-4 p-4">
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-          <label className="relative block xl:col-span-2">
-            <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted" />
-            <input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className="h-10 w-full rounded-lg border border-border pl-9 pr-3 text-sm outline-none" placeholder="Buscar por parceiro, WB/Login, tipo ou ID" />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <label className="relative block md:col-span-2">
+            <span className="mb-1.5 block text-xs font-bold text-muted">Busca</span>
+            <Search className="pointer-events-none absolute left-3 top-9 h-4 w-4 text-muted" />
+            <input value={searchInput} onChange={event => setSearchInput(event.target.value)} className="h-11 w-full rounded-lg border border-border pl-9 pr-3 text-sm" placeholder="ID, nome, WB/Login, tipo, responsável ou etapa" />
           </label>
-          <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            {["Todos", ...requestStatuses].map((status) => <option key={status}>{status}</option>)}
-          </select>
-          <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            {["Todos", ...requestTypes].map((type) => <option key={type}>{type}</option>)}
-          </select>
-          <select value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            {["Todos", ...requestPriorities].map((priority) => <option key={priority}>{priority}</option>)}
-          </select>
-          <select value={filters.pendingAction} onChange={(event) => setFilters({ ...filters, pendingAction: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            <option value="false">Todas as etapas</option>
-            <option value="true">Pendentes da minha ação</option>
-          </select>
-          <input type="date" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" aria-label="Data inicial" />
-          <input type="date" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" aria-label="Data final" />
-          <select value={filters.lob} onChange={(event) => setFilters({ ...filters, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            {["Todos", "ALL", "CEC", "TNS", "ADS"].map((lob) => <option key={lob}>{lob}</option>)}
-          </select>
-          <select value={filters.supervisorId} onChange={(event) => setFilters({ ...filters, supervisorId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            <option value="Todos">Todos os supervisores</option>
-            <option value="SEM_SUPERVISOR">Sem supervisor</option>
-            {(supervisors ?? []).map((supervisor) => (
-              <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.wbLogin}</option>
-            ))}
-          </select>
-          <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Parceiro" />
-          <input value={filters.wbLogin} onChange={(event) => setFilters({ ...filters, wbLogin: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="WB/Login" />
-          <input value={filters.requester} onChange={(event) => setFilters({ ...filters, requester: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Solicitante" />
-          <select value={filters.assignedTo} onChange={(event) => setFilters({ ...filters, assignedTo: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            {["Todos", "Supervisor", "WFM", "WFM/Admin", "Nenhum"].map((owner) => <option key={owner}>{owner}</option>)}
-          </select>
-          <select value={filters.limit} onChange={(event) => applyFilters({ ...filters, limit: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
-            {["25", "50", "100"].map((limit) => <option key={limit} value={limit}>{limit} por página</option>)}
-          </select>
+          <FormSelect label="Tipo" value={filters.type} options={["Todos", ...requestTypes]} onChange={type => applyFilters({ ...filters, type })} />
+          <FormSelect label="LOB" value={filters.lob} options={["Todos", "ALL", "CEC", "TNS", "ADS"]} onChange={lob => applyFilters({ ...filters, lob })} />
+          <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Prazo</span>
+            <select aria-label="Prazo" value={filters.deadline} onChange={event => applyFilters({ ...filters, deadline: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm">
+              <option value="Todos">Todos</option><option value="WAITING_WFM">Aguardando WFM</option><option value="WITHIN_DEADLINE">Dentro do prazo</option><option value="OVERDUE">Fora do prazo</option>
+            </select>
+          </label>
+        </div>
+        <div role="group" aria-label="Status do pedido" className="flex flex-wrap gap-2">
+          {statusOptions.map(([value, label]) => <button key={value} type="button" aria-pressed={filters.status === value} onClick={() => applyFilters({ ...filters, status: value })} className={cn("flex min-h-10 items-center gap-2 rounded-full border px-3 py-2 text-sm font-bold", filters.status === value ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
+            {label}<span className={cn("rounded-full px-2 text-xs", filters.status === value ? "bg-white/20" : "bg-slate-100")}>{countByStatus(value)}</span>
+          </button>)}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm font-semibold text-muted">{paginationRange(pagination.page, pagination.limit, pagination.total)}</p>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => applyFilters()} className="h-10 rounded-lg bg-navy-950 px-4 text-sm font-extrabold text-white">Aplicar filtros</button>
-            <button onClick={clearFilters} className="h-10 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Limpar filtros</button>
-          </div>
+          <button type="button" aria-expanded={moreFilters} aria-controls="pipeline-more-filters" onClick={() => setMoreFilters(current => !current)} className="flex min-h-10 items-center gap-2 rounded-lg border border-border px-3 text-sm font-bold"><SlidersHorizontal className="h-4 w-4" />Mais filtros{[filters.startDate, filters.endDate, filters.supervisorId !== "Todos", filters.priority !== "Todos", filters.pendingAction === "true", filters.employeeId].filter(Boolean).length ? " • ativos" : ""}</button>
+          <button type="button" onClick={clearFilters} className="min-h-10 rounded-lg border border-border px-3 text-sm font-bold">Limpar filtros</button>
         </div>
+        {moreFilters ? <div id="pipeline-more-filters" className="grid gap-3 border-t border-border pt-4 md:grid-cols-2 xl:grid-cols-5">
+          <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Criação: de</span><input type="date" value={filters.startDate} onChange={event => applyFilters({ ...filters, startDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm" /></label>
+          <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Criação: até</span><input type="date" value={filters.endDate} onChange={event => applyFilters({ ...filters, endDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm" /></label>
+          <label className="block"><span className="mb-1.5 block text-sm font-semibold text-muted">Supervisor</span><select aria-label="Supervisor" value={filters.supervisorId} onChange={event => applyFilters({ ...filters, supervisorId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm"><option value="Todos">Todos</option><option value="SEM_SUPERVISOR">Sem supervisor</option>{supervisors?.map(supervisor => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}</select></label>
+          <FormSelect label="Prioridade" value={filters.priority} options={["Todos", ...requestPriorities]} onChange={priority => applyFilters({ ...filters, priority })} />
+          <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={filters.pendingAction === "true"} onChange={event => applyFilters({ ...filters, pendingAction: String(event.target.checked) })} />Pendentes da minha ação</label>
+        </div> : null}
       </div>
-      {actionMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{actionMessage}</div> : null}
-      {loadError ? <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">Não foi possível carregar a esteira.</div> : null}
-      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        {[
-          ["Total de Solicitações", summary?.total ?? pagination.total, UsersRound, "blue"],
-          ["Abertas", countByStatus("Aberto"), ClipboardList, "blue"],
-          ["Em análise", countByStatus("Em análise"), Clock, "orange"],
-          ["Aprovadas", countByStatus("Aprovado"), CheckCircle2, "green"],
-          ["Recusadas", countByStatus("Recusado"), XCircle, "red"],
-          ["Concluídas", countByStatus("Concluído"), ClipboardList, "cyan"]
-        ].map(([title, value, Icon, tone]) => (
-          <StatCard key={String(title)} title={String(title)} value={String(value)} helper="Filtros atuais" icon={Icon as never} tone={tone as never} />
-        ))}
+      {actionMessage ? <div role="status" className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{actionMessage}</div> : null}
+      {loadError ? <div role="alert" className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{loadError}</div> : null}
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6" aria-label="Indicadores das solicitações filtradas">
+        <StatCard title="Abertos" value={summary.open} helper="Aguardando uma ação" icon={ClipboardList} tone="blue" />
+        <StatCard title="Em análise" value={summary.inAnalysis} helper="Análise em andamento" icon={Clock} tone="orange" />
+        <StatCard title="Aguardando conclusão" value={summary.awaitingCompletion} helper="Aprovados ainda pendentes" icon={ClipboardList} tone="cyan" />
+        <StatCard title="Dentro do prazo" value={summary.withinDeadline} helper="Pendentes com prazo ativo" icon={CheckCircle2} tone="green" />
+        <StatCard title="Fora do prazo" value={summary.overdue} helper="Pendentes acima de 48h" icon={AlertTriangle} tone="red" />
+        <button type="button" disabled={!summary.oldestPending} onClick={() => { if (summary.oldestPending) void openRequestDetail({ id: summary.oldestPending.id } as ClientRequest); }} className="min-w-0 rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-default">
+          <StatCard title="Pendente mais antigo" value={summary.oldestPending?.id ?? "—"} helper={summary.oldestPending ? `Aberto há ${formatPipelineDuration((Date.now() - Date.parse(summary.oldestPending.createdAt)) / 60_000)}` : "Nenhuma pendência"} icon={Clock} tone="purple" />
+        </button>
       </div>
       {loading ? <div className="mb-5 rounded-lg border border-border bg-white p-4 text-sm font-bold text-muted">Carregando solicitações...</div> : null}
-      {!loading && !requests.length ? <div className="mb-5"><EmptyState title="Nenhuma solicitação encontrada para os filtros selecionados." description="Ajuste os filtros ou limpe a busca para visualizar a esteira." /></div> : null}
-      {viewMode === "table" ? (
-        <Panel title="Visão Tabela">
-          <SimpleTable
-            columns={["ID", "Criação", "Tipo", "Status", "Impacto", "Parceiro", "WB/Login", "LOB", "Supervisor", "Data solicitada", "Prioridade", "Próxima etapa", "Responsável", "Atualização", "Ações"]}
-            rows={requests.map((request) => [
-              <button key={`${request.id}-id`} onClick={() => openRequestDetail(request)} className="font-extrabold text-blue-600">{request.id}</button>,
-              request.createdAt ?? request.time,
-              <div key={`${request.id}-type`}><p className="font-bold text-navy-950">{request.type}</p><p className="line-clamp-1 text-xs text-muted">{request.title}</p></div>,
-              <StatusBadge key={`${request.id}-status`} status={request.status} />,
-              <CoverageImpactBadge key={`${request.id}-impact`} impact={request.coverageImpact} />,
-              request.requester,
-              request.requesterWbLogin ?? "-",
-              request.lob ?? "-",
-              request.supervisor ?? "Sem supervisor",
-              requestedDateLabel(request),
-              <PriorityBadge key={`${request.id}-priority`} priority={request.priority} />,
-              request.nextStep ?? "-",
-              request.nextOwner ?? "Nenhum",
-              request.updatedAt ?? "-",
-              <button key={`${request.id}-detail`} onClick={() => openRequestDetail(request)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
-            ])}
-          />
-        </Panel>
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-3 2xl:grid-cols-6">
-          {requestColumns.map((column, columnIndex) => (
-            <section key={column} className="card overflow-hidden">
-              <div className={cn("h-1", ["bg-blue-600", "bg-amber-500", "bg-emerald-500", "bg-red-500", "bg-slate-500", "bg-slate-400"][columnIndex])} />
-              <div className="flex items-center justify-between border-b border-border px-4 py-4">
-                <h2 className="font-extrabold text-navy-950">{column}</h2>
-                <span className="rounded-md bg-slate-100 px-2 py-1 text-sm font-bold text-navy-950">{countByStatus(column)}</span>
-              </div>
-              <div className="min-h-[440px] space-y-3 p-3">
-                {requests
-                  .filter((request) => request.status === column)
-                  .slice(0, 20)
-                  .map((request) => {
-                    const Icon = getRequestIcon(request.type);
-                    const dayOffKind = dayOffKindFromRequest(request);
-                    return (
-                      <button key={request.id} onClick={() => openRequestDetail(request)} className="w-full rounded-lg border border-border bg-white p-3 text-left shadow-soft transition hover:-translate-y-0.5 hover:shadow-card">
-                        <div className="flex items-start gap-3">
-                          <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-50 text-blue-600">
-                            <Icon className="h-5 w-5" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="font-extrabold text-navy-950">{request.type}</p>
-                            <p className="text-xs text-muted">{request.nextOwner ?? request.area}</p>
-                          </div>
-                        </div>
-                        {dayOffKind ? (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <StatusBadge status={dayOffKindLabels[dayOffKind]} />
-                            <CoverageImpactBadge impact={request.coverageImpact} />
-                          </div>
-                        ) : null}
-                        <p className="mt-3 line-clamp-2 text-xs font-semibold text-muted">{request.title || request.description}</p>
-                        <div className="mt-4 flex items-center justify-between">
-                          <PriorityBadge priority={request.priority} />
-                          <span className="text-xs text-muted">{request.time}</span>
-                        </div>
-                        <div className="mt-4 flex items-center gap-2">
-                          <span className="grid h-7 w-7 place-items-center rounded-full bg-slate-200 text-[11px] font-bold">{initials(request.requester)}</span>
-                          <span className="truncate text-xs font-semibold text-muted">{request.requester}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-              </div>
-              <button onClick={() => applyFilters({ ...filters, status: column })} className="w-full border-t border-border py-4 text-sm font-bold text-blue-600">Ver status na tabela</button>
-            </section>
-          ))}
+      {!loading && !loadError && !requests.length ? <div className="mb-5"><EmptyState title="Nenhuma solicitação encontrada para os filtros selecionados." description="Ajuste os filtros ou limpe a busca para visualizar a esteira." /></div> : null}
+      <Panel title="Solicitações">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-muted">Prazo: 48h desde a entrada no WFM até o encerramento. Sábados e domingos não contam. Horário de São Paulo.</p>
+          <label className="flex items-center gap-2 text-sm font-bold"><span>Ordenar por</span><select aria-label="Ordenar por" value={filters.sort} onChange={event => applyFilters({ ...filters, sort: event.target.value })} className="h-10 rounded-lg border border-border px-3"><option value="created">Mais recentes</option><option value="deadline">Vencimento</option></select></label>
         </div>
-      )}
+        <div aria-busy={loading}>
+          <SimpleTable columns={["Pedido", "Solicitante", "Status", "Pendente com", "Próxima ação", "Entrada no WFM", "Vencimento", "Prazo"]} rows={requests.map(request => [
+            <button key={`${request.id}-id`} onClick={() => openRequestDetail(request)} className="max-w-60 text-left"><span className="font-extrabold text-blue-600 underline-offset-2 hover:underline">{request.id}</span><span className="mt-1 block font-bold text-navy-950">{request.type}</span><span className="mt-1 line-clamp-2 text-xs text-muted">{request.title}</span><span className="mt-1 block text-xs text-muted">Criado em {formatPipelineDate(request.createdAtIso)}</span></button>,
+            <div key={`${request.id}-requester`} className="max-w-48"><p className="font-bold">{request.requester}</p><p className="text-xs text-muted">{request.requesterWbLogin || "—"}</p></div>,
+            <StatusBadge key={`${request.id}-status`} status={request.status} />,
+            request.nextOwner ?? "—", request.nextStep ?? "—",
+            formatPipelineDate(request.sla?.receivedAt), formatPipelineDate(request.sla?.dueAt),
+            <RequestSlaBadge key={`${request.id}-sla`} sla={request.sla} />
+          ])} />
+        </div>
+      </Panel>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-white px-4 py-3">
-        <p className="text-sm font-semibold text-muted">{paginationRange(pagination.page, pagination.limit, pagination.total)}</p>
+        <p className="text-sm font-semibold text-muted">{paginationRange(pagination.page, pagination.limit, pagination.total)} • 50 por página</p>
         <div className="flex flex-wrap gap-2">
           <button disabled={pagination.page <= 1 || loading} onClick={() => goToPage(1)} className="h-9 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Primeira</button>
           <button disabled={pagination.page <= 1 || loading} onClick={() => goToPage(pagination.page - 1)} className="h-9 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Anterior</button>
@@ -668,18 +422,21 @@ export function RequestsKanbanPage() {
         </div>
       </div>
       {selected ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
+        <Dialog.Root open onOpenChange={open => { if (!open && !actionPending) closeRequestDetail(); }}><Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40 backdrop-blur-sm" />
+          <Dialog.Content className="card fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-extrabold text-navy-950">Detalhe da Solicitação</h2>
-              <button onClick={closeRequestDetail} className="text-2xl text-muted">×</button>
+              <Dialog.Title className="text-lg font-extrabold text-navy-950">Detalhe da Solicitação</Dialog.Title>
+              <button disabled={Boolean(actionPending)} aria-label="Fechar detalhe da solicitação" onClick={closeRequestDetail} className="rounded-lg p-2 text-muted"><X className="h-5 w-5" /></button>
             </div>
+            <Dialog.Description className="sr-only">Dados, prazo, histórico e ações da solicitação.</Dialog.Description>
+            {actionMessage ? <p role="status" className="mb-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-700">{actionMessage}</p> : null}
             {detailLoading ? <div className="mb-4 rounded-lg border border-border bg-slate-50 p-3 text-sm font-bold text-muted">Carregando detalhe completo...</div> : null}
-            <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} />
-          </div>
-        </div>
+            {!detailLoading ? <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} /> : null}
+          </Dialog.Content>
+        </Dialog.Portal></Dialog.Root>
       ) : null}
-      {showCreate ? <RequestCreateModal draft={newRequest} setDraft={setNewRequest} onClose={() => setShowCreate(false)} onSubmit={submitRequest} /> : null}
+      {showCreate ? <RequestCreateModal draft={newRequest} setDraft={setNewRequest} onClose={() => setShowCreate(false)} onSubmit={submitRequest} pending={creating} message={actionMessage} /> : null}
       <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
   );

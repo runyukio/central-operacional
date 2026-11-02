@@ -1,3 +1,4 @@
+import type { RequestSla } from "@/lib/request-pipeline";
 import { scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import type { Session } from "next-auth";
 
@@ -53,6 +54,8 @@ export type RequestRecord = {
   canConclude?: boolean;
   canPartnerAccept?: boolean;
   canCancelPairedSwap?: boolean;
+  sla?: RequestSla;
+  createdAtIso?: string;
   createdAt?: string;
   updatedAt?: string;
   payload: Record<string, unknown>;

@@ -1,3 +1,4 @@
+import { calculateRequestSla, requestDateBoundary, requestNextAction, selectPipeline } from "@/lib/request-pipeline";
 import { isDirectWfmRequest } from "@/lib/request-routing";
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
@@ -158,6 +159,8 @@ export type RequestFilters = {
   scope?: "mine" | "all";
   page?: string | number;
   limit?: string | number;
+  deadline?: string;
+  sort?: string;
 };
 
 export type CreateRequestInput = {
@@ -211,33 +214,37 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
       return paginatedRequestResult(fallback, filters);
     }
 
-    const where: Prisma.RequestWhereInput = buildRequestWhere(actor, user, filters);
-    const page = parsePositiveInteger(filters.page, 1);
-    const limit = parseRequestLimit(filters.limit);
-    const skip = (page - 1) * limit;
-    const summaryWhere = buildRequestWhere(actor, user, { ...filters, status: "Todos", page: 1 });
-
-    const [total, requests, summary, supervisors] = await Promise.all([
-      prisma.request.count({ where }),
-      prisma.request.findMany({
-        where,
-        include: requestListInclude,
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limit
-      }),
-      summarizeRequests(summaryWhere),
+    // Fetch timing evidence in bulk; only hydrate the current page with full display data.
+    const where = buildRequestWhere(actor, user, { ...filters, status: "Todos", search: undefined });
+    const now = new Date();
+    const [candidates, supervisors] = await Promise.all([
+      prisma.request.findMany({ where, select: requestPipelineSelect }),
       listRequestSupervisors()
     ]);
-    const totalPages = Math.max(1, Math.ceil(total / limit));
-
+    const records = candidates.map(request => ({
+      requestId: request.id, id: request.code, type: request.type.name, title: request.title,
+      description: request.description, status: dbToUiStatus[request.status] ?? "Aberto",
+      requester: request.requester.name, requesterEmail: request.requester.email,
+      requesterWbLogin: request.employee?.wbLogin, supervisor: request.employee?.supervisor?.fullName,
+      area: request.assignedArea, assignee: request.assignee?.name,
+      createdAtIso: request.createdAt.toISOString(),
+      ...requestNextAction({ type: request.type.name, status: request.status,
+        payload: request.payload as Record<string, unknown> | null,
+        supervisor: request.employee?.supervisor?.fullName, assignee: request.assignee?.name }),
+      sla: calculateRequestSla({ ...request, type: request.type.name, payload: request.payload as Record<string, unknown> | null }, now)
+    }));
+    const result = selectPipeline(records, filters);
+    const pageRequests = result.data.length ? await prisma.request.findMany({
+      where: { ...where, id: { in: result.data.map(row => row.requestId) } },
+      include: requestListInclude
+    }) : [];
+    const byId = new Map(pageRequests.map(request => [request.id, request]));
     return {
-      data: await Promise.all(requests.map((request) => mapPrismaRequestWithImpact(request, user, actor))),
-      total,
-      page,
-      limit,
-      totalPages,
-      summary,
+      ...result,
+      data: result.data.flatMap(row => {
+        const request = byId.get(row.requestId);
+        return request ? [{ ...mapPrismaRequest(request, user, actor), sla: row.sla, createdAtIso: row.createdAtIso }] : [];
+      }),
       supervisors
     };
   } catch (error) {
@@ -250,7 +257,7 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
       severity: "WARNING"
     });
     const fallback = allowDemoDataFallback ? listMockRequests(actor) : [];
-    return paginatedRequestResult(fallback, filters);
+    return { ...paginatedRequestResult(fallback, filters), ...(!allowDemoDataFallback ? { error: "Não foi possível carregar as solicitações. Tente atualizar a tela." } : {}) };
   }
 }
 
@@ -471,7 +478,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     }
 
     if (isSupervisorSendToWfm(actor, existing, initialTransition)) {
-      return sendSupervisorRequestToWfmAnalysis(actor, user, existing, initialTransition, reason, diagnostics, coverageImpact);
+      return await sendSupervisorRequestToWfmAnalysis(actor, user, existing, initialTransition, reason, diagnostics, coverageImpact);
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -751,6 +758,22 @@ export async function addOperationalRequestComment(actor: Actor, id: string, bod
   }
 }
 
+const requestTimingSelect = {
+  createdAt: true, from: true, to: true
+} satisfies Prisma.RequestHistorySelect;
+const requestPipelineSelect = {
+  id: true, code: true, title: true, description: true, assignedArea: true,
+  payload: true, status: true, createdAt: true,
+  type: { select: { name: true } },
+  requester: { select: { name: true, email: true } },
+  assignee: { select: { name: true } },
+  employee: { select: { wbLogin: true, supervisor: { select: { fullName: true } } } },
+  history: {
+    where: { to: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO", "CONCLUIDO", "RECUSADO", "CANCELADO"] } },
+    select: requestTimingSelect
+  }
+} satisfies Prisma.RequestSelect;
+
 const requestListInclude = {
   type: true,
   requester: true,
@@ -772,8 +795,7 @@ const requestInclude = {
   },
   history: {
     include: { actor: true },
-    orderBy: { createdAt: "desc" as const },
-    take: 30
+    orderBy: { createdAt: "desc" as const }
   }
 };
 
@@ -986,9 +1008,9 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     if (role === "SUPERVISOR") {
       andFilters.push({ OR: [{ status: "ABERTO", ...supervisorStepRequestTypeWhere() }, { status: "ABERTO", type: { name: "Troca Casada" }, employee: { supervisor: { userId: user.id } }, payload: { path: ["stage"], equals: "SUPERVISOR" } }] });
     } else if (role === "WFM") {
-      andFilters.push(wfmPendingRequestWhere());
+      andFilters.push({ OR: [wfmPendingRequestWhere(), { status: "APROVADO" }] });
     } else if (roleHasCapability(actor.role, "PIPELINES")) {
-      andFilters.push({ status: { in: [...pendingStatuses] } });
+      andFilters.push({ status: { in: [...pendingStatuses, ...(role === "ADMIN" ? ["APROVADO" as const] : [])] } });
     }
   }
 
@@ -1077,18 +1099,18 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     });
   }
   if (filters.date) {
-    const start = new Date(`${filters.date}T00:00:00`);
-    const end = new Date(`${filters.date}T23:59:59`);
-    if (!Number.isNaN(start.getTime())) where.createdAt = { gte: start, lte: end };
+    const start = requestDateBoundary(filters.date);
+    const end = requestDateBoundary(filters.date, true);
+    if (start && end) where.createdAt = { gte: start, lte: end };
   } else if (filters.startDate || filters.endDate) {
     const range: Prisma.DateTimeFilter = {};
     if (filters.startDate) {
-      const start = new Date(`${filters.startDate}T00:00:00`);
-      if (!Number.isNaN(start.getTime())) range.gte = start;
+      const start = requestDateBoundary(filters.startDate);
+      if (start) range.gte = start;
     }
     if (filters.endDate) {
-      const end = new Date(`${filters.endDate}T23:59:59`);
-      if (!Number.isNaN(end.getTime())) range.lte = end;
+      const end = requestDateBoundary(filters.endDate, true);
+      if (end) range.lte = end;
     }
     if (Object.keys(range).length) where.createdAt = range;
   }
@@ -1131,68 +1153,10 @@ function isPendingActionFilter(value: RequestFilters["pendingAction"]) {
   return value === true || value === "true" || value === "1" || value === "sim";
 }
 
-const requestStatusLabels = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"] as const;
-
-function parsePositiveInteger(value: RequestFilters["page"], fallback: number) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-function parseRequestLimit(value: RequestFilters["limit"]) {
-  const parsed = parsePositiveInteger(value, 50);
-  return Math.min(100, [25, 50, 100].includes(parsed) ? parsed : 50);
-}
-
-function emptyRequestSummary() {
-  return {
-    total: 0,
-    byStatus: requestStatusLabels.reduce((acc, status) => ({ ...acc, [status]: 0 }), {} as Record<UiRequestStatus, number>)
-  };
-}
-
-async function summarizeRequests(where: Prisma.RequestWhereInput) {
-  const [total, groups] = await Promise.all([
-    prisma.request.count({ where }),
-    prisma.request.groupBy({
-      by: ["status"],
-      where,
-      _count: { _all: true }
-    })
-  ]);
-  const summary = emptyRequestSummary();
-  summary.total = total;
-  groups.forEach((group) => {
-    const status = dbToUiStatus[group.status] ?? "Aberto";
-    summary.byStatus[status] = (summary.byStatus[status] ?? 0) + group._count._all;
-  });
-  return summary;
-}
-
-function summarizeUiRequests(requests: RequestRecord[]) {
-  const summary = emptyRequestSummary();
-  summary.total = requests.length;
-  requests.forEach((request) => {
-    summary.byStatus[request.status] = (summary.byStatus[request.status] ?? 0) + 1;
-  });
-  return summary;
-}
 
 function paginatedRequestResult(requests: RequestRecord[], filters: RequestFilters) {
-  const page = parsePositiveInteger(filters.page, 1);
-  const limit = parseRequestLimit(filters.limit);
-  const total = requests.length;
-  const totalPages = Math.max(1, Math.ceil(total / limit));
-  const safePage = Math.min(page, totalPages);
-  const start = (safePage - 1) * limit;
-  return {
-    data: requests.slice(start, start + limit),
-    total,
-    page: safePage,
-    limit,
-    totalPages,
-    summary: summarizeUiRequests(requests),
-    supervisors: [] as Array<{ id: string; name: string; wbLogin: string; email?: string }>
-  };
+  const result = selectPipeline(requests, filters);
+  return { ...result, supervisors: [] as Array<{ id: string; name: string; wbLogin: string; email?: string }> };
 }
 
 async function listRequestSupervisors() {
@@ -1245,9 +1209,17 @@ async function sendSupervisorRequestToWfmAnalysis(
   const startedAt = Date.now();
   diagnostics.fastPath = "SUPERVISOR_SEND_TO_WFM";
 
-  const guard = await prisma.request.updateMany({
-    where: { id: request.id, status: request.status, deletedAt: null },
-    data: { status: transition.nextStatus, updatedAt: new Date() }
+  const guard = await prisma.$transaction(async tx => {
+    const transitionAt = new Date();
+    const changed = await tx.request.updateMany({
+      where: { id: request.id, status: request.status, deletedAt: null },
+      data: { status: transition.nextStatus, updatedAt: transitionAt }
+    });
+    if (changed.count === 1) await tx.requestHistory.create({ data: {
+      requestId: request.id, actorId: user.id, action: transition.historyAction,
+      from: request.status, to: transition.nextStatus, reason, createdAt: transitionAt
+    } });
+    return changed;
   });
 
   if (guard.count !== 1) {
@@ -1263,16 +1235,6 @@ async function sendSupervisorRequestToWfmAnalysis(
   }
 
   const sideEffects = await Promise.allSettled([
-    prisma.requestHistory.create({
-      data: {
-        requestId: request.id,
-        actorId: user.id,
-        action: transition.historyAction,
-        from: request.status,
-        to: transition.nextStatus,
-        reason
-      }
-    }),
     prisma.auditLog.create({
       data: {
         actorId: user.id,
@@ -1294,7 +1256,7 @@ async function sendSupervisorRequestToWfmAnalysis(
   ]);
 
   const rejectedSideEffects = sideEffects
-    .map((result, index) => ({ result, name: index === 0 ? "history" : "auditLog" }))
+    .map((result, index) => ({ result, name: index === 0 ? "auditLog" : "coverageAudit" }))
     .filter((item): item is { result: PromiseRejectedResult; name: string } => item.result.status === "rejected");
 
   if (rejectedSideEffects.length) {
@@ -1530,8 +1492,10 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
     status: dbToUiStatus[request.status] ?? "Aberto",
     area: request.assignedArea,
     assignee: request.assignee?.name,
-    nextStep: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? "Aceite do parceiro" : isPairedSwap(request.type.name, payload) && request.status === "APROVADO" ? "Cronogramas atualizados" : nextStepForRequest(request.status, request.type.name),
-    nextOwner: isPairedSwap(request.type.name, payload) && payload.stage === "PARTNER" ? String(payload.partnerName) : isPairedSwap(request.type.name, payload) && payload.stage === "DONE" ? "Sem próxima ação" : nextOwnerForRequest(request),
+    ...requestNextAction({ type: request.type.name, status: request.status, payload,
+      supervisor: request.employee?.supervisor?.fullName, assignee: request.assignee?.name }),
+    sla: calculateRequestSla({ type: request.type.name, status: request.status, payload, createdAt: request.createdAt, history }),
+    createdAtIso: request.createdAt.toISOString(),
     canSupervisorStep: isPairedSwap(request.type.name, payload) ? payload.stage === "SUPERVISOR" && role === "SUPERVISOR" && request.employee?.supervisor?.userId === user?.id : canSupervisorStep,
     canWfmFinal: isPairedSwap(request.type.name, payload) ? payload.stage === "WFM" && canWfmFinal : canWfmFinal,
     canConclude: isPairedSwap(request.type.name, payload) ? canConcludePairedSwap(role, request.status, payload) : request.status === "APROVADO" && canWfmFinal,
@@ -2015,25 +1979,6 @@ function isCoverageEmployeeActiveForImpact(value?: string | null) {
 
 function formatSignedNumber(value: number) {
   return value > 0 ? `+${value}` : String(value);
-}
-
-function nextStepForRequest(status: string, type: string) {
-  const normalized = normalizeDbRequestStatus(status);
-  if (normalized === "ABERTO") return isDirectWfmRequest(type) ? "Análise WFM" : "Aprovação do supervisor";
-  if (normalized === "EM_ANALISE") return "Análise final WFM";
-  if (normalized === "APROVADO") return "Conclusão administrativa";
-  if (normalized === "RECUSADO") return "Encerrada por recusa";
-  if (normalized === "CANCELADO") return "Cancelada";
-  if (normalized === "CONCLUIDO") return "Concluída";
-  return "Acompanhar";
-}
-
-function nextOwnerForRequest(request: PrismaRequestForDisplay) {
-  const normalized = normalizeDbRequestStatus(request.status);
-  if (normalized === "ABERTO") return isDirectWfmRequest(request.type.name) ? "WFM" : request.employee?.supervisor?.fullName ?? "Supervisor responsável";
-  if (normalized === "EM_ANALISE") return "WFM";
-  if (normalized === "APROVADO") return "WFM/Admin";
-  return "Sem próxima ação";
 }
 
 function validateCreateInput(input: CreateRequestInput) {
@@ -3013,6 +2958,7 @@ function serialize(value: unknown) {
 
 function formatDateTime(date: Date) {
   return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
