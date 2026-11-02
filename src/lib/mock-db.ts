@@ -52,6 +52,7 @@ export type RequestRecord = {
   canSupervisorStep?: boolean;
   canWfmFinal?: boolean;
   canConclude?: boolean;
+  canReject?: boolean;
   canPartnerAccept?: boolean;
   canCancelPairedSwap?: boolean;
   sla?: RequestSla;

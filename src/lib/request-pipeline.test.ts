@@ -165,3 +165,41 @@ test("oldest-pending list preserves search and deadline filters; missing creatio
   const missing = { ...rows[0], id: "unknown", createdAtIso: undefined };
   assert.equal(selectPipeline([missing, rows[1], rows[0]], { status: "Pendentes", sort: "oldest" }).data.at(-1)?.id, "unknown");
 });
+
+
+test("REQ-3040: supervisor approval has not happened, so WFM has no received time, deadline or elapsed SLA", () => {
+  const unapproved = {
+    type: "Troca Casada", status: "ABERTO", createdAt: new Date("2026-10-19T07:10:19.154Z"),
+    payload: { internalType: "PAIRED_DAY_OFF_SWAP", stage: "SUPERVISOR", supervisorApprovedAt: null, partnerAcceptedAt: "2026-10-21T02:04:53.915Z" },
+    history: [
+      { from: null, to: "ABERTO", createdAt: new Date("2026-10-19T07:10:19.154Z") },
+      { from: "ABERTO", to: "ABERTO", createdAt: new Date("2026-10-21T02:04:53.965Z") }
+    ]
+  };
+  const sla = calculateRequestSla(unapproved, new Date("2026-11-02T18:00:00Z"));
+  assert.equal(sla.state, "WAITING_WFM");
+  assert.equal(sla.waitingFor, "SUPERVISOR");
+  assert.equal(sla.receivedAt, null);
+  assert.equal(sla.dueAt, null);
+  assert.equal(sla.remainingBusinessMinutes, null);
+  assert.deepEqual(requestNextAction({ ...unapproved, supervisor: "Supervisor responsável" }), { nextStep: "Aprovação do supervisor", nextOwner: "Supervisor responsável" });
+  const approval = new Date("2026-11-02T18:00:00Z");
+  const after = calculateRequestSla({ ...unapproved, status: "EM_ANALISE", payload: { ...unapproved.payload, stage: "WFM", supervisorApprovedAt: approval.toISOString() }, history: [...unapproved.history, { from: "ABERTO", to: "EM_ANALISE", createdAt: approval }] }, approval);
+  assert.equal(after.receivedAt, approval.toISOString());
+  assert.equal(after.remainingBusinessMinutes, 48 * 60);
+  assert.equal(after.dueAt, "2026-11-04T18:00:00.000Z");
+});
+
+test("upstream stages do not start the WFM timer even with inconsistent legacy analysis history", () => {
+  for (const stage of ["PARTNER", "SUPERVISOR"]) {
+    const sla = calculateRequestSla({ ...request, payload: { stage, supervisorApprovedAt: friday.toISOString() } }, tuesday);
+    assert.equal(sla.receivedAt, null);
+    assert.equal(sla.dueAt, null);
+    assert.equal(sla.waitingFor, stage);
+    assert.equal(calculateRequestSla({ ...request, type: "WFM", payload: { stage } }, tuesday).receivedAt, null);
+  }
+  const preWfm = { ...rows[0], sla: calculateRequestSla({ ...request, status: "ABERTO", history: [], payload: { stage: "SUPERVISOR" } }, tuesday) };
+  const result = selectPipeline([preWfm], {});
+  assert.equal(result.summary.withinDeadline, 0);
+  assert.equal(result.summary.overdue, 0);
+});

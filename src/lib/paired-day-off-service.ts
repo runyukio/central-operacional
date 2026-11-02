@@ -1,3 +1,4 @@
+import { canAdminRejectRequest } from "@/lib/request-routing";
 import { Prisma, type EmployeeProfile, type Schedule } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { nextRequestCode } from "@/lib/request-code";
@@ -180,6 +181,7 @@ function pairedSwapDecision(payload: SwapPayload, userId: string, requesterId: s
   if (payload.stage === "DONE") throw new PairedSwapError("Esta troca casada já foi encerrada.");
   if (status === "Cancelado" && userId === requesterId) return "CANCEL";
   const normalized = normalizeRole(role);
+  if (status === "Recusado" && normalized === "ADMIN") return "REJECT";
   const authorized = payload.stage === "PARTNER" ? userId === payload.partnerUserId
     : payload.stage === "SUPERVISOR" ? userId === supervisorId && normalized === "SUPERVISOR"
     : payload.stage === "WFM" && ["ADMIN", "WFM"].includes(normalized);
@@ -196,6 +198,10 @@ export async function updatePairedSwap(actor: Actor, userId: string, id: string,
     if (request.deletedAt) throw new PairedSwapError("Solicitação não encontrada.");
     if (["RECUSADO", "CANCELADO", "CONCLUIDO"].includes(request.status)) throw new PairedSwapError("Esta troca casada já foi encerrada.");
     const payload = request.payload as unknown as SwapPayload;
+    const adminRejection = status === "Recusado" && normalizeRole(actor.role) === "ADMIN";
+    if (adminRejection && !canAdminRejectRequest("ADMIN", request.status, request.payload as Record<string, unknown>)) {
+      throw new PairedSwapError("Não é possível recusar uma solicitação já aprovada ou aplicada ao cronograma.");
+    }
     if (status === "Concluído") {
       if (!["ADMIN", "WFM"].includes(normalizeRole(actor.role))) throw new PairedSwapError("Sem permissão para concluir esta troca casada.");
       if (!canConcludePairedSwap(actor.role, request.status, payload)) throw new PairedSwapError("A troca casada precisa estar aprovada e com os cronogramas atualizados antes da conclusão.");
@@ -213,7 +219,7 @@ export async function updatePairedSwap(actor: Actor, userId: string, id: string,
       return { request: saved, scheduleUpdated: false };
     }
     if (request.status === "APROVADO") throw new PairedSwapError("Esta troca casada já foi encerrada.");
-    const supervisorId = status === "Cancelado" && request.requesterId === userId || status === "Recusado" && payload.stage === "PARTNER" ? "" : await supervisorUserId(tx, request.employee?.supervisorId ?? null);
+    const supervisorId = adminRejection || status === "Cancelado" && request.requesterId === userId || status === "Recusado" && payload.stage === "PARTNER" ? "" : await supervisorUserId(tx, request.employee?.supervisorId ?? null);
     const decision = pairedSwapDecision(payload, userId, request.requesterId, actor.role, supervisorId, status);
     if (decision === "REJECT" && !reason?.trim()) throw new PairedSwapError("Informe o motivo da recusa.");
     const now = new Date().toISOString();
@@ -222,7 +228,7 @@ export async function updatePairedSwap(actor: Actor, userId: string, id: string,
     const recipients = [request.requesterId, payload.partnerUserId];
     if (decision === "CANCEL" || decision === "REJECT") {
       nextStatus = decision === "CANCEL" ? "CANCELADO" : "RECUSADO";
-      action = decision === "CANCEL" ? "Cancelamento da troca casada" : "Recusa da troca casada";
+      action = decision === "CANCEL" ? "Cancelamento da troca casada" : adminRejection ? "Recusa administrativa da troca casada" : "Recusa da troca casada";
       payload.stage = "DONE";
       payload.scheduleApplicationStatus = "NOT_APPLIED";
     } else {

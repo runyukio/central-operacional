@@ -3,7 +3,7 @@
 import { formatPipelineDate, type RequestSla } from "@/lib/request-pipeline";
 import { RequestSlaBadge } from "./request-sla-badge";
 
-import { isDirectWfmRequest } from "@/lib/request-routing";
+import { canAdminRejectRequest, isDirectWfmRequest } from "@/lib/request-routing";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { type InputHTMLAttributes, useState } from "react";
 import { AlertTriangle, CalendarCheck, ClipboardList, Frown, Headphones, HeartPulse, Laptop, Meh, ShieldCheck, Smile } from "lucide-react";
@@ -50,6 +50,7 @@ export type ClientRequest = {
   canSupervisorStep?: boolean;
   canWfmFinal?: boolean;
   canConclude?: boolean;
+  canReject?: boolean;
   canPartnerAccept?: boolean;
   canCancelPairedSwap?: boolean;
   time: string;
@@ -1136,7 +1137,7 @@ export function RequestDetailContent({
   const canSupervisorStep = !directWfm && selected.status === "Aberto" && Boolean(selected.canSupervisorStep);
   const canWfmFinal = (selected.status === "Em análise" || (directWfm && selected.status === "Aberto")) && Boolean(selected.canWfmFinal);
   const canPartnerAccept = Boolean(selected.canPartnerAccept) && selected.status === "Aberto";
-  const canReject = canSupervisorStep || canWfmFinal || canPartnerAccept;
+  const canReject = !isProcessed && Boolean(selected.canReject ?? (actorRole === "ADMIN" ? canAdminRejectRequest(actorRole, selected.status, payload) : canSupervisorStep || canWfmFinal || canPartnerAccept));
   const canConclude = selected.status === "Aprovado" && Boolean(selected.canConclude ?? selected.canWfmFinal);
   const canCancel = dayOffKind === "PAIRED_DAY_OFF_SWAP" ? Boolean(selected.canCancelPairedSwap) : !isProcessed && !isApproved && actorRole === "COLABORADOR" && selected.status === "Aberto";
   const buttonsDisabled = Boolean(actionPending) || isProcessed;

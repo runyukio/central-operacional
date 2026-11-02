@@ -36,7 +36,7 @@ function setup(t: TestContext, role: Actor["role"] = "WFM", type = "WFM", status
   const original = prisma.$transaction;
   prisma.$transaction = (async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)) as unknown as typeof prisma.$transaction;
   t.after(() => { prisma.$transaction = original; });
-  return { actor, tx, requests, profiles, users, notifications };
+  return { actor, tx, requests, profiles, users, notifications, request };
 }
 
 for (const role of ["WFM", "ADMIN"] as const) {
@@ -48,7 +48,7 @@ for (const role of ["WFM", "ADMIN"] as const) {
       assert.equal(result.data.status, status);
       assert.equal(result.scheduleUpdated, false);
       assert.equal(tx.request.update.mock.calls[0].arguments[0].data.status, status === "Aprovado" ? "APROVADO" : "RECUSADO");
-      assert.equal(tx.request.update.mock.calls[0].arguments[0].data.history.create.action, status === "Aprovado" ? "Aprovação final WFM" : "Recusa WFM");
+      assert.equal(tx.request.update.mock.calls[0].arguments[0].data.history.create.action, status === "Aprovado" ? "Aprovação final WFM" : role === "ADMIN" ? "Recusa administrativa" : "Recusa WFM");
     });
   }
 }
@@ -129,4 +129,25 @@ test("supervisor responsibility filter excludes open WFM requests", async (t) =>
   const where = requests.findMany.mock.calls[0].arguments[0].where;
   assert.equal(matches(where, { type: "WFM", status: "ABERTO" }), false);
   assert.equal(matches(where, { type: "Troca de Turno", status: "ABERTO" }), true);
+});
+
+
+for (const status of ["APROVADO", "CONCLUIDO", "CANCELADO", "RECUSADO"]) {
+  test(`ADMIN cannot refuse a generic WFM request after final approval or closure: ${status}`, async t => {
+    const { actor, tx } = setup(t, "ADMIN", "WFM", status);
+    const detail = await getOperationalRequest(actor, "REQ-3144");
+    assert.equal(detail?.canReject, false);
+    const result = await updateOperationalRequestStatus(actor, "REQ-3144", "Recusado", "Motivo");
+    assert.ok(result && typeof result === "object" && "error" in result);
+    assert.equal(tx.request.update.mock.callCount(), 0);
+  });
+}
+
+test("ADMIN cannot refuse a pending request with an already applied schedule", async t => {
+  const { actor, tx, request } = setup(t, "ADMIN", "WFM", "EM_ANALISE");
+  Object.assign(request.payload, { scheduleApplicationStatus: "APPLIED" });
+  assert.equal((await getOperationalRequest(actor, request.code))?.canReject, false);
+  const result = await updateOperationalRequestStatus(actor, request.code, "Recusado", "Motivo");
+  assert.ok(result && typeof result === "object" && "error" in result);
+  assert.equal(tx.request.update.mock.callCount(), 0);
 });
