@@ -1,6 +1,8 @@
 "use client";
 
 import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
+import * as Dialog from "@radix-ui/react-dialog";
+import { billingBulkTargets, type BillingBulkStatus, type BillingStatusSelection } from "@/lib/billing-bulk-status";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClientRequestGate } from "@/lib/client-request-gate";
@@ -215,6 +217,13 @@ export function BillingPage() {
   const [payload, setPayload] = useState<BillingPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [pendingBulkStatus, setPendingBulkStatus] = useState<{
+    status: BillingBulkStatus;
+    referenceMonth: string;
+    monthLabel: string;
+    invoices: BillingStatusSelection[];
+    filteredCount: number;
+  } | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>(billingInitialTab);
@@ -347,6 +356,29 @@ export function BillingPage() {
   async function saveRates() {
     const rates = Object.fromEntries(Object.entries(rateDraft).map(([key, value]) => [key, Number(value.replace(",", "."))]));
     await postBilling({ action: "save-rates", rates }, "Configurações de valores atualizadas.");
+  }
+
+  function confirmFilteredInvoiceStatus(status: BillingBulkStatus) {
+    if (!data || loading || saving || searchInput.trim() !== search) return;
+    setPendingBulkStatus({
+      status,
+      referenceMonth: data.referenceMonth,
+      monthLabel: data.monthLabel,
+      invoices: billingBulkTargets(data.invoices, status).map(({ employeeId, status }) => ({ employeeId, status })),
+      filteredCount: data.invoices.length
+    });
+  }
+
+  async function applyFilteredInvoiceStatus() {
+    if (!pendingBulkStatus || saving || !pendingBulkStatus.invoices.length) return;
+    const selection = pendingBulkStatus;
+    setPendingBulkStatus(null);
+    await postBilling({
+      action: "set-filtered-invoice-status",
+      referenceMonth: selection.referenceMonth,
+      status: selection.status,
+      invoices: selection.invoices
+    }, `${selection.invoices.length} invoice(s) ${selection.status === "FECHADO" ? "fechada(s)" : "liberada(s) para conferência"} nos filtros selecionados.`);
   }
 
   async function createAdjustment() {
@@ -713,11 +745,11 @@ export function BillingPage() {
                 </div>
                 {canManageBilling ? (
                   <div className="mt-3 grid gap-2">
-                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Marcar em revisão</button>
-                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos parceiros.")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
+                    <p className="text-xs font-semibold text-muted">Ações sobre as {data.invoices.length} invoices filtradas, em todas as páginas.</p>
+                    <button disabled={saving || loading || searchInput.trim() !== search || !billingBulkTargets(data.invoices, "FINALIZADO_CONFERENCIA").length} onClick={() => confirmFilteredInvoiceStatus("FINALIZADO_CONFERENCIA")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
                       <Send className="h-4 w-4" /> Liberar conferência
                     </button>
-                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FECHADO" }, "Ciclo fechado.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Fechar ciclo</button>
+                    <button disabled={saving || loading || searchInput.trim() !== search || !billingBulkTargets(data.invoices, "FECHADO").length} onClick={() => confirmFilteredInvoiceStatus("FECHADO")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Fechar ciclo</button>
                   </div>
                 ) : (
                   <p className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
@@ -733,6 +765,25 @@ export function BillingPage() {
               </Panel>
             </div>
           </section>
+          <Dialog.Root open={Boolean(pendingBulkStatus)} onOpenChange={(open) => { if (!open) setPendingBulkStatus(null); }}>
+            <Dialog.Portal>
+              <Dialog.Overlay className="fixed inset-0 z-[80] bg-navy-950/40 backdrop-blur-sm" />
+              <Dialog.Content className="fixed left-1/2 top-1/2 z-[81] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border bg-white p-6 shadow-2xl">
+                <Dialog.Title className="text-lg font-black text-navy-950">{pendingBulkStatus?.status === "FECHADO" ? "Fechar invoices filtradas?" : "Liberar conferência das invoices filtradas?"}</Dialog.Title>
+                <Dialog.Description className="mt-3 text-sm font-semibold text-muted">
+                  {pendingBulkStatus?.invoices.length} invoice(s) de {pendingBulkStatus?.monthLabel} passarão para “{pendingBulkStatus?.status === "FECHADO" ? "Fechado" : "Disponível para aprovação"}”. A seleção inclui todas as páginas dos filtros aplicados.
+                </Dialog.Description>
+                {pendingBulkStatus && pendingBulkStatus.filteredCount > pendingBulkStatus.invoices.length ? (
+                  <p className="mt-3 text-sm font-semibold text-muted">{pendingBulkStatus.filteredCount - pendingBulkStatus.invoices.length} invoice(s) já concluída(s) ou com o status solicitado serão mantidas.</p>
+                ) : null}
+                <p className="mt-3 text-sm font-semibold text-navy-950">Parceiros fora dessa seleção não serão alterados.</p>
+                <div className="mt-5 flex justify-end gap-2">
+                  <Dialog.Close asChild><button className="premium-control h-10 px-4 text-sm font-bold">Cancelar</button></Dialog.Close>
+                  <button disabled={saving || !pendingBulkStatus?.invoices.length} onClick={() => void applyFilteredInvoiceStatus()} className="premium-button h-10 px-4 text-sm font-bold">{pendingBulkStatus?.status === "FECHADO" ? "Confirmar fechamento" : "Confirmar liberação"}</button>
+                </div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
           {selectedInvoice ? (
             <EmployeeBillingDetail
               invoice={selectedInvoice}
