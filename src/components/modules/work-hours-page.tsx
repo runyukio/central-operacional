@@ -86,6 +86,10 @@ export function WorkHoursPage() {
   const [summary, setSummary] = useState<WorkHourSummary | null>(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
   const [hoursRequests] = useState(createClientRequestGate);
+  const capturedHoursById = useRef(new Map<string, number>());
+  const captureRequest = useRef<AbortController | null>(null);
+  const pendingCaptureIds = useRef(new Set<string>());
+  const [captureStates, setCaptureStates] = useState<Record<string, "loading" | "failed">>({});
   const [filters, setFilters] = useState(() => ({
     ...initialDateRangeFromUrl(),
     employeeId: queryParam("employeeId"),
@@ -153,7 +157,7 @@ export function WorkHoursPage() {
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings").then((payload) => setSettings(payload.data)).catch(() => undefined);
     void loadWorkHours();
-    return () => hoursRequests.cancel();
+    return () => { hoursRequests.cancel(); captureRequest.current?.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -161,6 +165,12 @@ export function WorkHoursPage() {
   async function loadWorkHours(nextPage = pagination.page, appliedFilters = filters, background = false) {
     appliedHoursView.current = { page: nextPage, filters: appliedFilters };
     const request = hoursRequests.begin();
+    if (!background || !captureRequest.current) {
+      captureRequest.current?.abort();
+      captureRequest.current = new AbortController();
+      capturedHoursById.current.clear();
+      pendingCaptureIds.current.clear();
+    }
     setLoading(true);
     if (!background) setMessage("");
     try {
@@ -170,6 +180,7 @@ export function WorkHoursPage() {
         page: String(nextPage),
         limit: String(pagination.limit)
       });
+      params.set("includeCapture", "false");
       if (appliedFilters.lob !== "Todos") params.set("lob", appliedFilters.lob);
       if (appliedFilters.employeeId) params.set("employeeId", appliedFilters.employeeId);
       if (appliedFilters.supervisor) params.set("supervisor", appliedFilters.supervisor);
@@ -183,9 +194,13 @@ export function WorkHoursPage() {
       if (appliedFilters.noScheduleOnly) params.set("noScheduleOnly", "true");
       const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary; pagination: typeof pagination }>(`/api/work-hours?${params.toString()}`, { signal: request.signal });
       if (!hoursRequests.isCurrent(request)) return;
-      setRows(payload.data);
+      const pendingCapture = payload.data.filter((row) => !capturedHoursById.current.has(row.id));
+      setRows(payload.data.map((row) => ({ ...row, capturedHours: capturedHoursById.current.get(row.id) ?? row.capturedHours })));
+      setCaptureStates(Object.fromEntries(pendingCapture.map((row) => [row.id, "loading" as const])));
       setSummary(payload.summary);
       setPagination(payload.pagination);
+      const captureIds = pendingCapture.map((row) => row.id).filter((id) => !pendingCaptureIds.current.has(id));
+      if (captureIds.length) void loadCapturedHours(captureIds, appliedFilters, captureRequest.current!);
     } catch (error) {
       if (!hoursRequests.isCurrent(request)) return;
       if (!background) {
@@ -196,6 +211,29 @@ export function WorkHoursPage() {
       setMessage(background ? `A alteração foi salva, mas não foi possível atualizar o painel. ${detail}` : detail);
     } finally {
       if (hoursRequests.isCurrent(request)) setLoading(false);
+    }
+  }
+
+  async function loadCapturedHours(recordIds: string[], period: { startDate: string; endDate: string }, request: AbortController) {
+    for (const id of recordIds) pendingCaptureIds.current.add(id);
+    try {
+      const payload = await apiJson<{ data: Array<{ id: string; capturedHours: number }> }>("/api/work-hours/capture", {
+        method: "POST", signal: request.signal,
+        body: JSON.stringify({ recordIds, startDate: period.startDate, endDate: period.endDate })
+      });
+      if (captureRequest.current !== request || request.signal.aborted) return;
+      const captured = new Map(payload.data.map((row) => [row.id, row.capturedHours]));
+      for (const [id, hours] of captured) capturedHoursById.current.set(id, hours);
+      setRows((current) => current.map((row) => captured.has(row.id) ? { ...row, capturedHours: captured.get(row.id)! } : row));
+      setCaptureStates((current) => {
+        const next = { ...current };
+        for (const id of recordIds) { if (captured.has(id)) delete next[id]; else next[id] = "failed"; }
+        return next;
+      });
+    } catch {
+      if (captureRequest.current === request && !request.signal.aborted) setCaptureStates((current) => ({ ...current, ...Object.fromEntries(recordIds.map((id) => [id, "failed" as const])) }));
+    } finally {
+      if (captureRequest.current === request) for (const id of recordIds) pendingCaptureIds.current.delete(id);
     }
   }
 
@@ -634,7 +672,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.effectiveHours, "0:00")}{(row.validationHours ?? 0) > 0 ? <p className="mt-1 text-xs font-bold text-amber-700">+{formatWorkHourValue(row.validationHours ?? 0)} em validação</p> : row.overtimeReviewStatus === "Excedente recusado" ? <p className="mt-1 text-xs text-red-700" title={row.overtimeRejectionReason}>Excedente recusado: {row.overtimeRejectionReason}</p> : row.overtimeReviewStatus === "Excedente aprovado" ? <p className="mt-1 text-xs text-emerald-700">Excedente aprovado</p> : null}</td>
-                    <td className="px-4 py-3">{formatWorkHourValue(row.capturedHours, "0:00")}</td>
+                    <td className="px-4 py-3">{captureStates[row.id] === "loading" ? <span role="status" className="text-xs text-muted">Carregando captura...</span> : captureStates[row.id] === "failed" ? <span className="text-xs text-amber-700" title="Use Filtrar para tentar carregar a captura novamente.">Captura indisponível</span> : formatWorkHourValue(row.capturedHours, "0:00")}</td>
                     <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{formatHourDifference(row.differenceMinutes)}</td>
                     <td className="px-4 py-3"><WorkHourBalanceBadge plannedHours={row.plannedHours} differenceMinutes={row.differenceMinutes} /></td>
                     <td className="px-4 py-3">
