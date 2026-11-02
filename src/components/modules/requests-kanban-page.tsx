@@ -26,6 +26,7 @@ const defaultPipelineFilters = {
   supervisorId: "Todos", priority: "Todos", pendingAction: "false", deadline: "Todos", sort: "created", limit: "50"
 };
 const emptySummary: PipelineSummary = { total: 0, byStatus: {}, open: 0, inAnalysis: 0, awaitingCompletion: 0, withinDeadline: 0, overdue: 0, oldestPending: null };
+const pendingPageSize = 10;
 function paginationRange(page: number, limit: number, total: number) {
   return total ? `Exibindo ${(page - 1) * limit + 1}–${Math.min(page * limit, total)} de ${total} solicitações` : "Exibindo 0 de 0 solicitações";
 }
@@ -89,7 +90,7 @@ function PendingRequestsModal({ filters, onClose, onSelect }: {
     });
     params.set("status", "Pendentes");
     params.set("sort", "oldest");
-    params.set("limit", "50");
+    params.set("limit", String(pendingPageSize));
     params.set("page", String(page));
     setLoading(true);
     setError("");
@@ -109,8 +110,8 @@ function PendingRequestsModal({ filters, onClose, onSelect }: {
   const totalPages = result?.totalPages ?? 1;
   return <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}><Dialog.Portal>
     <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40" />
-    <div className="pointer-events-none fixed inset-0 z-[51] grid place-items-center p-4">
-      <Dialog.Content className="card pointer-events-auto flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden !bg-white p-5">
+    <div className="pointer-events-none fixed inset-0 z-[51] grid place-items-center p-2 sm:p-4">
+      <Dialog.Content className="card pointer-events-auto flex h-[94dvh] max-h-[calc(100dvh-1rem)] w-full max-w-[1600px] flex-col overflow-hidden !bg-white p-4 sm:p-6">
         <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
           <Dialog.Title className="text-lg font-extrabold text-navy-950">Pendências mais antigas</Dialog.Title>
           <button type="button" onClick={onClose} aria-label="Fechar lista de pendências" className="rounded-lg p-2"><X className="h-5 w-5" /></button>
@@ -131,7 +132,7 @@ function PendingRequestsModal({ filters, onClose, onSelect }: {
         </> : null}
         </div>
         <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <p className="text-sm text-muted">{paginationRange(currentPage, 50, result?.total ?? 0)}</p>
+          <p className="text-sm text-muted">{paginationRange(currentPage, pendingPageSize, result?.total ?? 0)}</p>
           <div className="flex items-center gap-2">
             <button type="button" disabled={loading || currentPage <= 1} onClick={() => setPage(currentPage - 1)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Anterior</button>
             <span className="text-sm font-bold">Página {currentPage} de {totalPages}</span>

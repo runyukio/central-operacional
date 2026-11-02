@@ -145,15 +145,18 @@ test("oldest-pending list excludes closed records, keeps all pending stages and 
     { ...rows[0], id: "canceled", status: "Cancelado" }
   ];
   const records = [...rows, ...extra];
-  const first = selectPipeline(records, { status: "Pendentes", sort: "oldest" });
+  const first = selectPipeline(records, { status: "Pendentes", sort: "oldest", limit: 10 });
   assert.equal(first.total, 101);
-  assert.equal(first.data.length, 50);
+  assert.equal(first.data.length, 10);
+  assert.equal(first.totalPages, 11);
   assert.equal(first.summary.open, 60);
   assert.equal(first.summary.inAnalysis, 1);
   assert.equal(first.summary.awaitingCompletion, 40);
   assert.equal(first.summary.oldestPending?.id, "REQ-1000");
   assert.ok(first.data.every(row => ["Aberto", "Em análise", "Aprovado"].includes(row.status)));
-  const all = [1, 2, 3].flatMap(page => selectPipeline(records, { status: "Pendentes", sort: "oldest", page }).data);
+  const last = selectPipeline(records, { status: "Pendentes", sort: "oldest", page: 11, limit: 10 });
+  assert.equal(last.data.length, 1);
+  const all = Array.from({ length: first.totalPages }, (_, index) => selectPipeline(records, { status: "Pendentes", sort: "oldest", page: index + 1, limit: 10 }).data).flat();
   assert.equal(new Set(all.map(row => row.id)).size, 101);
   assert.ok(all.every((row, index) => !index || row.createdAtIso! >= all[index - 1].createdAtIso!));
 });
