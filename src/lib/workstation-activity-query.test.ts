@@ -28,9 +28,12 @@ test("only the five requested profiles can see the menu, page and API", () => {
 
 function fixture(t: TestContext, role = "ADMIN", patch: Record<string, unknown> = {}, resultRows: unknown[] = []) {
   const calls: Prisma.Sql[] = [];
-  const descriptors = new Map(["user", "employeeProfile", "$queryRaw"].map((name) => [name, Object.getOwnPropertyDescriptor(prisma, name)]));
+  const descriptors = new Map(["user", "employeeProfile", "shift", "$queryRaw"].map((name) => [name, Object.getOwnPropertyDescriptor(prisma, name)]));
   const viewer = { email: actor.email, role: { name: role }, status: "ACTIVE", deletedAt: null, employeeProfile: { id: "supervisor-id" }, ...patch };
   Object.defineProperty(prisma, "user", { configurable: true, value: { findUnique: async () => viewer } });
+  Object.defineProperty(prisma, "shift", { configurable: true, value: { findMany: async () => [
+    { name: "Manhã (07:00–16:00)" }, { name: "Manha ADS" }, { name: "Tarde (15:00–00:00)" }, { name: "Noite (23:00–08:00)" }
+  ] } });
   Object.defineProperty(prisma, "employeeProfile", { configurable: true, value: { findMany: async (args: unknown) => {
     assert.deepEqual(args, { where: { deletedAt: null, supervisorId: "supervisor-id" }, select: { id: true } });
     return [{ id: "team-agent" }];
@@ -153,4 +156,47 @@ test("device selection preserves the complete device key and legacy long interva
   assert.ok(calls[0].values.includes("device:pc-01|agent"));
   const dates = calls[0].values.filter((value): value is Date => value instanceof Date);
   assert.ok(dates.every((value) => ["2026-10-29T03:00:00.000Z", "2026-10-30T03:00:00.000Z"].includes(value.toISOString())), "do not assume stored events last less than 24h");
+});
+
+test("LOB and shift combine before totals and limiting while options retain the scoped full day", async (t) => {
+  const { calls } = fixture(t, "SUPERVISOR", {}, [{ filterOptions: [
+    { lob: "ADS", shift: "Manhã (07:00–16:00)" }, { lob: "ADS", shift: "Manha ADS" },
+    { lob: "CEC", shift: "Tarde (15:00–00:00)" }, { lob: null, shift: null }
+  ] }]);
+  const result = await getWorkstationActivityQuery(actor, { view: "overview", lob: "ADS", shift: "Manhã", agentSearch: "Ana" });
+  assert.ok(result.success && "filterOptions" in result);
+  assert.equal(calls.length, 1);
+  const sql = calls[0];
+  const base = sql.text.slice(0, sql.text.indexOf("filtered_activity AS"));
+  assert.ok(base.includes('activity."employeeId" IN ('), "facet options must use the supervisor scope too");
+  const filtered = sql.text.slice(sql.text.indexOf("filtered_activity AS"), sql.text.indexOf("summary AS"));
+  assert.ok(filtered.includes('COALESCE("lob", \'Sem LOB\') = '));
+  assert.ok(filtered.includes('COALESCE("shift", \'Sem turno\') IN ('));
+  assert.ok(filtered.includes(" AND "));
+  assert.ok(sql.values.includes("ADS"));
+  assert.ok(sql.values.includes("Manhã (07:00–16:00)"));
+  assert.ok(sql.values.includes("Manha ADS"));
+  assert.ok(!sql.values.includes("Tarde (15:00–00:00)"));
+  assert.equal(sql.text.match(/FROM "agent_activity"\."WorkstationActivitySegment"/g)?.length, 1);
+  assert.ok(sql.text.includes('SELECT DISTINCT "lob", "shift" FROM clipped_activity'));
+  assert.equal(sql.text.match(/FROM filtered_activity/g)?.length, 2, "both summary and agent list use the same filters");
+  assert.deepEqual(result.filters, { lob: "ADS", shift: "Manhã" });
+  assert.deepEqual(result.filterOptions, { lobs: ["ADS", "CEC", "Sem LOB"], shifts: ["Manhã", "Sem turno", "Tarde"] });
+});
+
+test("unlinked stations can be selected with Sem LOB and Sem turno", async (t) => {
+  const { calls } = fixture(t);
+  await getWorkstationActivityQuery(actor, { view: "overview", lob: "Sem LOB", shift: "Sem turno" });
+  assert.ok(calls[0].values.includes("Sem LOB"));
+  assert.ok(calls[0].values.includes("Sem turno"));
+  assert.ok(calls[0].text.includes('COALESCE("shift", \'Sem turno\') IN ('));
+});
+
+test("unknown shifts cannot broaden access and LOB input stays parameterized", async (t) => {
+  const { calls } = fixture(t);
+  const lob = "ADS' OR TRUE --";
+  await getWorkstationActivityQuery(actor, { view: "overview", lob, shift: "Unknown" });
+  assert.ok(calls[0].values.includes(lob));
+  assert.ok(!calls[0].text.includes(lob));
+  assert.ok(calls[0].text.includes(" AND FALSE"));
 });

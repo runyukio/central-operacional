@@ -4,6 +4,7 @@ import { normalizeAccessRole } from "@/lib/access-control";
 import type { Actor } from "@/lib/mock-db";
 import { prisma } from "@/lib/prisma";
 import { canAccessRealtimeHoursActivity } from "@/lib/realtime-hours-permissions";
+import { shiftCategoryName } from "@/lib/shift-display";
 import {
   addDateKeyDays,
   saoPauloDateKey,
@@ -74,6 +75,8 @@ export type WorkstationActivityQuery = {
   agentKey?: string | null;
   agentSearch?: string | null;
   timeline?: string | boolean | null;
+  lob?: string | null;
+  shift?: string | null;
 };
 
 const agentKeySql = Prisma.sql`CASE WHEN activity."employeeId" IS NOT NULL
@@ -92,6 +95,7 @@ type ActivityQueryResult = {
   summary: ActivitySummaryRow;
   agents: Array<Omit<AgentAggregate, "lastActivityAt"> & { lastActivityAt: string }>;
   rankings: RankingAggregate[];
+  filterOptions?: Array<{ lob: string | null; shift: string | null }>;
   rows: Array<Omit<ActivityRawRow, "capturedAt" | "startedAt" | "endedAt"> & {
     capturedAt: string; startedAt: string; endedAt: string;
   }>;
@@ -157,6 +161,17 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
   }
 
   const overview = query.view === "overview";
+  const lobFilter = String(query.lob ?? "").trim().slice(0, 120);
+  const shiftFilter = String(query.shift ?? "").trim().slice(0, 120);
+  const filters: Prisma.Sql[] = [];
+  if (lobFilter && lobFilter !== "Todos") filters.push(Prisma.sql`COALESCE("lob", 'Sem LOB') = ${lobFilter}`);
+  if (shiftFilter && shiftFilter !== "Todos") {
+    const category = shiftCategoryName(shiftFilter);
+    const shifts = await prisma.shift.findMany({ select: { name: true } });
+    const names = shifts.filter((shift) => shiftCategoryName(shift.name) === category).map((shift) => shift.name);
+    if (category === "Sem turno") names.push("Sem turno");
+    filters.push(names.length ? Prisma.sql`COALESCE("shift", 'Sem turno') IN (${Prisma.join(names)})` : Prisma.sql`FALSE`);
+  }
   const includeTimeline = !overview && query.timeline !== false && query.timeline !== "false";
   const where = Prisma.join(conditions, " AND ");
   const baseActivityQuery = Prisma.sql`
@@ -175,10 +190,12 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
       LEAST(activity."endedAt", ${end}) AS "endedAt",
       employee."fullName" AS "employeeName",
       lob."name" AS "lob",
+      shift."name" AS "shift",
       supervisor."fullName" AS "supervisor"
     FROM "agent_activity"."WorkstationActivitySegment" activity
     LEFT JOIN public."EmployeeProfile" employee ON employee."id" = activity."employeeId"
     LEFT JOIN public."Lob" lob ON lob."id" = employee."lobId"
+    LEFT JOIN public."Shift" shift ON shift."id" = employee."shiftId"
     LEFT JOIN public."EmployeeProfile" supervisor ON supervisor."id" = employee."supervisorId"
     WHERE ${where}
   `;
@@ -201,7 +218,7 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
         COALESCE(SUM(CASE WHEN "sourceType" = 'PRIVATE' THEN EXTRACT(EPOCH FROM ("endedAt" - "startedAt")) ELSE 0 END), 0)::int AS "privateSeconds",
         COALESCE(SUM(CASE WHEN "sourceType" = 'UNKNOWN' THEN EXTRACT(EPOCH FROM ("endedAt" - "startedAt")) ELSE 0 END), 0)::int AS "unknownSeconds",
         (COUNT(DISTINCT "domain") FILTER (WHERE "domain" IS NOT NULL))::int AS "uniqueDomains"
-      FROM clipped_activity
+      FROM filtered_activity
   `;
   const agentsQuery = overview ? Prisma.sql`, agent_totals AS (
       SELECT "agentKey", MIN("employeeId") AS "employeeId",
@@ -216,14 +233,14 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
         COALESCE(SUM(CASE WHEN "sourceType"='LOCKED' THEN EXTRACT(EPOCH FROM ("endedAt" - "startedAt")) ELSE 0 END), 0)::int AS "lockedSeconds",
         COUNT(DISTINCT "domain")::int AS "uniqueDomains", MAX("endedAt") AS "lastActivityAt",
         COUNT(*) OVER()::int AS "agentsFound"
-      FROM clipped_activity
+      FROM filtered_activity
       GROUP BY "agentKey" ${nameFilter} ORDER BY "totalSeconds" DESC, "employeeName" ASC LIMIT 1000
   )` : Prisma.empty;
   const rankingsQuery = query.view === "agent" ? Prisma.sql`, ranking_totals AS (
       SELECT "sourceType" AS "rankKind",
         CASE WHEN "sourceType"='WEB' THEN "domain" ELSE "applicationName" END AS "label",
         SUM(EXTRACT(EPOCH FROM ("endedAt" - "startedAt")))::int AS "seconds"
-      FROM clipped_activity WHERE "sourceType" IN ('WEB', 'APP')
+      FROM filtered_activity WHERE "sourceType" IN ('WEB', 'APP')
       GROUP BY "sourceType", CASE WHEN "sourceType"='WEB' THEN "domain" ELSE "applicationName" END
     ), ranked AS (
       SELECT *, ROW_NUMBER() OVER (PARTITION BY "rankKind" ORDER BY "seconds" DESC, "label" ASC) AS "rankPosition"
@@ -232,14 +249,17 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
       SELECT "rankKind", "label", "seconds" FROM ranked WHERE "rankPosition" <= 100
   )` : Prisma.empty;
   const timelineQuery = includeTimeline ? Prisma.sql`, timeline AS (
-      SELECT * FROM clipped_activity
+      SELECT * FROM filtered_activity
       ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC LIMIT ${limit}
   )` : Prisma.empty;
 
   const [result] = await prisma.$queryRaw<ActivityQueryResult[]>(Prisma.sql`
-    WITH clipped_activity AS MATERIALIZED (${baseActivityQuery}), summary AS (${summaryQuery})
+    WITH clipped_activity AS MATERIALIZED (${baseActivityQuery}),
+    filtered_activity AS (SELECT * FROM clipped_activity ${filters.length ? Prisma.sql`WHERE ${Prisma.join(filters, " AND ")}` : Prisma.empty}),
+    summary AS (${summaryQuery})
     ${agentsQuery} ${rankingsQuery} ${timelineQuery}
     SELECT (SELECT to_jsonb(summary) FROM summary) AS "summary",
+      ${overview ? Prisma.sql`(SELECT COALESCE(jsonb_agg(options), '[]'::jsonb) FROM (SELECT DISTINCT "lob", "shift" FROM clipped_activity) options)` : Prisma.sql`'[]'::jsonb`} AS "filterOptions",
       ${overview ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(agent_totals) ORDER BY "totalSeconds" DESC, "employeeName" ASC), '[]'::jsonb) FROM agent_totals)` : Prisma.sql`'[]'::jsonb`} AS "agents",
       ${query.view === "agent" ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(ranking_results) ORDER BY "rankKind", "seconds" DESC, "label" ASC), '[]'::jsonb) FROM ranking_results)` : Prisma.sql`'[]'::jsonb`} AS "rankings",
       ${includeTimeline ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(timeline) - 'sourceStartedAt' ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC), '[]'::jsonb) FROM timeline)` : Prisma.sql`'[]'::jsonb`} AS "rows"
@@ -259,6 +279,11 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
   }));
   return {
     success: true, date: dateKey, agentKey: selectedAgent || null,
+    filters: { lob: lobFilter, shift: shiftFilter },
+    filterOptions: {
+      lobs: Array.from(new Set((result?.filterOptions ?? []).map((item) => item.lob || "Sem LOB"))).sort((a, b) => a.localeCompare(b, "pt-BR")),
+      shifts: Array.from(new Set((result?.filterOptions ?? []).map((item) => shiftCategoryName(item.shift) || "Sem turno"))).sort((a, b) => a.localeCompare(b, "pt-BR"))
+    },
     window: { start: start.toISOString(), end: end.toISOString() }, summary,
     agents: agentRows.map(({ agentsFound: _count, ...agent }) => ({ ...agent, lastActivityAt: agent.lastActivityAt.toISOString() })),
     agentsFound: agentRows[0]?.agentsFound ?? 0,

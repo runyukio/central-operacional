@@ -23,6 +23,8 @@ export async function GET(request: Request) {
       view: url.searchParams.get("view"),
       agentKey: url.searchParams.get("agentKey"),
       agentSearch: url.searchParams.get("agentSearch"),
+      lob: url.searchParams.get("lob"),
+      shift: url.searchParams.get("shift"),
       search: url.searchParams.get("search"),
       sourceType: url.searchParams.get("sourceType"),
       domain: url.searchParams.get("domain"),
