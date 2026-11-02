@@ -201,7 +201,7 @@ export function selectPipeline<T extends PipelineRecord>(records: T[], filters: 
     return (b.createdAtIso ?? "").localeCompare(a.createdAtIso ?? "") || b.id.localeCompare(a.id);
   });
   const requestedLimit = Number(filters.limit);
-  const limit = [25, 50, 100].includes(requestedLimit) ? requestedLimit : 50;
+  const limit = [10, 25, 50, 100].includes(requestedLimit) ? requestedLimit : 50;
   const totalPages = Math.max(1, Math.ceil(matching.length / limit));
   const page = Math.min(totalPages, Math.max(1, Math.floor(Number(filters.page) || 1)));
   return {

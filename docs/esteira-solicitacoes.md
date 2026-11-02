@@ -24,7 +24,7 @@ O cálculo está centralizado em `src/lib/request-pipeline.ts`. Não há migraç
 | `deadline` | `WAITING_WFM`, `WITHIN_DEADLINE`, `OVERDUE`; omitido equivale a Todos |
 | `sort` | `created` (padrão, mais recentes), `oldest` (mais antigos), `deadline` |
 
-O clique no card “Pendente mais antigo” abre uma janela com `status=Pendentes` e `sort=oldest`, preservando a busca e os filtros aplicados. A janela tem paginação própria de 50 registros e não altera a tabela principal. O usuário escolhe então o pedido para abrir o detalhe. “Pendentes” reúne abertos, em análise e aprovados ainda não encerrados.
+O clique no card “Pendente mais antigo” abre uma janela ampliada com `status=Pendentes` e `sort=oldest`, preservando a busca e os filtros aplicados. A janela ocupa 94% da altura disponível, com largura de até 1600px, e tem paginação própria de 10 registros, sem alterar a tabela principal. O usuário escolhe então o pedido para abrir o detalhe. “Pendentes” reúne abertos, em análise e aprovados ainda não encerrados.
 
 O filtro de prazo seleciona somente pendências. A ordenação por vencimento prioriza pendências vencidas e coloca registros sem vencimento ao final.
 
