@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { billingBulkInvoiceStatus, billingBulkTargets, parseBillingStatusSelection } from "@/lib/billing-bulk-status";
 import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 export { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 
@@ -1374,44 +1375,64 @@ export async function adminDecideInvoiceAdjustment(actor: Actor, input: {
   return { data: mapAdjustmentRequest(completed) };
 }
 
-export async function updateBillingCycleStatus(actor: Actor, input: { referenceMonth?: string | null; status: string }) {
+export async function updateFilteredBillingInvoiceStatus(actor: Actor, input: { referenceMonth?: string | null; status: string; invoices?: unknown }) {
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   const nextStatus = input.status?.trim();
-  if (!nextStatus) return { error: "Status do ciclo é obrigatório.", status: 400 };
+  if (nextStatus !== "FINALIZADO_CONFERENCIA" && nextStatus !== "FECHADO") {
+    return { error: "Ação de invoice inválida.", status: 400 };
+  }
+  const selection = parseBillingStatusSelection(input.invoices);
+  if (!selection) return { error: "Selecione as invoices filtradas antes de confirmar.", status: 400 };
+  if (billingBulkTargets(selection, nextStatus).length !== selection.length) {
+    return { error: "A seleção contém invoices já concluídas ou com o status solicitado. Atualize a lista.", status: 409 };
+  }
   const cycle = await ensureBillingCycle(referenceMonth);
-  const data: Prisma.BillingCycleUpdateInput = { status: nextStatus };
-  if (nextStatus === "FINALIZADO_CONFERENCIA") {
-    data.finalizedAt = new Date();
-    data.finalizedBy = { connect: { id: user!.id } };
+  const expected = new Map(selection.map((row) => [row.employeeId, row.status]));
+  const invoices = (await buildBillingInvoicesReadModel(referenceMonth, await getBillingRates(), cycle, {}, { includeHourDetails: false }))
+    .filter((invoice) => expected.has(invoice.employeeId));
+  const conflict = { error: "As invoices mudaram desde a seleção. Atualize a lista e confirme novamente.", status: 409 };
+  if (invoices.length !== selection.length || invoices.some((invoice) => invoice.status !== expected.get(invoice.employeeId))) return conflict;
+  const invoiceStatus = billingBulkInvoiceStatus(nextStatus);
+  try {
+    const saved = await prisma.$transaction(async (tx) => {
+      const current = await tx.billingEmployeeInvoice.findMany({
+        where: { billingCycleId: cycle.id, employeeId: { in: selection.map((row) => row.employeeId) } },
+        select: { id: true, employeeId: true, status: true }
+      });
+      const currentByEmployee = new Map(current.map((row) => [row.employeeId, row]));
+      if (invoices.some((invoice) => {
+        const persisted = currentByEmployee.get(invoice.employeeId);
+        return persisted ? persisted.id !== invoice.id || persisted.status !== invoice.status : Boolean(invoice.id);
+      })) return null;
+      const changed = [];
+      for (const invoice of invoices) {
+        const updated = await upsertEmployeeInvoice(cycle.id, invoice, {
+          status: invoiceStatus,
+          clearEmployeeApproval: nextStatus === "FINALIZADO_CONFERENCIA"
+        }, tx);
+        await tx.auditLog.create({ data: {
+          actorId: user!.id,
+          action: AuditAction.EDICAO,
+          entity: "BillingEmployeeInvoice",
+          entityId: updated.id,
+          reason: nextStatus === "FECHADO" ? "Invoice filtrado fechado pelo Admin Central" : "Invoice filtrado liberado para conferência pelo Admin Central",
+          previousValue: { status: invoice.status },
+          newValue: { status: invoiceStatus, referenceMonth, employeeId: invoice.employeeId }
+        } });
+        changed.push(updated.id);
+      }
+      return changed;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60000 });
+    if (!saved) return conflict;
+    return { data: { status: invoiceStatus, statusLabel: invoiceStatusLabel(invoiceStatus), updatedCount: saved.length } };
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && ["P2034", "P2002"].includes(err.code)) return conflict;
+    throw err;
   }
-  let frozenInvoiceCount = 0;
-  if (nextStatus === "FECHADO") {
-    const invoices = await buildBillingInvoicesReadModel(referenceMonth, await getBillingRates(), cycle, {}, { includeHourDetails: false });
-    for (const invoice of invoices) {
-      await upsertEmployeeInvoice(cycle.id, invoice, { status: "FECHADO" });
-    }
-    await updateCycleTotals(cycle.id, invoices);
-    frozenInvoiceCount = invoices.length;
-    data.closedAt = new Date();
-    data.closedBy = { connect: { id: user!.id } };
-  }
-  const updated = await prisma.billingCycle.update({ where: { id: cycle.id }, data });
-  await prisma.auditLog.create({
-    data: {
-      actorId: user!.id,
-      action: AuditAction.EDICAO,
-      entity: "BillingCycle",
-      entityId: cycle.id,
-      reason: "Status do ciclo de Billing atualizado",
-      previousValue: { status: cycle.status },
-      newValue: { status: updated.status, referenceMonth, frozenInvoiceCount }
-    }
-  });
-  return { data: mapCycle(updated) };
 }
 
 export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
