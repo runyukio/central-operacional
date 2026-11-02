@@ -2,8 +2,9 @@
 
 import { AbsenceNoticeField } from "@/components/absence-notice-field";
 import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
-import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
+import { scheduleDisplayLabel, scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import { createClientRequestGate } from "@/lib/client-request-gate";
+import { requireSavedSchedule, requireScheduleData } from "@/lib/schedule-editor-response";
 import { useEffect, useRef, useState } from "react";
 import { CalendarCheck, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
@@ -307,6 +308,11 @@ export function SchedulesPage() {
   const scheduleReadGate = useRef(createClientRequestGate());
   const summaryReadGate = useRef(createClientRequestGate());
   const pendingReadGate = useRef(createClientRequestGate());
+  const editorReadGate = useRef(createClientRequestGate());
+  const loadedEditorKey = useRef("");
+  const [loadingScheduleEditor, setLoadingScheduleEditor] = useState(false);
+  const [scheduleEditorError, setScheduleEditorError] = useState("");
+  const [loadingScheduleRows, setLoadingScheduleRows] = useState(true);
   const scheduleAnalysisKeyRef = useRef("");
   const [previewRows, setPreviewRows] = useState<Array<Record<string, unknown>>>([]);
   const [previewResult, setPreviewResult] = useState<ImportPreview | null>(null);
@@ -412,7 +418,7 @@ export function SchedulesPage() {
 
   useEffect(() => {
     void loadScheduleSupportData();
-    const reads = [scheduleReadGate.current, summaryReadGate.current, pendingReadGate.current];
+    const reads = [scheduleReadGate.current, summaryReadGate.current, pendingReadGate.current, editorReadGate.current];
     return () => {
       reads.forEach((gate) => gate.cancel());
     };
@@ -420,6 +426,7 @@ export function SchedulesPage() {
 
   useEffect(() => {
     const query = scheduleEmployeeSearch.trim();
+    const controller = new AbortController();
     if (query.length < 2) {
       setScheduleEmployeeSearchResults([]);
       setLoadingScheduleEmployeeSearch(false);
@@ -428,13 +435,13 @@ export function SchedulesPage() {
 
     const timeout = window.setTimeout(() => {
       setLoadingScheduleEmployeeSearch(true);
-      apiJson<EmployeeListResponse>(`/api/employees?search=${encodeURIComponent(query)}&limit=50`)
-        .then((payload) => setScheduleEmployeeSearchResults(payload.data.filter((employee) => employee.status !== "Inativo").map((employee) => ({ ...employee, shift: cleanShiftName(employee.shift) || "Manhã" }))))
-        .catch(() => setScheduleEmployeeSearchResults([]))
-        .finally(() => setLoadingScheduleEmployeeSearch(false));
+      apiJson<EmployeeListResponse>(`/api/employees?search=${encodeURIComponent(query)}&limit=50`, { signal: controller.signal })
+        .then((payload) => { if (!controller.signal.aborted) setScheduleEmployeeSearchResults(payload.data.filter((employee) => employee.status !== "Inativo").map((employee) => ({ ...employee, shift: cleanShiftName(employee.shift) || "Manhã" }))); })
+        .catch(() => { if (!controller.signal.aborted) setScheduleEmployeeSearchResults([]); })
+        .finally(() => { if (!controller.signal.aborted) setLoadingScheduleEmployeeSearch(false); });
     }, 250);
 
-    return () => window.clearTimeout(timeout);
+    return () => { window.clearTimeout(timeout); controller.abort(); };
   }, [scheduleEmployeeSearch]);
 
   async function loadScheduleSupportData() {
@@ -462,6 +469,7 @@ export function SchedulesPage() {
   async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange, refreshAnalysis = true) {
     scheduleViewRef.current = { page: pageOverride, filters: filtersOverride, range: rangeOverride };
     const request = scheduleReadGate.current.begin();
+    setLoadingScheduleRows(true);
     const analysisKey = JSON.stringify([rangeOverride.startDate, rangeOverride.endDate, filtersOverride]);
     const shouldRefreshAnalysis = refreshAnalysis || scheduleAnalysisKeyRef.current !== analysisKey;
     if (shouldRefreshAnalysis) {
@@ -491,6 +499,7 @@ export function SchedulesPage() {
       if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
       const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number }; batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`, { signal: request.signal });
       if (!scheduleReadGate.current.isCurrent(request)) return;
+      requireScheduleData<ScheduleGridRow>(payload);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setScheduleMetrics(normalizeScheduleMetrics(payload.data.scheduleMetrics, payload.data.scheduleGridRows));
@@ -498,7 +507,6 @@ export function SchedulesPage() {
       setScheduleDateColumns(payload.data.dateColumns ?? []);
       if (payload.data.scheduleGridRows.length) {
         setAttendanceForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id });
-        setScheduleEditForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id, lob: payload.data.scheduleGridRows[0].employee.lob, supervisor: payload.data.scheduleGridRows[0].employee.supervisor });
       }
       if (payload.data.attendanceSummary) setAttendanceSummary(payload.data.attendanceSummary);
       if (payload.data.batchWb?.notFound.length) {
@@ -517,6 +525,9 @@ export function SchedulesPage() {
       setScheduleMetrics({ quantity: 0 });
       setScheduleDateColumns([]);
       setSchedulePagination((current) => ({ ...current, page: 1, total: 0, totalPages: 1 }));
+      setAttendanceMessage("Não foi possível carregar os cronogramas. Atualize a consulta para tentar novamente.");
+    } finally {
+      if (scheduleReadGate.current.isCurrent(request)) setLoadingScheduleRows(false);
     }
   }
 
@@ -680,14 +691,60 @@ export function SchedulesPage() {
     await refreshSchedules();
   }
 
-  function openScheduleEditor(row?: ScheduleGridRow, dayIndex = 0, value = "Escalado") {
+  async function openScheduleEditor(row?: ScheduleGridRow, dayIndex = 0, _value = "Escalado") {
+    if (loadingScheduleRows || savingSchedule) return;
     const targetRow = row ?? scheduleRows[0];
     const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
     if (!targetEmployee) {
       setAttendanceMessage("Nenhum parceiro ativo encontrado para receber cronograma.");
       return;
     }
-    const cellStatus = statusFromScheduleCell(value);
+    const date = visibleScheduleDates[dayIndex];
+    if (!date) { setAttendanceMessage("Selecione uma data válida do cronograma."); return; }
+    await loadScheduleEditor(targetEmployee.id, date);
+  }
+
+  async function loadScheduleEditor(employeeId: string, date: string) {
+    if (savingSchedule) return;
+    const request = editorReadGate.current.begin();
+    loadedEditorKey.current = "";
+    setLoadingScheduleEditor(true);
+    setScheduleEditorError("");
+    setScheduleEditForm((current) => ({ ...current, employeeId, date, scheduleId: "" }));
+    setShowEditSchedule(true);
+    try {
+      const params = new URLSearchParams({ employeeId, startDate: date, endDate: date, skipSummary: "true", includeImports: "false" });
+      const payload = await apiJson<unknown>(`/api/schedules?${params}`, { signal: request.signal });
+      if (!editorReadGate.current.isCurrent(request)) return;
+      const data = requireScheduleData<ScheduleGridRow>(payload);
+      const dayIndex = data.dateColumns.indexOf(date);
+      if (dayIndex < 0) throw new Error("Data ausente na resposta.");
+      let row = data.scheduleGridRows.find((item) => item.employee.id === employeeId);
+      if (!row) {
+        if (data.scheduleGridRows.length) throw new Error("Parceiro diferente na resposta.");
+        const profile = await apiJson<{ data: EmployeeClient }>(`/api/employees/${encodeURIComponent(employeeId)}`, { signal: request.signal });
+        if (!editorReadGate.current.isCurrent(request)) return;
+        if (!profile?.data || profile.data.id !== employeeId || typeof profile.data.name !== "string" || !profile.data.name
+          || ![profile.data.lob, profile.data.shift, profile.data.supervisor].every((value) => typeof value === "string")) throw new Error("Parceiro inválido.");
+        row = { employee: profile.data, days: data.dateColumns.map(() => "Sem cronograma") };
+      }
+      const slot = row.plannedTimes?.[dayIndex];
+      if (row.days[dayIndex] !== "Sem cronograma" && (!slot?.scheduleId || typeof slot.startsAt !== "string" || typeof slot.endsAt !== "string")) throw new Error("Dados do dia incompletos.");
+      setScheduleEmployees((current) => [...current.filter((item) => item.id !== employeeId), row!.employee as EmployeeClient]);
+      applyScheduleEditorData(row, dayIndex, date);
+      loadedEditorKey.current = `${employeeId}:${date}`;
+    } catch (error) {
+      if (!editorReadGate.current.isCurrent(request)) return;
+      setScheduleEditorError((error as { status?: number })?.status === 404 ? "Parceiro não encontrado. Atualize a lista e selecione novamente." : "Não foi possível carregar os dados deste parceiro. Feche e tente novamente.");
+    } finally {
+      if (editorReadGate.current.isCurrent(request)) setLoadingScheduleEditor(false);
+    }
+  }
+
+  function applyScheduleEditorData(targetRow: ScheduleGridRow, dayIndex: number, date: string) {
+    const targetEmployee = targetRow.employee;
+    const value = targetRow.days[dayIndex];
+    const cellStatus = statusFromScheduleCell(scheduleImportStatusValue(value));
     const employeeShift = cleanShiftName(targetEmployee.shift) || "Manhã";
     const plannedCell = targetRow?.plannedTimes?.[dayIndex] ?? null;
     const hourCell = targetRow?.workHours?.[dayIndex] ?? null;
@@ -702,7 +759,7 @@ export function SchedulesPage() {
     setScheduleEditForm({
       scheduleId: plannedCell?.scheduleId ?? "",
       employeeId: targetEmployee.id,
-      date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
+      date,
       shift: cleanShiftName(shift) || "Manhã",
       startsAt: statusNeedsTime(cellStatus) ? plannedStart : "",
       endsAt: statusNeedsTime(cellStatus) ? plannedEnd : "",
@@ -744,6 +801,10 @@ export function SchedulesPage() {
   }
 
   function closeScheduleEditor() {
+    editorReadGate.current.cancel();
+    loadedEditorKey.current = "";
+    setLoadingScheduleEditor(false);
+    setScheduleEditorError("");
     setShowEditSchedule(false);
     setScheduleEmployeeSearch("");
     setScheduleEmployeeSearchResults([]);
@@ -818,6 +879,10 @@ export function SchedulesPage() {
   }
 
   async function saveScheduleEdit() {
+    if (savingSchedule || loadingScheduleEditor || loadedEditorKey.current !== `${scheduleEditForm.employeeId}:${scheduleEditForm.date}`) {
+      setAttendanceMessage("Aguarde o carregamento do cronograma do parceiro selecionado.");
+      return;
+    }
     if (!scheduleEditForm.employeeId) {
       setAttendanceMessage("Selecione um parceiro.");
       return;
@@ -842,7 +907,7 @@ export function SchedulesPage() {
     if (requiresAbsenceNotice(scheduleEditForm.status) && !scheduleEditForm.pendingJustification && typeof justificationDraft.notifiedWithin48h !== "boolean") { setAttendanceMessage(ABSENCE_NOTICE_REQUIRED); return; }
     setSavingSchedule(true);
     try {
-      await apiJson<{ data: unknown }>("/api/schedules", {
+      const payload = await apiJson<unknown>("/api/schedules", {
         method: "PATCH",
         body: JSON.stringify({
           ...scheduleEditForm,
@@ -854,12 +919,13 @@ export function SchedulesPage() {
           evidenceUrl: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.evidenceUrl : undefined
         })
       });
+      requireSavedSchedule(payload, scheduleEditForm);
       setAttendanceMessage("Cronograma atualizado com histórico, auditoria e indicadores de presença/cobertura.");
       closeScheduleEditor();
       const view = scheduleViewRef.current;
       void refreshSchedules(view.page, view.filters, view.range);
     } catch (error) {
-      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível editar o cronograma.");
+      setAttendanceMessage(error instanceof Error && !/Cannot read|TypeError|attendanceSummary|undefined/.test(error.message) ? error.message : "Não foi possível confirmar a alteração. Consulte o cronograma antes de tentar novamente.");
     } finally {
       setSavingSchedule(false);
     }
@@ -1181,7 +1247,7 @@ export function SchedulesPage() {
   const filteredScheduleEmployeeOptions = employeeOptions
     .filter((employee) => {
       if (!scheduleEmployeeSearchTerm) return true;
-      return [employee.name, employee.wb, employee.email].filter(Boolean).join(" ").toLowerCase().includes(scheduleEmployeeSearchTerm);
+      return [employee.name, employee.wb, employee.email, employeeOptionLabel(employee)].filter(Boolean).join(" ").toLowerCase().includes(scheduleEmployeeSearchTerm);
     })
     .slice(0, 60);
   const configuredLobs = scheduleSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [];
@@ -1271,36 +1337,7 @@ export function SchedulesPage() {
   }
 
   function selectScheduleEmployee(employee: EmployeeClient) {
-    const employeeShift = cleanShiftName(employee.shift) || scheduleEditForm.shift;
-    const times = configuredTimesForShift(employeeShift);
-    const nextStartsAt = scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt;
-    const nextEndsAt = scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt;
-    setScheduleEditForm((current) => ({
-      ...current,
-      scheduleId: "",
-      employeeId: employee.id,
-      shift: employeeShift || current.shift,
-      startsAt: nextStartsAt,
-      endsAt: nextEndsAt,
-      lob: employee.lob || current.lob,
-      supervisor: employee.supervisor || current.supervisor
-    }));
-    setWorkHourForm((current) => ({
-      ...current,
-      recordId: "",
-      plannedStart: nextStartsAt,
-      plannedEnd: nextEndsAt,
-      plannedHours: canScheduleStatusReceiveWorkHours(scheduleEditForm.status, { status: scheduleEditForm.status, startsAt: nextStartsAt, endsAt: nextEndsAt, shiftName: employeeShift }) ? DEFAULT_PRODUCTIVE_HOURS : 0,
-      actualHours: "",
-      effectiveHours: 0,
-      differenceMinutes: 0,
-      status: "Sem horas",
-      rawStatus: "",
-      source: "",
-      adjustmentId: "",
-      adjustmentStatus: "Sem ajuste"
-    }));
-    setScheduleEmployeeSearch(employeeOptionLabel(employee));
+    void loadScheduleEditor(employee.id, scheduleEditForm.date);
   }
 
   function scheduleExportUrl() {
@@ -1470,7 +1507,7 @@ export function SchedulesPage() {
               <FileSpreadsheet className="h-4 w-4" />
               Baixar Cronogramas Consolidados
             </a>
-            <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-3.5 text-sm font-bold text-white shadow-soft">
+            <button disabled={loadingScheduleRows || savingSchedule} onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-3.5 text-sm font-bold text-white shadow-soft">
               <Plus className="h-4 w-4" />
               Adicionar cronograma manual
             </button>
@@ -1500,6 +1537,7 @@ export function SchedulesPage() {
           {attendanceMessage}
         </div>
       ) : null}
+      {loadingScheduleRows ? <p role="status" className="mb-4 text-sm font-bold text-muted">Carregando cronogramas...</p> : null}
 
       <div className={cn("grid gap-3", scheduleAnalysisPanelOpen ? "xl:grid-cols-[minmax(0,1fr)_360px]" : "xl:grid-cols-1")}>
         <section className="card overflow-hidden">
@@ -1575,7 +1613,7 @@ export function SchedulesPage() {
                           <button
                             type="button"
                             title={scheduleDisplayLabel(value)}
-                            onClick={() => openScheduleEditor(row, index, value)}
+                            disabled={loadingScheduleRows || savingSchedule} onClick={() => openScheduleEditor(row, index, value)}
                             className={cn(
                               "inline-flex h-[68px] w-[92px] flex-col items-center justify-center gap-1 overflow-hidden rounded-md px-1.5 py-1.5 text-center font-bold transition hover:ring-2 hover:ring-blue-200",
                               shiftTagClass(value),
@@ -1603,7 +1641,7 @@ export function SchedulesPage() {
                       );
                     })}
                     <td className="px-3 py-2 text-center">
-                      <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Falta") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                      <button disabled={loadingScheduleRows || savingSchedule} onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Falta") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
                         {isScheduleSupervisor ? "Justificar" : "Editar"}
                       </button>
                     </td>
@@ -1755,7 +1793,7 @@ export function SchedulesPage() {
 
       {showEditSchedule ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[90vh] w-full max-w-5xl overflow-y-auto p-5">
+          <div role="dialog" aria-modal="true" aria-label="Editor do cronograma" className="card max-h-[90vh] w-full max-w-5xl overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">{canManageSchedules ? "Editar cronograma e horas" : "Visualizar cronograma e horas"}</h2>
@@ -1763,7 +1801,7 @@ export function SchedulesPage() {
               </div>
               <button onClick={closeScheduleEditor} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
+            {loadingScheduleEditor ? <p role="status" className="py-12 text-center text-sm font-bold text-muted">Carregando cronograma do parceiro...</p> : scheduleEditorError ? <p role="alert" className="rounded-lg bg-amber-50 p-4 text-sm font-bold text-amber-800">{scheduleEditorError}</p> : <fieldset disabled={savingSchedule} className="min-w-0"><div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
               <section className="rounded-xl border border-border p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
@@ -1818,7 +1856,7 @@ export function SchedulesPage() {
                       ) : null}
                     </div>
                   </div>
-                  <FormInput disabled={!canManageSchedules} label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, scheduleId: "", date: value })} />
+                  <FormInput disabled={!canManageSchedules} label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => { if (value) void loadScheduleEditor(scheduleEditForm.employeeId, value); }} />
                   <FormSelect
                     disabled={!canManageSchedules}
                     label="Turno"
@@ -2077,7 +2115,7 @@ export function SchedulesPage() {
                   </div>
                 ) : null}
               </section>
-            </div>
+            </div></fieldset>}
           </div>
         </div>
       ) : null}
