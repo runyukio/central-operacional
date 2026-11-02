@@ -12,11 +12,14 @@ export function createBoundedSnapshotCache<T>(ttlMs: number, maxEntries: number)
       }
       while (entries.size >= maxEntries) entries.delete(entries.keys().next().value!);
       const value = Promise.resolve().then(load);
-      const entry = { expiresAt: now + ttlMs, value };
+      // A slow query must stay shared while it is running. Its freshness window
+      // starts when the result is available, not when the work was requested.
+      const entry = { expiresAt: Number.POSITIVE_INFINITY, value };
       entries.set(key, entry);
-      void value.catch(() => {
-        if (entries.get(key) === entry) entries.delete(key);
-      });
+      void value.then(
+        () => { entry.expiresAt = Date.now() + ttlMs; },
+        () => { if (entries.get(key) === entry) entries.delete(key); }
+      );
       return value;
     },
     clear() { entries.clear(); }

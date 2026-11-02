@@ -100,6 +100,7 @@ export function WorkHoursPage() {
     pendingOnly: queryParam("pendingOnly") === "true",
     noScheduleOnly: queryParam("noScheduleOnly") === "true"
   }));
+  const appliedHoursView = useRef({ page: 1, filters });
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -157,10 +158,11 @@ export function WorkHoursPage() {
   }, []);
 
 
-  async function loadWorkHours(nextPage = pagination.page, appliedFilters = filters) {
+  async function loadWorkHours(nextPage = pagination.page, appliedFilters = filters, background = false) {
+    appliedHoursView.current = { page: nextPage, filters: appliedFilters };
     const request = hoursRequests.begin();
     setLoading(true);
-    setMessage("");
+    if (!background) setMessage("");
     try {
       const params = new URLSearchParams({
         startDate: appliedFilters.startDate,
@@ -186,9 +188,12 @@ export function WorkHoursPage() {
       setPagination(payload.pagination);
     } catch (error) {
       if (!hoursRequests.isCurrent(request)) return;
-      setRows([]);
-      setSummary(null);
-      setMessage(error instanceof Error ? error.message : "Não foi possível carregar horas operacionais.");
+      if (!background) {
+        setRows([]);
+        setSummary(null);
+      }
+      const detail = error instanceof Error ? error.message : "Não foi possível carregar horas operacionais.";
+      setMessage(background ? `A alteração foi salva, mas não foi possível atualizar o painel. ${detail}` : detail);
     } finally {
       if (hoursRequests.isCurrent(request)) setLoading(false);
     }
@@ -395,16 +400,23 @@ export function WorkHoursPage() {
   }
 
   async function reviewAdjustment() {
-    if (!selectedRow?.adjustmentId) return;
+    if (!selectedRow?.adjustmentId || savingAdjustment) return;
     setSavingAdjustment(true);
+    setMessage("");
     try {
-      await apiJson("/api/work-hours/adjustments", {
+      const payload = await apiJson<{ data: { record: WorkHourRow } }>("/api/work-hours/adjustments", {
         method: "PATCH",
         body: JSON.stringify({ id: selectedRow.adjustmentId, action: adjustmentAction, rejectionReason: adjustmentForm.rejectionReason })
       });
+      // The decision is already committed. Apply its authoritative row before
+      // refreshing the wider period, whose capture timelines can be expensive.
+      setRows((current) => current.map((row) => row.id === payload.data.record.id
+        ? { ...payload.data.record, capturedHours: row.capturedHours }
+        : row));
       setShowReview(false);
       setMessage(adjustmentAction === "approve" ? "Ajuste aprovado e horas efetivas atualizadas." : "Ajuste recusado.");
-      await loadWorkHours();
+      const currentView = appliedHoursView.current;
+      void loadWorkHours(currentView.page, currentView.filters, true);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível processar ajuste.");
     } finally {

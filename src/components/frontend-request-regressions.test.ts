@@ -249,6 +249,7 @@ test("Horas Operacionais clears the displayed filters and sends those same filte
   let requested = "";
   const load = runFunction(callback("WorkHoursPage", "loadWorkHours"), {
     hoursRequests: createClientRequestGate(),
+    appliedHoursView: { current: { page: 2, filters: old } },
     filters: old, pagination: { page: 2, limit: 50 },
     setLoading: () => {}, setMessage: () => {}, setRows: () => {}, setSummary: () => {}, setPagination: () => {},
     apiJson: async (url: string) => { requested = url; return { data: [], summary: {}, pagination: {} }; }

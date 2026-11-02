@@ -875,6 +875,7 @@ function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { pa
 }
 
 export async function editOperationalSchedule(actor: Actor, input: ScheduleEditInput) {
+  const startedAt = Date.now();
   input = {
     ...input,
     absenceReason: normalizeAttendanceReason(input.absenceReason) ?? ""
@@ -1002,7 +1003,11 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
       return schedule;
     });
 
-    return { data: saved, summary: await getAttendanceSummaryFromDb(), schedules: await getOperationalSchedules(actor) };
+    // The caller refreshes its filtered period after the commit. Rebuilding a
+    // global attendance summary here scans the entire schedule history and can
+    // turn a successful write into a reported failure if a subsequent read fails.
+    logPerformanceMetric("schedules.edit", startedAt, { role: actorRole });
+    return { data: saved };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EDIT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao editar cronograma", action: "SCHEDULE_EDIT", severity: "ERROR" });
     return allowDemoDataFallback ? editMockSchedule(actor, input) : { error: "Não foi possível editar o cronograma no banco." };
@@ -1054,7 +1059,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
       supervisorJustification: normalizedInput.supervisorJustification,
       notifiedWithin48h: normalizedInput.notifiedWithin48h ?? null
     },
-    summary: scheduleResult.summary
+    ...("summary" in scheduleResult ? { summary: scheduleResult.summary } : {})
   };
 }
 
@@ -1481,7 +1486,7 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
       });
     });
 
-    return { success: true, message: `${schedules.length} registro(s) de cronograma removido(s).`, schedules: await getOperationalSchedules(actor, input) };
+    return { success: true, message: `${schedules.length} registro(s) de cronograma removido(s).` };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_REMOVE_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao remover cronograma", action: "SCHEDULE_REMOVE", severity: "ERROR" });
     return { error: "Não foi possível remover o cronograma do parceiro." };

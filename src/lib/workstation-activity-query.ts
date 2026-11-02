@@ -55,9 +55,13 @@ type ActivitySummaryRow = {
   uniqueDomains: number;
 };
 
-type ActivityViewer = Prisma.UserGetPayload<{
-  include: { role: true; employeeProfile: true };
-}>;
+const activityViewerSelect = {
+  email: true, name: true, status: true, deletedAt: true,
+  role: { select: { name: true } },
+  employeeProfile: { select: { id: true, roleTitle: true } }
+} satisfies Prisma.UserSelect;
+
+type ActivityViewer = Prisma.UserGetPayload<{ select: typeof activityViewerSelect }>;
 
 export type WorkstationActivityQuery = {
   date?: string | null;
@@ -69,6 +73,7 @@ export type WorkstationActivityQuery = {
   view?: string | null;
   agentKey?: string | null;
   agentSearch?: string | null;
+  timeline?: string | boolean | null;
 };
 
 const agentKeySql = Prisma.sql`CASE WHEN activity."employeeId" IS NOT NULL
@@ -83,6 +88,14 @@ type AgentAggregate = {
 };
 
 type RankingAggregate = { rankKind: string; label: string; seconds: number };
+type ActivityQueryResult = {
+  summary: ActivitySummaryRow;
+  agents: Array<Omit<AgentAggregate, "lastActivityAt"> & { lastActivityAt: string }>;
+  rankings: RankingAggregate[];
+  rows: Array<Omit<ActivityRawRow, "capturedAt" | "startedAt" | "endedAt"> & {
+    capturedAt: string; startedAt: string; endedAt: string;
+  }>;
+};
 
 export async function getWorkstationActivityQuery(actor: Actor, query: WorkstationActivityQuery = {}) {
   const viewerResult = await requireActivityViewer(actor);
@@ -112,7 +125,12 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
       : Prisma.sql`FALSE`);
   }
 
-  if (selectedAgent) conditions.push(Prisma.sql`${agentKeySql} = ${selectedAgent}`);
+  if (selectedAgent.startsWith("employee:")) {
+    // Match the stored key directly so the employee/date index remains usable.
+    conditions.push(Prisma.sql`activity."employeeId" = ${selectedAgent.slice("employee:".length)}`);
+  } else if (selectedAgent) {
+    conditions.push(Prisma.sql`${agentKeySql} = ${selectedAgent}`);
+  }
 
   const sourceType = String(query.sourceType ?? "").trim().toUpperCase();
   if (activitySourceTypes.includes(sourceType as ActivitySourceType)) {
@@ -138,24 +156,23 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
     )`);
   }
 
+  const overview = query.view === "overview";
+  const includeTimeline = !overview && query.timeline !== false && query.timeline !== "false";
   const where = Prisma.join(conditions, " AND ");
   const baseActivityQuery = Prisma.sql`
     SELECT
       ${agentKeySql} AS "agentKey",
-      activity."id",
-      activity."eventId",
-      activity."source",
-      activity."capturedAt",
+      ${includeTimeline ? Prisma.sql`activity."id", activity."eventId", activity."source", activity."capturedAt",
+        activity."agentVersion", activity."startedAt" AS "sourceStartedAt",` : Prisma.empty}
       activity."hostname",
       activity."windowsUser",
       activity."wbLogin",
       activity."employeeId",
       activity."sourceType",
-      activity."applicationName",
+      ${!overview ? Prisma.sql`activity."applicationName",` : Prisma.empty}
       activity."domain",
       GREATEST(activity."startedAt", ${start}) AS "startedAt",
       LEAST(activity."endedAt", ${end}) AS "endedAt",
-      activity."agentVersion",
       employee."fullName" AS "employeeName",
       lob."name" AS "lob",
       supervisor."fullName" AS "supervisor"
@@ -166,21 +183,15 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
     WHERE ${where}
   `;
 
-  const overview = query.view === "overview";
   const agentSearch = String(query.agentSearch ?? "").trim().slice(0, 120);
   const nameFilter = agentSearch ? Prisma.sql`HAVING BOOL_OR(COALESCE("employeeName", '') ILIKE ${`%${agentSearch}%`}
     OR COALESCE("wbLogin", '') ILIKE ${`%${agentSearch}%`}
     OR COALESCE("windowsUser", '') ILIKE ${`%${agentSearch}%`}
     OR "hostname" ILIKE ${`%${agentSearch}%`})` : Prisma.empty;
 
-  const [rawRows, summaries, agentRows, rankings] = await Promise.all([
-    overview ? Promise.resolve([] as ActivityRawRow[]) : prisma.$queryRaw<ActivityRawRow[]>(Prisma.sql`
-      ${baseActivityQuery}
-      ORDER BY activity."startedAt" ASC, activity."hostname" ASC
-      LIMIT ${limit}
-    `),
-    prisma.$queryRaw<ActivitySummaryRow[]>(Prisma.sql`
-      WITH clipped_activity AS (${baseActivityQuery})
+  // A single materialized day window serves every aggregate. Besides avoiding
+  // repeated raw-table scans, this gives totals and details one database snapshot.
+  const summaryQuery = Prisma.sql`
       SELECT COUNT(*)::int AS "rowCount", COUNT(DISTINCT "agentKey")::int AS "employees",
         COALESCE(SUM(EXTRACT(EPOCH FROM ("endedAt" - "startedAt"))), 0)::int AS "totalSeconds",
         COALESCE(SUM(CASE WHEN "sourceType" = 'WEB' THEN EXTRACT(EPOCH FROM ("endedAt" - "startedAt")) ELSE 0 END), 0)::int AS "webSeconds",
@@ -191,9 +202,8 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
         COALESCE(SUM(CASE WHEN "sourceType" = 'UNKNOWN' THEN EXTRACT(EPOCH FROM ("endedAt" - "startedAt")) ELSE 0 END), 0)::int AS "unknownSeconds",
         (COUNT(DISTINCT "domain") FILTER (WHERE "domain" IS NOT NULL))::int AS "uniqueDomains"
       FROM clipped_activity
-    `),
-    overview ? prisma.$queryRaw<AgentAggregate[]>(Prisma.sql`
-      WITH clipped_activity AS (${baseActivityQuery})
+  `;
+  const agentsQuery = overview ? Prisma.sql`, agent_totals AS (
       SELECT "agentKey", MIN("employeeId") AS "employeeId",
         MIN(COALESCE(NULLIF("employeeName", ''), NULLIF("wbLogin", ''), NULLIF("windowsUser", ''), "hostname")) AS "employeeName",
         MIN("wbLogin") AS "wbLogin", MIN("windowsUser") AS "windowsUser",
@@ -208,22 +218,39 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
         COUNT(*) OVER()::int AS "agentsFound"
       FROM clipped_activity
       GROUP BY "agentKey" ${nameFilter} ORDER BY "totalSeconds" DESC, "employeeName" ASC LIMIT 1000
-    `) : Promise.resolve([] as AgentAggregate[]),
-    query.view === "agent" ? prisma.$queryRaw<RankingAggregate[]>(Prisma.sql`
-      WITH clipped_activity AS (${baseActivityQuery}), totals AS (
-        SELECT "sourceType" AS "rankKind",
-          CASE WHEN "sourceType"='WEB' THEN "domain" ELSE "applicationName" END AS "label",
-          SUM(EXTRACT(EPOCH FROM ("endedAt" - "startedAt")))::int AS "seconds"
-        FROM clipped_activity WHERE "sourceType" IN ('WEB', 'APP')
-        GROUP BY "sourceType", CASE WHEN "sourceType"='WEB' THEN "domain" ELSE "applicationName" END
-      ), ranked AS (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY "rankKind" ORDER BY "seconds" DESC, "label" ASC) AS "rankPosition"
-        FROM totals WHERE "label" IS NOT NULL
-      ) SELECT "rankKind", "label", "seconds" FROM ranked WHERE "rankPosition" <= 100 ORDER BY "rankKind", "seconds" DESC, "label" ASC
-    `) : Promise.resolve([] as RankingAggregate[])
-  ]);
+  )` : Prisma.empty;
+  const rankingsQuery = query.view === "agent" ? Prisma.sql`, ranking_totals AS (
+      SELECT "sourceType" AS "rankKind",
+        CASE WHEN "sourceType"='WEB' THEN "domain" ELSE "applicationName" END AS "label",
+        SUM(EXTRACT(EPOCH FROM ("endedAt" - "startedAt")))::int AS "seconds"
+      FROM clipped_activity WHERE "sourceType" IN ('WEB', 'APP')
+      GROUP BY "sourceType", CASE WHEN "sourceType"='WEB' THEN "domain" ELSE "applicationName" END
+    ), ranked AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY "rankKind" ORDER BY "seconds" DESC, "label" ASC) AS "rankPosition"
+      FROM ranking_totals WHERE "label" IS NOT NULL
+    ), ranking_results AS (
+      SELECT "rankKind", "label", "seconds" FROM ranked WHERE "rankPosition" <= 100
+  )` : Prisma.empty;
+  const timelineQuery = includeTimeline ? Prisma.sql`, timeline AS (
+      SELECT * FROM clipped_activity
+      ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC LIMIT ${limit}
+  )` : Prisma.empty;
 
-  const summary = summaries[0] ?? emptySummary();
+  const [result] = await prisma.$queryRaw<ActivityQueryResult[]>(Prisma.sql`
+    WITH clipped_activity AS MATERIALIZED (${baseActivityQuery}), summary AS (${summaryQuery})
+    ${agentsQuery} ${rankingsQuery} ${timelineQuery}
+    SELECT (SELECT to_jsonb(summary) FROM summary) AS "summary",
+      ${overview ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(agent_totals) ORDER BY "totalSeconds" DESC, "employeeName" ASC), '[]'::jsonb) FROM agent_totals)` : Prisma.sql`'[]'::jsonb`} AS "agents",
+      ${query.view === "agent" ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(ranking_results) ORDER BY "rankKind", "seconds" DESC, "label" ASC), '[]'::jsonb) FROM ranking_results)` : Prisma.sql`'[]'::jsonb`} AS "rankings",
+      ${includeTimeline ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(timeline) - 'sourceStartedAt' ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC), '[]'::jsonb) FROM timeline)` : Prisma.sql`'[]'::jsonb`} AS "rows"
+  `);
+  const summary = result?.summary ?? emptySummary();
+  const agentRows = (result?.agents ?? []).map((row) => ({ ...row, lastActivityAt: activityTimestamp(row.lastActivityAt) }));
+  const rankings = result?.rankings ?? [];
+  const rawRows: ActivityRawRow[] = (result?.rows ?? []).map((row) => ({
+    ...row, capturedAt: activityTimestamp(row.capturedAt),
+    startedAt: activityTimestamp(row.startedAt), endedAt: activityTimestamp(row.endedAt)
+  }));
   const rows = rawRows.map((row) => ({ ...row, durationSeconds: intervalSeconds(row.startedAt, row.endedAt) }));
   const mergedRows = mergeActivityRows(rows).map((row) => ({
     ...row, capturedAt: row.capturedAt.toISOString(), startedAt: row.startedAt.toISOString(), endedAt: row.endedAt.toISOString(),
@@ -239,7 +266,8 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
     topDomains: rankings.filter((item) => item.rankKind === "WEB").map(({ label, seconds }) => ({ label, seconds })),
     topApplications: rankings.filter((item) => item.rankKind === "APP").map(({ label, seconds }) => ({ label, seconds })),
     rows: mergedRows, recordsReturned: mergedRows.length, sourceRecordsReturned: rawRows.length, limit,
-    truncated: !overview && summary.rowCount > rawRows.length,
+    timelineIncluded: includeTimeline,
+    truncated: includeTimeline && summary.rowCount > rawRows.length,
     privacy: "Somente domínio, aplicativo e intervalo são coletados."
   };
 }
@@ -247,7 +275,7 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
 async function requireActivityViewer(actor: Actor) {
   const viewer = await prisma.user.findUnique({
     where: { email: actor.email },
-    include: { role: true, employeeProfile: true }
+    select: activityViewerSelect
   });
   if (!viewer || viewer.status !== UserStatus.ACTIVE || viewer.deletedAt) {
     return { success: false, error: "Usuário sem acesso ativo.", message: "Usuário sem acesso ativo.", status: 403 } as const;
@@ -302,6 +330,12 @@ function mergeActivityRows(rows: ActivityRow[]) {
 
 function activityIdentityKey(row: Pick<ActivityRow, "agentKey">) {
   return row.agentKey;
+}
+
+function activityTimestamp(value: string) {
+  // PostgreSQL's timestamp-without-time-zone JSON omits the UTC suffix; Prisma
+  // normally supplies it when decoding a top-level timestamp column.
+  return new Date(/(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`);
 }
 
 function intervalSeconds(startedAt: Date, endedAt: Date) {

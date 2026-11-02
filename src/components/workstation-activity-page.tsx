@@ -11,7 +11,7 @@ type Summary = { rowCount: number; employees: number; totalSeconds: number; webS
 type Agent = { agentKey: string; employeeId: string | null; employeeName: string; wbLogin: string | null; windowsUser: string | null; lob: string; supervisor: string; hostnames: string[]; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; uniqueDomains: number; lastActivityAt: string };
 type Row = { id: string; eventId: string; sourceType: SourceType; applicationName: string | null; domain: string | null; startedAt: string; endedAt: string; durationSeconds: number; hostname: string };
 type Ranking = { label: string; seconds: number };
-type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; limit: number; truncated: boolean; error?: string; message?: string };
+type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; timelineIncluded: boolean; limit: number; truncated: boolean; error?: string; message?: string };
 type DetailTab = "WEB" | "APP" | "TIMELINE";
 const emptySummary: Summary = { rowCount: 0, employees: 0, totalSeconds: 0, webSeconds: 0, appSeconds: 0, idleSeconds: 0, lockedSeconds: 0, privateSeconds: 0, unknownSeconds: 0, uniqueDomains: 0 };
 
@@ -30,6 +30,7 @@ export function WorkstationActivityPage() {
   const [tab, setTab] = useState<DetailTab>("WEB");
   const [page, setPage] = useState(0);
   const selectedKey = selected?.agentKey ?? null;
+  const needsTimeline = tab === "TIMELINE";
 
   useEffect(() => {
     const timer = window.setTimeout(() => setAgentSearch(search), 300);
@@ -54,14 +55,14 @@ export function WorkstationActivityPage() {
     if (!selectedKey) return;
     const controller = new AbortController();
     setDetailLoading(true); setDetailError("");
-    const params = new URLSearchParams({ date, view: "agent", agentKey: selectedKey, limit: "5000" });
+    const params = new URLSearchParams({ date, view: "agent", agentKey: selectedKey, limit: "5000", timeline: String(needsTimeline) });
     void fetchActivity(params, controller.signal).then((body) => {
       if (!controller.signal.aborted) setDetail(body);
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setDetailError(reason instanceof Error ? reason.message : "Não foi possível carregar o agente.");
     }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     return () => controller.abort();
-  }, [date, selectedKey, refresh]);
+  }, [date, selectedKey, needsTimeline, refresh]);
 
   useEffect(() => {
     const refreshVisible = () => { if (!document.hidden) setRefresh((value) => value + 1); };
@@ -125,7 +126,7 @@ export function WorkstationActivityPage() {
           {([{ key: "WEB", label: "Sites", icon: Globe2 }, { key: "APP", label: "Aplicativos", icon: AppWindow }, { key: "TIMELINE", label: "Linha do tempo", icon: Clock }] as const).map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-pressed={tab === key} aria-controls="activity-detail-content" onClick={() => { setTab(key); setPage(0); }} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors", tab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-slate-50 hover:text-navy-950")}><Icon className="h-4 w-4" />{label}</button>)}
         </div>
         <div id="activity-detail-content" role="region" aria-label={tab === "WEB" ? "Sites do agente" : tab === "APP" ? "Aplicativos do agente" : "Histórico do agente"}>
-          {detailLoading && !data ? <Loading label="Carregando atividade do agente..." /> : tab !== "TIMELINE" ? <RankingPanel title={tab === "WEB" ? "Sites utilizados" : "Aplicativos utilizados"} items={tab === "WEB" ? data?.topDomains ?? [] : data?.topApplications ?? []} total={tab === "WEB" ? summary.webSeconds : summary.appSeconds} applications={tab === "APP"} count={tab === "WEB" ? summary.uniqueDomains : undefined} /> : <Panel title="Linha do tempo">
+          {detailLoading && (!data || (needsTimeline && !data.timelineIncluded)) ? <Loading label="Carregando atividade do agente..." /> : tab !== "TIMELINE" ? <RankingPanel title={tab === "WEB" ? "Sites utilizados" : "Aplicativos utilizados"} items={tab === "WEB" ? data?.topDomains ?? [] : data?.topApplications ?? []} total={tab === "WEB" ? summary.webSeconds : summary.appSeconds} applications={tab === "APP"} count={tab === "WEB" ? summary.uniqueDomains : undefined} /> : <Panel title="Linha do tempo">
             {!data?.rows.length ? <EmptyState title="Sem atividade para este agente" description="Escolha outra data para consultar o histórico." /> : <>
               <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full min-w-[650px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Intervalo</th><th className="px-4 py-3">Atividade</th><th className="px-4 py-3">Duração</th><th className="px-4 py-3">Estação</th></tr></thead><tbody className="divide-y divide-border">{pageRows.map((row) => <tr key={`${row.eventId}-${row.startedAt}`}><td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-muted">{formatTime(row.startedAt, true)} – {formatTime(row.endedAt, true)}</td><td className="px-4 py-3"><span className="block text-sm font-bold text-navy-950">{row.sourceType === "WEB" ? row.domain || "Domínio não identificado" : row.sourceType === "APP" ? formatApplication(row.applicationName) : sourceLabel(row.sourceType)}</span><span className="mt-0.5 block text-xs text-muted">{sourceLabel(row.sourceType)}</span></td><td className="px-4 py-3 text-sm font-semibold text-navy-950">{formatDuration(row.durationSeconds)}</td><td className="px-4 py-3 text-xs text-muted">{row.hostname}</td></tr>)}</tbody></table></div>
               <div className="mt-4 flex items-center justify-between gap-3 text-xs text-muted"><span>Página {currentPage + 1} de {pages}</span><div className="flex gap-2"><button type="button" aria-label="Página anterior" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Próxima página" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>
