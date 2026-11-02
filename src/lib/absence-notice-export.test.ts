@@ -21,7 +21,8 @@ function fixture(t: TestContext, status: "FALTA" | "FALTA_JUSTIFICADA" | "FALTA_
   mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", status: "ACTIVE", role: { name: "WFM" }, employeeProfile: null }) });
   mockPrismaDelegate(t, "schedule", { findMany: async () => records });
   mockPrismaDelegate(t, "workHourRecord", { findMany: async () => [] });
-  mockPrismaDelegate(t, "auditLog", { create: async () => ({}) });
+  // Supervisor resolution also reads the historical transfer manifest.
+  mockPrismaDelegate(t, "auditLog", { create: async () => ({}), findMany: async () => [] });
   return records;
 }
 

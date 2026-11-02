@@ -68,7 +68,7 @@ const inactiveEmployeeStatusLabels = [
 const inactiveEmployeeStatusTokens = new Set(inactiveEmployeeStatusLabels.map((status) => normalizeStatusToken(status)));
 
 const workHourReadInclude = {
-  overtimeReview: true,
+  overtimeReview: { select: { status: true, excessHours: true, rejectionReason: true } },
   employee: { select: {
     id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true,
     lob: { select: { name: true } }, shift: { select: { name: true } },
@@ -85,7 +85,12 @@ const workHourReadInclude = {
 
 export const workHourReadData = { capturedHours: getRealtimeHoursShiftActivityHours };
 
-type UserWithRole = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
+const workHourUserSelect = {
+  id: true, name: true, status: true,
+  role: { select: { name: true } },
+  employeeProfile: { select: { id: true } }
+} satisfies Prisma.UserSelect;
+type UserWithRole = Prisma.UserGetPayload<{ select: typeof workHourUserSelect }>;
 type WorkHourRecordViewer = {
   id: string;
   roleName: string;
@@ -205,26 +210,29 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     // Internal read-only callers may narrow, never expand, the existing scope.
     const where: Prisma.WorkHourRecordWhereInput = trustedEmployeeIds === undefined ? baseWhere : { AND: [baseWhere, { employeeId: { in: trustedEmployeeIds } }] };
 
-    const [records, total] = await prisma.$transaction([
-      prisma.workHourRecord.findMany({
-        where,
-        orderBy: [{ date: "desc" }, { employee: { fullName: "asc" } }],
-        skip: (page - 1) * limit,
-        take: limit,
-        include: workHourReadInclude
-      }),
-      prisma.workHourRecord.count({ where })
+    const [pageResult, summary] = await Promise.all([
+      prisma.$transaction([
+        prisma.workHourRecord.findMany({
+          where,
+          orderBy: [{ date: "desc" }, { employee: { fullName: "asc" } }],
+          skip: (page - 1) * limit,
+          take: limit,
+          include: workHourReadInclude
+        }),
+        prisma.workHourRecord.count({ where })
+      ]).then(async ([records, total]) => ({
+        records,
+        total,
+        capturedHoursByRecordId: await workHourReadData.capturedHours(records.map((record) => ({
+          key: record.id,
+          employeeId: record.employeeId,
+          wbLogin: record.wbLogin,
+          shiftDate: record.date
+        })))
+      })),
+      getWorkHoursSummary(where)
     ]);
-
-    const [summary, capturedHoursByRecordId] = await Promise.all([
-      getWorkHoursSummary(where),
-      workHourReadData.capturedHours(records.map((record) => ({
-        key: record.id,
-        employeeId: record.employeeId,
-        wbLogin: record.wbLogin,
-        shiftDate: record.date
-      })))
-    ]);
+    const { records, total, capturedHoursByRecordId } = pageResult;
 
     return {
       data: records.map((record) => formatWorkHourRecord(
@@ -450,9 +458,9 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
     const record = await prisma.workHourRecord.findUnique({
       where: { id: input.workHourRecordId },
       include: {
-        employee: { include: { user: true, supervisor: true } },
-        schedule: true,
-        adjustments: { where: { status: { in: ["ABERTO", "EM_ANALISE"] } } }
+        employee: { select: { fullName: true } },
+        schedule: { select: { status: true, startsAt: true, endsAt: true } },
+        adjustments: { where: { status: { in: ["ABERTO", "EM_ANALISE"] } }, select: { id: true }, take: 1 }
       }
     });
     if (!record) return { error: "Registro de horas não encontrado." };
@@ -564,7 +572,10 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
     const result = await prisma.$transaction(async (tx) => {
       const adjustment = await tx.workHourAdjustmentRequest.findUnique({
         where: { id: input.id },
-        include: { record: { include: { schedule: true } }, requestedBy: true, employee: { include: { user: true } } }
+        include: {
+          record: { include: { schedule: { select: { status: true, startsAt: true, endsAt: true } } } },
+          employee: { select: { userId: true } }
+        }
       });
       if (!adjustment) throw new Error("Ajuste não encontrado.");
       if (!["ABERTO", "EM_ANALISE"].includes(adjustment.status)) throw new Error("Este ajuste já foi processado.");
@@ -1325,29 +1336,7 @@ function displayWorkHourStatus(status: WorkHourRecordStatus, plannedHours: numbe
 async function getRecordWithRelations(id: string) {
   return prisma.workHourRecord.findUniqueOrThrow({
     where: { id },
-    include: {
-      overtimeReview: true,
-      employee: { select: { id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
-      adjustments: {
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        select: {
-          id: true,
-          status: true,
-          currentActualHours: true,
-          requestedActualHours: true,
-          requestedById: true,
-          reason: true,
-          justification: true,
-          rejectionReason: true,
-          rejectedAt: true,
-          createdAt: true,
-          requestedBy: { select: { name: true } },
-          rejectedBy: { select: { name: true } }
-        }
-      },
-      schedule: { select: { status: true, startsAt: true, endsAt: true } }
-    }
+    include: workHourReadInclude
   });
 }
 
@@ -1512,7 +1501,7 @@ function resolvePeriod(query: WorkHourQuery) {
 }
 
 async function getUser(actor: Actor) {
-  return prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+  return prisma.user.findUnique({ where: { email: actor.email }, select: workHourUserSelect });
 }
 
 function toWorkHourRecordViewer(user: UserWithRole): WorkHourRecordViewer {

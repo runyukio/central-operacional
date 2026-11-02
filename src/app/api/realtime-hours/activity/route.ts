@@ -27,7 +27,8 @@ export async function GET(request: Request) {
       sourceType: url.searchParams.get("sourceType"),
       domain: url.searchParams.get("domain"),
       employeeId: url.searchParams.get("employeeId"),
-      limit: url.searchParams.get("limit")
+      limit: url.searchParams.get("limit"),
+      timeline: url.searchParams.get("timeline")
     });
 
     return NextResponse.json(result, {

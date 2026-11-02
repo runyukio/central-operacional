@@ -3,6 +3,7 @@
 import { AbsenceNoticeField } from "@/components/absence-notice-field";
 import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
+import { createClientRequestGate } from "@/lib/client-request-gate";
 import { useEffect, useRef, useState } from "react";
 import { CalendarCheck, Download, FileSpreadsheet, Plus, Upload } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
@@ -303,6 +304,10 @@ function countScheduleStatuses(days: string[], statusSet: Set<string>) {
 
 export function SchedulesPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const scheduleReadGate = useRef(createClientRequestGate());
+  const summaryReadGate = useRef(createClientRequestGate());
+  const pendingReadGate = useRef(createClientRequestGate());
+  const scheduleAnalysisKeyRef = useRef("");
   const [previewRows, setPreviewRows] = useState<Array<Record<string, unknown>>>([]);
   const [previewResult, setPreviewResult] = useState<ImportPreview | null>(null);
   const [previewFileName, setPreviewFileName] = useState("upload.xlsx");
@@ -335,6 +340,7 @@ export function SchedulesPage() {
   const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
   const [scheduleFilters, setScheduleFilters] = useState({ employeeId: queryParam("employeeId"), collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "", wbLogins: queryParam("wbLogins") });
+  const scheduleViewRef = useRef({ page: 1, filters: scheduleFilters, range: scheduleDateRange });
   const [scheduleBatchText, setScheduleBatchText] = useState("");
   const [scheduleBatchOpen, setScheduleBatchOpen] = useState(false);
   const [scheduleEditForm, setScheduleEditForm] = useState({
@@ -406,6 +412,10 @@ export function SchedulesPage() {
 
   useEffect(() => {
     void loadScheduleSupportData();
+    const reads = [scheduleReadGate.current, summaryReadGate.current, pendingReadGate.current];
+    return () => {
+      reads.forEach((gate) => gate.cancel());
+    };
   }, []);
 
   useEffect(() => {
@@ -449,7 +459,15 @@ export function SchedulesPage() {
     }
   }
 
-  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange) {
+  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange, refreshAnalysis = true) {
+    scheduleViewRef.current = { page: pageOverride, filters: filtersOverride, range: rangeOverride };
+    const request = scheduleReadGate.current.begin();
+    const analysisKey = JSON.stringify([rangeOverride.startDate, rangeOverride.endDate, filtersOverride]);
+    const shouldRefreshAnalysis = refreshAnalysis || scheduleAnalysisKeyRef.current !== analysisKey;
+    if (shouldRefreshAnalysis) {
+      summaryReadGate.current.cancel();
+      pendingReadGate.current.cancel();
+    }
     try {
       const params = new URLSearchParams({
         month: String(schedulePeriod.month),
@@ -471,7 +489,8 @@ export function SchedulesPage() {
       });
       const batchWbs = scheduleBatchValues(filtersOverride);
       if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number }; batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number }; batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`, { signal: request.signal });
+      if (!scheduleReadGate.current.isCurrent(request)) return;
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setScheduleMetrics(normalizeScheduleMetrics(payload.data.scheduleMetrics, payload.data.scheduleGridRows));
@@ -482,15 +501,18 @@ export function SchedulesPage() {
         setScheduleEditForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id, lob: payload.data.scheduleGridRows[0].employee.lob, supervisor: payload.data.scheduleGridRows[0].employee.supervisor });
       }
       if (payload.data.attendanceSummary) setAttendanceSummary(payload.data.attendanceSummary);
-      else setAttendanceSummary(null);
       if (payload.data.batchWb?.notFound.length) {
         setAttendanceMessage(`${payload.data.batchWb.applied.length} login(s) aplicados. ${payload.data.batchWb.notFound.length} não encontrado(s): ${payload.data.batchWb.notFound.join(", ")}.`);
       } else if (attendanceMessage.includes("login(s) aplicados")) {
         setAttendanceMessage("");
       }
-      void refreshScheduleSummary(rangeOverride, filtersOverride);
-      void refreshAttendanceForSchedulePeriod(rangeOverride, filtersOverride);
+      if (shouldRefreshAnalysis) {
+        scheduleAnalysisKeyRef.current = analysisKey;
+        void refreshScheduleSummary(rangeOverride, filtersOverride);
+        void refreshAttendanceForSchedulePeriod(rangeOverride, filtersOverride);
+      }
     } catch {
+      if (!scheduleReadGate.current.isCurrent(request)) return;
       setScheduleRows([]);
       setScheduleMetrics({ quantity: 0 });
       setScheduleDateColumns([]);
@@ -499,6 +521,7 @@ export function SchedulesPage() {
   }
 
   async function refreshScheduleSummary(rangeOverride = scheduleDateRange, filtersOverride = scheduleFilters) {
+    const request = summaryReadGate.current.begin();
     try {
       const params = new URLSearchParams({
         startDate: rangeOverride.startDate,
@@ -515,14 +538,17 @@ export function SchedulesPage() {
       if (filtersOverride.roleTitle && filtersOverride.roleTitle !== "Todos") params.set("roleTitle", filtersOverride.roleTitle);
       const batchWbs = scheduleBatchValues(filtersOverride);
       if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
-      const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
+      const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`, { signal: request.signal });
+      if (!summaryReadGate.current.isCurrent(request)) return;
       setAttendanceSummary(payload.summary);
     } catch {
+      if (!summaryReadGate.current.isCurrent(request)) return;
       setAttendanceSummary(null);
     }
   }
 
   async function refreshAttendanceForSchedulePeriod(rangeOverride = scheduleDateRange, filtersOverride = scheduleFilters) {
+    const request = pendingReadGate.current.begin();
     const params = new URLSearchParams({
       month: String(schedulePeriod.month),
       year: String(schedulePeriod.year),
@@ -539,9 +565,11 @@ export function SchedulesPage() {
     const batchWbs = scheduleBatchValues(filtersOverride);
     if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
     try {
-      const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
+      const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`, { signal: request.signal });
+      if (!pendingReadGate.current.isCurrent(request)) return;
       setPendingJustifications(payload.data.filter((record) => statusNeedsReason(record.status) && record.isJustified === false));
     } catch {
+      if (!pendingReadGate.current.isCurrent(request)) return;
       setPendingJustifications([]);
     }
   }
@@ -814,7 +842,7 @@ export function SchedulesPage() {
     if (requiresAbsenceNotice(scheduleEditForm.status) && !scheduleEditForm.pendingJustification && typeof justificationDraft.notifiedWithin48h !== "boolean") { setAttendanceMessage(ABSENCE_NOTICE_REQUIRED); return; }
     setSavingSchedule(true);
     try {
-      const payload = await apiJson<{ data: unknown; summary: AttendanceSummary; schedules: { scheduleGridRows: typeof scheduleGridRows; attendanceSummary?: AttendanceSummary } }>("/api/schedules", {
+      await apiJson<{ data: unknown }>("/api/schedules", {
         method: "PATCH",
         body: JSON.stringify({
           ...scheduleEditForm,
@@ -826,10 +854,10 @@ export function SchedulesPage() {
           evidenceUrl: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.evidenceUrl : undefined
         })
       });
-      setAttendanceSummary(payload.schedules.attendanceSummary ?? payload.summary);
       setAttendanceMessage("Cronograma atualizado com histórico, auditoria e indicadores de presença/cobertura.");
       closeScheduleEditor();
-      await refreshSchedules();
+      const view = scheduleViewRef.current;
+      void refreshSchedules(view.page, view.filters, view.range);
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível editar o cronograma.");
     } finally {
@@ -1593,13 +1621,13 @@ export function SchedulesPage() {
           <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border px-5 py-4 text-sm text-muted">
             <span>{scheduleTotalRows ? `Exibindo ${schedulePageStart}-${schedulePageEnd} de ${scheduleTotalRows} registros` : "Nenhum registro de cronograma"}</span>
             <div className="flex flex-wrap gap-2">
-              <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Primeira</button>
-              <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(schedulePagination.page - 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Anterior</button>
+              <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(1, scheduleFilters, scheduleDateRange, false)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Primeira</button>
+              <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(schedulePagination.page - 1, scheduleFilters, scheduleDateRange, false)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Anterior</button>
               <span className="grid h-9 min-w-24 place-items-center rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-extrabold text-blue-700">
                 {schedulePagination.page} de {schedulePagination.totalPages}
               </span>
-              <button disabled={schedulePagination.page >= schedulePagination.totalPages} onClick={() => void refreshSchedules(schedulePagination.page + 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Próxima</button>
-              <button disabled={schedulePagination.page >= schedulePagination.totalPages} onClick={() => void refreshSchedules(schedulePagination.totalPages)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Última</button>
+              <button disabled={schedulePagination.page >= schedulePagination.totalPages} onClick={() => void refreshSchedules(schedulePagination.page + 1, scheduleFilters, scheduleDateRange, false)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Próxima</button>
+              <button disabled={schedulePagination.page >= schedulePagination.totalPages} onClick={() => void refreshSchedules(schedulePagination.totalPages, scheduleFilters, scheduleDateRange, false)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Última</button>
             </div>
           </div>
         </section>

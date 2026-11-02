@@ -15,7 +15,7 @@ function fixture(t: TestContext, grid = false) {
   mockPrismaDelegate(t, "auditLog", { findMany: async () => [] });
   mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", status: "ACTIVE", role: { name: "WFM" }, employeeProfile: null }) });
   const people = mockPrismaDelegate(t, "employeeProfile", { findUnique: async () => employee, count: async () => grid ? 1 : 0, findMany: async () => grid ? [{ id: employee.id }] : [] });
-  mockPrismaDelegate(t, "schedule", { findUnique: async () => structuredClone(original), count: async () => grid ? 1 : 0, findMany: async () => grid ? [structuredClone(original)] : [] });
+  const schedules = mockPrismaDelegate(t, "schedule", { findUnique: async () => structuredClone(original), count: async () => grid ? 1 : 0, findMany: async () => grid ? [structuredClone(original)] : [] });
   const lob = mockPrismaDelegate(t, "lob", { findMany: async (args) => {
     const all = [{ id: "ads", name: "ADS" }, { id: "cec", name: "CEC" }];
     return args.where?.name ? all.filter((lob) => lob.name.toLowerCase() === args.where.name.equals.toLowerCase()) : all;
@@ -36,7 +36,7 @@ function fixture(t: TestContext, grid = false) {
   const transaction = client.$transaction;
   client.$transaction = t.mock.fn(async (fn: any) => fn(tx));
   t.after(() => { client.$transaction = transaction; });
-  return { people, lob, writes, tx };
+  return { people, lob, schedules, writes, tx };
 }
 
 test("grid API sends the saved slot LOB separately from the current employee LOB", async (t) => {
@@ -73,6 +73,19 @@ test("invalid LOB is rejected before any schedule or audit write", async (t) => 
   assert.ok("error" in result && /LOB cadastrada/.test(result.error ?? ""));
   assert.equal(f.writes.length, 0);
   assert.equal(f.tx.auditLog.create.mock.callCount(), 0);
+});
+
+test("saving a single slot returns the committed record without scanning schedule history or rebuilding a grid", async (t) => {
+  const f = fixture(t);
+  const result = await editOperationalSchedule(actor, edit);
+  assert.ok("data" in result, JSON.stringify(result));
+  assert.ok(result.data);
+  assert.equal(result.data.id, original.id);
+  assert.equal(f.schedules.findMany.mock.callCount(), 0, "no attendance-summary or grid read after commit");
+  assert.equal(f.schedules.count.mock.callCount(), 0);
+  assert.equal(f.people.count.mock.callCount(), 0);
+  assert.equal(f.tx.scheduleChangeHistory.create.mock.callCount(), 1, "history is committed with the edit");
+  assert.equal(f.tx.auditLog.create.mock.callCount(), 1, "audit is committed with the edit");
 });
 
 test("supervisor cannot change a slot LOB through the service", async (t) => {
