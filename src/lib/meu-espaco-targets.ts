@@ -13,7 +13,7 @@ export function spaceTargets(lob: string): SpaceTarget[] {
     { id: "normalFrt", label: "SLA/FRT · Normal", target: 97, direction: "min", unit: "%", scale: 100, weightLabel: "primeiras respostas Normal >0", bounded: true },
     { id: "urgentFrt", label: "SLA/FRT · P0 + HM", target: 97, direction: "min", unit: "%", scale: 100, weightLabel: "primeiras respostas P0 + HM >0", bounded: true }];
   return [quality,
-    { id: "aht", label: lob === "TNS" ? "AHT · vídeo 15 min" : "AHT ADS", target: lob === "TNS" ? 50 : 60, direction: "max", unit: "s", scale: 1, weightLabel: "submits das filas elegíveis" }, abs,
+    { id: "aht", label: lob === "TNS" ? "AHT · vídeo 15 min" : "AHT ADS", target: lob === "TNS" ? 40 : 60, direction: "max", unit: "s", scale: 1, weightLabel: "submits das filas elegíveis" }, abs,
     { id: "latency", label: lob === "TNS" ? "Latência · vídeo 15 min" : "Latência média ADS", target: lob === "TNS" ? 15 : 2, direction: "max", unit: lob === "TNS" ? "min" : "h", scale: lob === "TNS" ? 1 : 1 / 60, weightLabel: "submits com latência válida" },
     ...(lob === "TNS" ? [{ id: "commentsLatency" as const, label: "Latência · Comments", target: 24, direction: "max" as const, unit: "h", scale: 1 / 60, weightLabel: "submits Comments com latência válida" }] :
       [{ id: "materialDaily" as const, label: "Média diária · Material Queues", target: 300, direction: "min" as const, unit: "submits/dia-parceiro", scale: 1, weightLabel: "dias-parceiro Material Queues com base" }])];
