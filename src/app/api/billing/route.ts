@@ -12,7 +12,7 @@ import {
   setEmployeeBillingInvoicePaid,
   supervisorReviewInvoiceAdjustment,
   updateBillingAdjustment,
-  updateBillingCycleStatus
+  updateFilteredBillingInvoiceStatus
 } from "@/lib/billing-service";
 
 export async function GET(request: Request) {
@@ -64,8 +64,8 @@ export async function POST(request: Request) {
   const action = String(body.action ?? "");
   let result;
   switch (action) {
-    case "set-cycle-status":
-      result = await updateBillingCycleStatus(actor, { referenceMonth: body.referenceMonth, status: String(body.status ?? "") });
+    case "set-filtered-invoice-status":
+      result = await updateFilteredBillingInvoiceStatus(actor, { referenceMonth: body.referenceMonth, status: String(body.status ?? ""), invoices: body.invoices });
       break;
     case "save-rates":
       result = await saveBillingRates(actor, body.rates ?? {});
