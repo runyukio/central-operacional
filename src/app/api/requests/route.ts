@@ -5,6 +5,7 @@ import { getApiActor } from "@/lib/api-actor";
 import { createOperationalRequest, getOperationalRequest, listOperationalRequests } from "@/lib/request-service";
 
 const createRequestSchema = z.object({
+  source: z.enum(["pipeline"]).optional(),
   type: z.string().min(1),
   title: z.string().min(1),
   priority: z.enum(["Baixa", "Média", "Alta", "Crítica"]).default("Média"),
@@ -51,6 +52,8 @@ export async function GET(request: Request) {
   }
 
   const result = await listOperationalRequests(actor, {
+    deadline: url.searchParams.get("deadline") ?? undefined,
+    sort: url.searchParams.get("sort") ?? undefined,
     type: url.searchParams.get("type") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     priority: url.searchParams.get("priority") ?? undefined,
@@ -94,6 +97,9 @@ export async function POST(request: Request) {
     }, { status: 400 });
   }
 
+  if (parsed.data.source === "pipeline" && parsed.data.type !== "WFM") {
+    return NextResponse.json({ error: "Na esteira, abra somente solicitações do tipo WFM. Use a tela de origem para os demais pedidos." }, { status: 400 });
+  }
   const actor = await getApiActor();
   const result = await createOperationalRequest(actor, parsed.data);
   if ("error" in result) {

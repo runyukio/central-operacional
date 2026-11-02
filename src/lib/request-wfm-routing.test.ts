@@ -119,7 +119,7 @@ for (const filters of [{ pendingAction: true }, { assignedTo: "WFM" }]) {
     assert.equal(matches(where, { type: "WFM", status: "ABERTO" }), true);
     assert.equal(matches(where, { type: "Troca de Turno", status: "ABERTO" }), false);
     assert.equal(matches(where, { type: "Troca de Turno", status: "EM_ANALISE" }), true);
-    assert.equal(matches(where, { type: "WFM", status: "APROVADO" }), false);
+    assert.equal(matches(where, { type: "WFM", status: "APROVADO" }), "pendingAction" in filters);
   });
 }
 

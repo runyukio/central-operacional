@@ -1,5 +1,8 @@
 "use client";
 
+import { formatPipelineDate, type RequestSla } from "@/lib/request-pipeline";
+import { RequestSlaBadge } from "./request-sla-badge";
+
 import { isDirectWfmRequest } from "@/lib/request-routing";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
 import { type InputHTMLAttributes, useState } from "react";
@@ -55,6 +58,8 @@ export type ClientRequest = {
   coverageImpact?: CoverageImpactClient | null;
   history?: Array<{ at: string; actor: string; action: string; reason?: string }>;
   comments?: Array<{ at: string; author: string; body: string }>;
+  sla?: RequestSla;
+  createdAtIso?: string;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -1139,7 +1144,7 @@ export function RequestDetailContent({
   const stageText: Record<string, string> = {
     Aberto: directWfm ? "Aguardando WFM" : "Aguardando supervisor",
     "Em análise": "Aguardando WFM",
-    Aprovado: directWfm ? "Aprovada pelo WFM" : "Cronograma atualizado",
+    Aprovado: "Aguardando conclusão",
     Recusado: "Solicitação recusada",
     Concluído: "Processo encerrado",
     Cancelado: "Processo cancelado"
@@ -1150,7 +1155,7 @@ export function RequestDetailContent({
       <div>
         <p className="text-xs font-bold uppercase tracking-wide text-muted">{selected.id}</p>
         <h2 className="mt-1 text-xl font-extrabold text-navy-950">{selected.title || selected.type}</h2>
-        <p className="mt-1 text-sm text-muted">Solicitante: {selected.requester} • Área: {selected.area} • Responsável: {selected.assignee ?? "Não atribuído"}</p>
+        <p className="mt-1 text-sm text-muted">Solicitante: {selected.requester} • Área: {selected.area} • Responsável: {selected.nextOwner ?? selected.assignee ?? "Não atribuído"}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -1162,6 +1167,10 @@ export function RequestDetailContent({
       </div>
 
       <div className="grid gap-2 rounded-lg border border-border bg-white p-4 text-sm md:grid-cols-2">
+        <InfoLine label="Prazo WFM" value={<RequestSlaBadge sla={selected.sla} />} />
+        <InfoLine label="Entrada no WFM" value={formatPipelineDate(selected.sla?.receivedAt)} />
+        <InfoLine label="Vencimento" value={formatPipelineDate(selected.sla?.dueAt)} />
+        <InfoLine label="Encerramento" value={formatPipelineDate(selected.sla?.closedAt)} />
         <InfoLine label="WB/Login" value={selected.requesterWbLogin ?? "-"} />
         <InfoLine label="LOB" value={selected.lob ?? "-"} />
         <InfoLine label="Supervisor" value={selected.supervisor ?? "-"} />

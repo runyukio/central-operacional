@@ -54,7 +54,8 @@
     "db:clear-demo": "tsx prisma/clear-demo.ts",
     "db:studio": "prisma studio",
     "cec:kim:report": "tsx scripts/send-cec-resolved-kim-report.ts",
-    "cec:kim:test": "tsx --test src/lib/realtime-cec-kim-report.test.ts"
+    "cec:kim:test": "tsx --test src/lib/realtime-cec-kim-report.test.ts",
+    "test:requests": "tsx --test src/lib/request-pipeline.test.ts src/lib/request-pipeline-service.test.ts src/lib/request-wfm-routing.test.ts src/lib/paired-day-off-service.test.ts src/lib/request-creation.test.ts src/lib/request-code.test.ts src/lib/access-control.test.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
