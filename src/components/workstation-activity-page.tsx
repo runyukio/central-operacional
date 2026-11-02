@@ -11,7 +11,7 @@ type Summary = { rowCount: number; employees: number; totalSeconds: number; webS
 type Agent = { agentKey: string; employeeId: string | null; employeeName: string; wbLogin: string | null; windowsUser: string | null; lob: string; supervisor: string; hostnames: string[]; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; uniqueDomains: number; lastActivityAt: string };
 type Row = { id: string; eventId: string; sourceType: SourceType; applicationName: string | null; domain: string | null; startedAt: string; endedAt: string; durationSeconds: number; hostname: string };
 type Ranking = { label: string; seconds: number };
-type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; timelineIncluded: boolean; limit: number; truncated: boolean; error?: string; message?: string };
+type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; timelineIncluded: boolean; limit: number; truncated: boolean; filters?: { lob: string; shift: string }; filterOptions?: { lobs: string[]; shifts: string[] }; error?: string; message?: string };
 type DetailTab = "WEB" | "APP" | "TIMELINE";
 const emptySummary: Summary = { rowCount: 0, employees: 0, totalSeconds: 0, webSeconds: 0, appSeconds: 0, idleSeconds: 0, lockedSeconds: 0, privateSeconds: 0, unknownSeconds: 0, uniqueDomains: 0 };
 
@@ -19,6 +19,8 @@ export function WorkstationActivityPage() {
   const [date, setDate] = useState(todayInSaoPaulo);
   const [search, setSearch] = useState("");
   const [agentSearch, setAgentSearch] = useState("");
+  const [lob, setLob] = useState("");
+  const [shift, setShift] = useState("");
   const [selected, setSelected] = useState<Agent | null>(null);
   const [overview, setOverview] = useState<Payload | null>(null);
   const [detail, setDetail] = useState<Payload | null>(null);
@@ -42,6 +44,8 @@ export function WorkstationActivityPage() {
     const controller = new AbortController();
     setLoading(true); setError("");
     const params = new URLSearchParams({ date, view: "overview" });
+    if (lob) params.set("lob", lob);
+    if (shift) params.set("shift", shift);
     if (agentSearch.trim()) params.set("agentSearch", agentSearch.trim());
     void fetchActivity(params, controller.signal).then((body) => {
       if (!controller.signal.aborted) setOverview(body);
@@ -49,7 +53,7 @@ export function WorkstationActivityPage() {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Não foi possível carregar os agentes.");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [date, agentSearch, selectedKey, refresh]);
+  }, [date, agentSearch, lob, shift, selectedKey, refresh]);
 
   useEffect(() => {
     if (!selectedKey) return;
@@ -71,7 +75,8 @@ export function WorkstationActivityPage() {
     return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", refreshVisible); };
   }, []);
 
-  const data = selected ? detail?.date === date && detail.agentKey === selectedKey ? detail : null : overview?.date === date ? overview : null;
+  const overviewMatchesFilters = overview?.date === date && (overview.filters?.lob ?? "") === lob && (overview.filters?.shift ?? "") === shift;
+  const data = selected ? detail?.date === date && detail.agentKey === selectedKey ? detail : null : overviewMatchesFilters ? overview : null;
   const summary = data?.summary ?? emptySummary;
   const busy = selected ? detailLoading : loading;
   const currentError = selected ? detailError : error;
@@ -101,7 +106,13 @@ export function WorkstationActivityPage() {
           <div className="flex min-w-0 items-center gap-3"><Avatar /><div className="min-w-0"><h2 className="break-words text-xl font-extrabold tracking-tight text-navy-950">{selected.employeeName}</h2><p className="mt-1 text-sm text-muted">{selected.employeeId ? `${selected.wbLogin || selected.windowsUser || ""} · ${selected.lob}` : "Estação sem vínculo com um agente"}</p><p className="mt-1 text-xs text-muted">{selected.hostnames.join(" · ")}{selected.supervisor !== "Sem supervisor" ? ` · ${selected.supervisor}` : ""}</p></div></div>
           <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">Visão individual</span>
         </div>
-      </div> : <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-navy-950">Visão geral da equipe</h2><p className="mt-0.5 text-sm text-muted">Resumo de todos os agentes disponíveis para o seu perfil.</p></div><span className="hidden rounded-full border border-border bg-white px-3 py-1.5 text-xs font-semibold text-muted sm:block">Atualização a cada minuto</span></div>}
+      </div> : <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-navy-950">Visão geral da equipe</h2><p className="mt-0.5 text-sm text-muted">Resumo dos agentes disponíveis para o seu perfil, conforme os filtros selecionados.</p></div><span className="hidden rounded-full border border-border bg-white px-3 py-1.5 text-xs font-semibold text-muted sm:block">Atualização a cada minuto</span></div>}
+
+      {!selected ? <div className="space-y-4 rounded-2xl border border-border bg-white p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-navy-950">Filtrar equipe</p>{lob || shift ? <button type="button" onClick={() => { setLob(""); setShift(""); }} className="text-sm font-bold text-blue-600 hover:text-blue-800">Limpar filtros</button> : null}</div>
+        <ActivitySlicer label="LOB" value={lob} options={overview?.filterOptions?.lobs ?? []} onChange={setLob} />
+        <ActivitySlicer label="Turno" value={shift} options={overview?.filterOptions?.shifts ?? []} onChange={setShift} />
+      </div> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={busy}>
         <Metric title={selected ? "Tempo monitorado" : "Agentes e estações"} value={data ? selected ? formatDuration(summary.totalSeconds) : String(summary.employees) : "—"} icon={selected ? Clock : UsersRound} />
@@ -114,7 +125,7 @@ export function WorkstationActivityPage() {
         <Panel title="Distribuição do tempo"><TimeDistribution summary={summary} /></Panel>
         <Panel title="Selecione um agente">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted">Abra um agente para ver os sites e aplicativos utilizados.</p><label className="relative w-full sm:w-80"><span className="sr-only">Buscar agente</span><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" /><input aria-label="Buscar agente" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar agente, WB ou estação" className="premium-control h-10 w-full pl-9 pr-3 text-sm" /></label></div>
-          {loading && !data ? <Loading label="Carregando agentes..." /> : !data?.agents.length ? <EmptyState title={agentSearch ? "Nenhum agente encontrado" : "Ainda não há registros nessa data"} description={agentSearch ? "Tente outro nome, WB ou estação." : "Os agentes aparecerão aqui após o envio das atividades."} /> : <div className="overflow-x-auto rounded-xl border border-border">
+          {loading && !data ? <Loading label="Carregando agentes..." /> : !data?.agents.length ? <EmptyState title={agentSearch || lob || shift ? "Nenhum agente encontrado" : "Ainda não há registros nessa data"} description={agentSearch || lob || shift ? "Ajuste os filtros ou tente outro nome, WB ou estação." : "Os agentes aparecerão aqui após o envio das atividades."} /> : <div className="relative overflow-x-auto rounded-xl border border-border">
             <table className="w-full min-w-[700px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Agente</th><th className="px-4 py-3">Tempo monitorado</th><th className="px-4 py-3">Em sites</th><th className="px-4 py-3">Último registro</th><th className="px-4 py-3"><span className="sr-only">Abrir agente</span></th></tr></thead>
               <tbody className="divide-y divide-border">{data.agents.map((agent) => <tr key={agent.agentKey} className="group hover:bg-blue-50/40"><td className="px-4 py-4"><button type="button" onClick={() => openAgent(agent)} className="flex max-w-full items-center gap-3 text-left font-bold text-navy-950 hover:text-blue-600"><Avatar small /><span className="min-w-0"><span className="block break-words text-sm">{agent.employeeName}</span><span className="mt-1 block text-xs font-medium text-muted">{agent.employeeId ? `${agent.wbLogin || ""} · ${agent.lob}` : `Sem vínculo · ${agent.hostnames.join(", ")}`}</span></span></button></td><td className="px-4 py-4 text-sm font-bold text-navy-950">{formatDuration(agent.totalSeconds)}</td><td className="px-4 py-4 text-sm text-muted">{formatDuration(agent.webSeconds)}</td><td className="px-4 py-4 text-sm text-muted">{formatTime(agent.lastActivityAt)}</td><td className="px-4 py-4 text-right"><button type="button" onClick={() => openAgent(agent)} aria-label={`Ver atividades de ${agent.employeeName}`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-bold text-blue-700 hover:bg-blue-100">Ver atividade<ArrowRight className="h-3.5 w-3.5" /></button></td></tr>)}</tbody>
             </table>
@@ -145,6 +156,13 @@ async function fetchActivity(params: URLSearchParams, signal: AbortSignal): Prom
   const body = await response.json().catch(() => null) as Payload | null;
   if (!response.ok || !body?.success) throw new Error(body?.message || body?.error || "Não foi possível carregar as atividades. Tente atualizar novamente.");
   return body;
+}
+
+function ActivitySlicer({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  const values = Array.from(new Set([...options, ...(value ? [value] : [])]));
+  return <fieldset className="min-w-0"><legend className="mb-2 text-xs font-bold text-muted">{label}</legend><div className="flex flex-wrap gap-2">
+    {[{ value: "", label: "Todos" }, ...values.map((option) => ({ value: option, label: option }))].map((option) => <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)} className={cn("min-h-10 rounded-lg border px-4 py-2 text-sm font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600", value === option.value ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-muted hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700")}>{option.label}</button>)}
+  </div></fieldset>;
 }
 
 function Avatar({ small = false }: { small?: boolean }) {
