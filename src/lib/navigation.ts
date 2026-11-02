@@ -22,6 +22,7 @@ export type NavItem = {
   href: string;
   icon: string;
   roles: AppRole[];
+  hidden?: boolean;
 };
 
 export type NavSection = {
@@ -74,7 +75,7 @@ export const navSections: NavSection[] = [
   {
     label: "Financeiro",
     items: [
-      { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: rolesWithCapability("ADVANCE_VIEW") },
+      { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: rolesWithCapability("ADVANCE_VIEW"), hidden: true },
       { label: "Billing", href: "/billing", icon: "Coins", roles: rolesWithCapability("BILLING_VIEW") },
       { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: rolesWithCapability("FINANCE_VIEW") }
     ]
@@ -95,6 +96,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
   const normalizedRole = normalizeRole(user?.role);
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
   return navItems.filter((item) => {
+    if (item.hidden) return false;
     if (item.href === "/meu-espaco") return canAccessMeuEspaco(permissionUser);
     if (item.href === "/captura-horas/atividade") return canAccessRealtimeHoursActivity(permissionUser);
     if (item.href === "/captura-horas") return canAccessRealtimeHoursCapture(permissionUser);
