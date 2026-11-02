@@ -136,3 +136,32 @@ test("refusal before WFM closes without inventing a deadline", () => {
   assert.equal(sla.state, "NOT_APPLICABLE");
   assert.equal(sla.dueAt, null);
 });
+
+
+test("oldest-pending list excludes closed records, keeps all pending stages and paginates in ascending creation order", () => {
+  const extra = [
+    { ...rows[0], id: "analysis", status: "Em análise", createdAtIso: new Date(Date.parse(rows[0].createdAtIso!) + 1).toISOString() },
+    { ...rows[0], id: "refused", status: "Recusado" },
+    { ...rows[0], id: "canceled", status: "Cancelado" }
+  ];
+  const records = [...rows, ...extra];
+  const first = selectPipeline(records, { status: "Pendentes", sort: "oldest" });
+  assert.equal(first.total, 101);
+  assert.equal(first.data.length, 50);
+  assert.equal(first.summary.open, 60);
+  assert.equal(first.summary.inAnalysis, 1);
+  assert.equal(first.summary.awaitingCompletion, 40);
+  assert.equal(first.summary.oldestPending?.id, "REQ-1000");
+  assert.ok(first.data.every(row => ["Aberto", "Em análise", "Aprovado"].includes(row.status)));
+  const all = [1, 2, 3].flatMap(page => selectPipeline(records, { status: "Pendentes", sort: "oldest", page }).data);
+  assert.equal(new Set(all.map(row => row.id)).size, 101);
+  assert.ok(all.every((row, index) => !index || row.createdAtIso! >= all[index - 1].createdAtIso!));
+});
+
+test("oldest-pending list preserves search and deadline filters; missing creation dates stay last", () => {
+  const result = selectPipeline(rows, { status: "Pendentes", sort: "oldest", search: "WFM/Admin", deadline: "OVERDUE" });
+  assert.equal(result.total, 40);
+  assert.equal(result.data[0].id, "REQ-1060");
+  const missing = { ...rows[0], id: "unknown", createdAtIso: undefined };
+  assert.equal(selectPipeline([missing, rows[1], rows[0]], { status: "Pendentes", sort: "oldest" }).data.at(-1)?.id, "unknown");
+});

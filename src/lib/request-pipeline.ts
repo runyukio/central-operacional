@@ -173,8 +173,13 @@ export function summarizePipeline(records: PipelineRecord[]): PipelineSummary {
 
 export function selectPipeline<T extends PipelineRecord>(records: T[], filters: { search?: string; deadline?: string; status?: string; sort?: string; page?: string | number; limit?: string | number }) {
   const base = records.filter(record => requestMatchesSearch(record, filters.search) && requestMatchesDeadline(record, filters.deadline));
-  const matching = base.filter(record => !filters.status || filters.status === "Todos" || record.status === filters.status);
+  const matching = base.filter(record => !filters.status || filters.status === "Todos" || (filters.status === "Pendentes" ? !closedStatuses.has(record.status) : record.status === filters.status));
   matching.sort((a, b) => {
+    if (filters.sort === "oldest") {
+      if (!a.createdAtIso && b.createdAtIso) return 1;
+      if (!b.createdAtIso && a.createdAtIso) return -1;
+      return (a.createdAtIso ?? "").localeCompare(b.createdAtIso ?? "") || a.id.localeCompare(b.id);
+    }
     if (filters.sort === "deadline") {
       const aDue = a.sla?.dueAt ? Date.parse(a.sla.dueAt) : Infinity;
       const bDue = b.sla?.dueAt ? Date.parse(b.sla.dueAt) : Infinity;

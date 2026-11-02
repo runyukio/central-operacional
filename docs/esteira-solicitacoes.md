@@ -21,7 +21,9 @@ O cálculo está centralizado em `src/lib/request-pipeline.ts`. Não há migraç
 | Parâmetro | Valores |
 | --- | --- |
 | `deadline` | `WAITING_WFM`, `WITHIN_DEADLINE`, `OVERDUE`; omitido equivale a Todos |
-| `sort` | `created` (padrão, mais recentes), `deadline` |
+| `sort` | `created` (padrão, mais recentes), `oldest` (mais antigos), `deadline` |
+
+O clique no card “Pendente mais antigo” mostra a lista na própria tabela com `status=Pendentes` e `sort=oldest`, preservando os demais filtros e retornando à primeira página. O usuário escolhe então o pedido para abrir o detalhe. “Pendentes” reúne abertos, em análise e aprovados ainda não encerrados.
 
 O filtro de prazo seleciona somente pendências. A ordenação por vencimento prioriza pendências vencidas e coloca registros sem vencimento ao final.
 
