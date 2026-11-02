@@ -17,7 +17,7 @@ type RequestListResponse = {
   actor?: { role: string; name?: string };
 };
 const statusOptions = [
-  ["Todos", "Todos"], ["Aberto", "Abertos"], ["Em análise", "Em análise"], ["Aprovado", "Aprovados"],
+  ["Todos", "Todos"], ["Pendentes", "Pendentes"], ["Aberto", "Abertos"], ["Em análise", "Em análise"], ["Aprovado", "Aprovados"],
   ["Concluído", "Concluídos"], ["Recusado", "Recusados"], ["Cancelado", "Cancelados"]
 ];
 const defaultPipelineFilters = {
@@ -98,11 +98,14 @@ export function RequestsKanbanPage() {
   const detailSequence = useRef(0);
   const filtersRef = useRef(filters);
   const pageRef = useRef(1);
+  const requestListRef = useRef<HTMLDivElement>(null);
   filtersRef.current = filters;
   const [loadError, setLoadError] = useState("");
   const [newRequest, setNewRequest] = useState(createDefaultRequestDraft);
   const initialDeepLinkHandled = useRef(false);
-  const countByStatus = (status: string) => status === "Todos" ? statusSummary.total : statusSummary.byStatus[status] ?? 0;
+  const countByStatus = (status: string) => status === "Todos" ? statusSummary.total : status === "Pendentes"
+    ? ["Aberto", "Em análise", "Aprovado"].reduce((total, label) => total + (statusSummary.byStatus[label] ?? 0), 0)
+    : statusSummary.byStatus[status] ?? 0;
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       if (searchInput !== filtersRef.current.search) applyFilters({ ...filtersRef.current, search: searchInput });
@@ -391,16 +394,22 @@ export function RequestsKanbanPage() {
         <StatCard title="Aguardando conclusão" value={summary.awaitingCompletion} helper="Aprovados ainda pendentes" icon={ClipboardList} tone="cyan" />
         <StatCard title="Dentro do prazo" value={summary.withinDeadline} helper="Pendentes com prazo ativo" icon={CheckCircle2} tone="green" />
         <StatCard title="Fora do prazo" value={summary.overdue} helper="Pendentes acima de 48h" icon={AlertTriangle} tone="red" />
-        <button type="button" disabled={!summary.oldestPending} onClick={() => { if (summary.oldestPending) void openRequestDetail({ id: summary.oldestPending.id } as ClientRequest); }} className="min-w-0 rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-default">
-          <StatCard title="Pendente mais antigo" value={summary.oldestPending?.id ?? "—"} helper={summary.oldestPending ? `Aberto há ${formatPipelineDuration((Date.now() - Date.parse(summary.oldestPending.createdAt)) / 60_000)}` : "Nenhuma pendência"} icon={Clock} tone="purple" />
+        <button type="button" disabled={!summary.oldestPending} aria-label="Ver lista de pendências, das mais antigas às mais recentes" onClick={() => {
+          applyFilters({ ...filters, status: "Pendentes", sort: "oldest" });
+          requestListRef.current?.focus({ preventScroll: true });
+          requestListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }} className="min-w-0 rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-default">
+          <StatCard title="Pendente mais antigo" value={summary.oldestPending?.id ?? "—"} helper={summary.oldestPending ? `Aberto há ${formatPipelineDuration((Date.now() - Date.parse(summary.oldestPending.createdAt)) / 60_000)} • Ver lista` : "Nenhuma pendência"} icon={Clock} tone="purple" />
         </button>
       </div>
       {loading ? <div className="mb-5 rounded-lg border border-border bg-white p-4 text-sm font-bold text-muted">Carregando solicitações...</div> : null}
       {!loading && !loadError && !requests.length ? <div className="mb-5"><EmptyState title="Nenhuma solicitação encontrada para os filtros selecionados." description="Ajuste os filtros ou limpe a busca para visualizar a esteira." /></div> : null}
-      <Panel title="Solicitações">
+      <div ref={requestListRef} role="region" aria-label="Lista de solicitações" tabIndex={-1} className="scroll-mt-24 outline-none">
+      <Panel title={filters.status === "Pendentes" ? "Pendências" : "Solicitações"}>
+        {filters.status === "Pendentes" ? <p className="mb-3 text-sm font-semibold text-muted">{filters.sort === "oldest" ? "Da mais antiga para a mais recente. " : ""}Selecione um pedido na lista para ver os detalhes.</p> : null}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-muted">Prazo: 48h desde a entrada no WFM até o encerramento. Sábados e domingos não contam. Horário de São Paulo.</p>
-          <label className="flex items-center gap-2 text-sm font-bold"><span>Ordenar por</span><select aria-label="Ordenar por" value={filters.sort} onChange={event => applyFilters({ ...filters, sort: event.target.value })} className="h-10 rounded-lg border border-border px-3"><option value="created">Mais recentes</option><option value="deadline">Vencimento</option></select></label>
+          <label className="flex items-center gap-2 text-sm font-bold"><span>Ordenar por</span><select aria-label="Ordenar por" value={filters.sort} onChange={event => applyFilters({ ...filters, sort: event.target.value })} className="h-10 rounded-lg border border-border px-3"><option value="created">Mais recentes</option><option value="oldest">Mais antigos</option><option value="deadline">Vencimento</option></select></label>
         </div>
         <div aria-busy={loading}>
           <SimpleTable columns={["Pedido", "Solicitante", "Status", "Pendente com", "Próxima ação", "Entrada no WFM", "Vencimento", "Prazo"]} rows={requests.map(request => [
@@ -413,6 +422,7 @@ export function RequestsKanbanPage() {
           ])} />
         </div>
       </Panel>
+      </div>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-white px-4 py-3">
         <p className="text-sm font-semibold text-muted">{paginationRange(pagination.page, pagination.limit, pagination.total)} • 50 por página</p>
         <div className="flex flex-wrap gap-2">
