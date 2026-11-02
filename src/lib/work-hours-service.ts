@@ -116,6 +116,7 @@ export type WorkHourQuery = {
   scope?: "mine" | "all";
   page?: number;
   limit?: number;
+  includeCapture?: boolean;
 };
 
 export type WorkHourImportInput = {
@@ -223,7 +224,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
       ]).then(async ([records, total]) => ({
         records,
         total,
-        capturedHoursByRecordId: await workHourReadData.capturedHours(records.map((record) => ({
+        capturedHoursByRecordId: query.includeCapture === false ? new Map<string, number>() : await workHourReadData.capturedHours(records.map((record) => ({
           key: record.id,
           employeeId: record.employeeId,
           wbLogin: record.wbLogin,
@@ -241,6 +242,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
         capturedHoursByRecordId.get(record.id) ?? 0
       )),
       summary,
+      capturedHoursDeferred: query.includeCapture === false,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
       period: { startDate: formatDate(period.startDate), endDate: formatDate(period.endDate) },
       actor: { role, name: user.name }
@@ -249,6 +251,19 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     recordErrorLog({ userEmail: actor.email, code: "WORK_HOURS_LIST_ERROR", message: error instanceof Error ? error.message : "Falha ao listar horas", action: "WORK_HOURS_LIST", severity: "ERROR" });
     return { error: "Não foi possível carregar horas operacionais." };
   }
+}
+
+export async function listOperationalWorkHourCaptures(actor: Actor, input: { recordIds: string[]; startDate?: string; endDate?: string }) {
+  const user = await getUser(actor);
+  if (!user) return createPermissionError("Usuário não encontrado ou inativo.");
+  if (!canViewWorkHours({ role: user.role.name, status: user.status })) return createPermissionError("Você não tem permissão para visualizar horas operacionais.");
+  if (!input.recordIds.length || input.recordIds.length > 100) return createValidationError({ recordIds: "Selecione até 100 registros." });
+  const records = await prisma.workHourRecord.findMany({
+    where: { AND: [buildRecordWhere(user, input, resolvePeriod(input)), { id: { in: Array.from(new Set(input.recordIds)) } }] },
+    select: { id: true, employeeId: true, wbLogin: true, date: true }
+  });
+  const captured = await loadWorkHourExportCapture(records.map((record) => ({ key: record.id, employeeId: record.employeeId, wbLogin: record.wbLogin, shiftDate: record.date })), workHourReadData.capturedHours);
+  return { data: records.map((record) => ({ id: record.id, capturedHours: captured.get(record.id) ?? 0 })) };
 }
 
 export async function previewOperationalWorkHoursImport(actor: Actor, rows: Array<Record<string, unknown>>) {

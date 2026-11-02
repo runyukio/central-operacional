@@ -38,7 +38,8 @@ export async function GET(request: Request) {
     noScheduleOnly: url.searchParams.get("noScheduleOnly") === "true",
     scope: url.searchParams.get("scope") === "mine" ? "mine" : "all",
     page: Number(url.searchParams.get("page") ?? 1),
-    limit: Number(url.searchParams.get("limit") ?? 50)
+    limit: Number(url.searchParams.get("limit") ?? 50),
+    includeCapture: url.searchParams.get("includeCapture") !== "false"
   });
   if ("error" in result) return NextResponse.json(result, { status: "type" in result ? errorStatus(result as any) : 400 });
   return NextResponse.json(result);

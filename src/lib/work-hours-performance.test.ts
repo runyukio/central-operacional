@@ -6,7 +6,7 @@ import ts from "typescript";
 import { createClientRequestGate } from "./client-request-gate";
 import { prisma } from "./prisma";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
-import { listOperationalWorkHours, workHourReadData } from "./work-hours-service";
+import { listOperationalWorkHourCaptures, listOperationalWorkHours, workHourReadData } from "./work-hours-service";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -70,7 +70,7 @@ function pageFunction(name: string, context: Record<string, unknown>) {
   const component = source.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === "WorkHoursPage")!;
   const declaration = component.body!.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name)!;
   const compiled = ts.transpileModule(`(${declaration.getText(source)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  return vm.runInNewContext(compiled, { URLSearchParams, Error, ...context }) as (...args: any[]) => Promise<void>;
+  return vm.runInNewContext(compiled, { URLSearchParams, Error, AbortController, capturedHoursById: { current: new Map() }, captureRequest: { current: new AbortController() }, pendingCaptureIds: { current: new Set() }, setCaptureStates: () => {}, ...context }) as (...args: any[]) => Promise<void>;
 }
 
 test("committed review updates its row and releases saving before the background period refresh completes", async () => {
@@ -154,4 +154,109 @@ test("failed background refresh retains committed rows and summary and explains 
   assert.equal(loading, false);
   assert.match(message, /A alteração foi salva/);
   assert.match(message, /Offline/);
+});
+
+test("deferred hours list returns official rows and full summary without calculating capture", async (t) => {
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", name: "WFM", status: "ACTIVE", role: { name: "WFM" } }) });
+  mockPrismaDelegate(t, "workHourRecord", { findMany: async () => [], count: async () => 0, groupBy: async () => [] });
+  mockPrismaDelegate(t, "workHourAdjustmentRequest", { groupBy: async () => [] });
+  mockPrismaDelegate(t, "workHourOvertimeReview", { aggregate: async () => ({ _sum: { excessHours: 0 }, _count: { _all: 0 } }) });
+  t.mock.method(prisma, "$transaction", async (queries: Promise<unknown>[]) => Promise.all(queries));
+  t.mock.method(workHourReadData, "capturedHours", async () => { assert.fail("capture must not block the filtered list"); });
+  const result = await listOperationalWorkHours(actor, { includeCapture: false });
+  assert.ok("data" in result);
+  assert.equal(result.capturedHoursDeferred, true);
+  assert.equal(result.summary.pendingAdjustments, 0);
+});
+
+test("capture lookup loads only requested records within the existing date and employee scope", async (t) => {
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", status: "ACTIVE", role: { name: "WFM" } }) });
+  const record = { id: "allowed", employeeId: "agent", wbLogin: "wb", date: new Date("2026-10-01") };
+  mockPrismaDelegate(t, "workHourRecord", { findMany: async (args: any) => {
+    assert.deepEqual(args.where.AND[1], { id: { in: ["allowed", "outside"] } });
+    assert.deepEqual(args.where.AND[0].date, { gte: new Date("2026-10-01"), lte: new Date("2026-10-31T23:59:59.999Z") });
+    assert.deepEqual(args.where.AND[0].employee, { deletedAt: null });
+    assert.equal(args.include, undefined);
+    return [record];
+  } });
+  t.mock.method(workHourReadData, "capturedHours", async (requests: Parameters<typeof workHourReadData.capturedHours>[0]) => {
+    assert.deepEqual(requests, [{ key: "allowed", employeeId: "agent", wbLogin: "wb", shiftDate: record.date }]);
+    return new Map([["allowed", 7.5]]);
+  });
+  const result = await listOperationalWorkHourCaptures(actor, { recordIds: ["allowed", "outside", "allowed"], startDate: "2026-10-01", endDate: "2026-10-31" });
+  assert.deepEqual(result, { data: [{ id: "allowed", capturedHours: 7.5 }] });
+});
+
+for (const viewer of [{ status: "ACTIVE", role: { name: "COLABORADOR" } }, { status: "INACTIVE", role: { name: "WFM" } }]) {
+  test(`capture lookup denies ${viewer.role.name}/${viewer.status} before reading records`, async (t) => {
+    mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "viewer", ...viewer }) });
+    mockPrismaDelegate(t, "workHourRecord", { findMany: async () => { assert.fail("denied viewer must not read capture"); } });
+    const result = await listOperationalWorkHourCaptures(actor, { recordIds: ["allowed"] });
+    assert.ok("error" in result);
+  });
+}
+
+test("background approval refresh retains capture and loads only newly visible records without waiting", async () => {
+  const gate = createClientRequestGate();
+  const cache = { current: new Map([["reviewed", 7.5]]) };
+  let rows: any[] = [], loading = true, captureIds: string[] = [];
+  await pageFunction("loadWorkHours", {
+    hoursRequests: gate, pagination: { page: 1, limit: 50 }, filters: {}, appliedHoursView: { current: {} }, capturedHoursById: cache,
+    setLoading: (value: boolean) => { loading = value; }, setMessage: () => {}, setRows: (value: any[]) => { rows = value; },
+    setSummary: () => {}, setPagination: () => {},
+    apiJson: async (url: string) => { assert.ok(url.includes("includeCapture=false")); return { data: [{ id: "reviewed", capturedHours: 0 }, { id: "new", capturedHours: 0 }], summary: {}, pagination: {} }; },
+    loadCapturedHours: (ids: string[]) => { captureIds = ids; return new Promise(() => {}); }
+  })(1, { startDate: "2026-10-01", endDate: "2026-10-31" }, true);
+  assert.equal(loading, false);
+  assert.equal(rows[0].capturedHours, 7.5);
+  assert.deepEqual(Array.from(captureIds), ["new"]);
+});
+
+test("a capture response from an old filter cannot overwrite the new view", async () => {
+  const gate = createClientRequestGate(), request = gate.begin();
+  const captureRequest = { current: request };
+  const response = deferred<{ data: Array<{ id: string; capturedHours: number }> }>();
+  const pending = pageFunction("loadCapturedHours", {
+    hoursRequests: gate, captureRequest, apiJson: async () => response.promise,
+    setRows: () => { assert.fail("old response must not replace rows"); },
+    setCaptureStates: () => { assert.fail("old response must not replace loading states"); }
+  })(["old"], { startDate: "2026-10-01", endDate: "2026-10-31" }, request);
+  gate.begin();
+  captureRequest.current = new AbortController();
+  response.resolve({ data: [{ id: "old", capturedHours: 8 }] });
+  await pending;
+});
+
+test("approval refresh keeps the existing capture request running instead of repeating it", async () => {
+  const controller = new AbortController();
+  await pageFunction("loadWorkHours", {
+    hoursRequests: createClientRequestGate(), captureRequest: { current: controller }, pendingCaptureIds: { current: new Set(["reviewed"]) },
+    pagination: { page: 1, limit: 50 }, filters: {}, appliedHoursView: { current: {} },
+    setLoading: () => {}, setMessage: () => {}, setRows: () => {}, setSummary: () => {}, setPagination: () => {},
+    apiJson: async () => ({ data: [{ id: "reviewed", capturedHours: 0 }], summary: {}, pagination: {} }),
+    loadCapturedHours: () => { assert.fail("must retain the capture already in flight"); }
+  })(1, { startDate: "2026-10-01", endDate: "2026-10-31" }, true);
+  assert.equal(controller.signal.aborted, false);
+});
+
+test("capture lookup refuses an unbounded batch", async (t) => {
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", status: "ACTIVE", role: { name: "WFM" } }) });
+  mockPrismaDelegate(t, "workHourRecord", { findMany: async () => { assert.fail("unbounded lookup must not read records"); } });
+  const result = await listOperationalWorkHourCaptures(actor, { recordIds: Array.from({ length: 101 }, (_, i) => String(i)) });
+  assert.ok("error" in result);
+});
+
+test("deferred capture avoids combining many dates and people in one raw-history query", async (t) => {
+  mockPrismaDelegate(t, "user", { findUnique: async () => ({ id: "wfm", status: "ACTIVE", role: { name: "WFM" } }) });
+  const records = Array.from({ length: 51 }, (_, i) => ({ id: String(i), employeeId: `agent-${i}`, wbLogin: `wb-${i}`, date: new Date(i < 40 ? "2026-10-01" : "2026-10-02") }));
+  mockPrismaDelegate(t, "workHourRecord", { findMany: async () => records });
+  const capture = t.mock.method(workHourReadData, "capturedHours", async (requests: Parameters<typeof workHourReadData.capturedHours>[0]) => {
+    assert.ok(requests.length <= 20);
+    assert.equal(new Set(requests.map((item) => item.shiftDate.toISOString())).size, 1);
+    return new Map(requests.map((item) => [item.key, 7.5]));
+  });
+  const result = await listOperationalWorkHourCaptures(actor, { recordIds: records.map((record) => record.id) });
+  assert.ok("data" in result);
+  assert.equal(result.data.length, 51);
+  assert.equal(capture.mock.callCount(), 3);
 });
