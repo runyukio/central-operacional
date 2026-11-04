@@ -966,6 +966,7 @@ async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query:
 export const getPerformanceAdsQualityDashboard = getPerformanceQualityDashboard;
 
 export async function getPerformanceAgentsDashboard(actor: Actor, query: PerformanceAgentsQuery = {}) {
+  query = normalizePerformanceAgentsSlaQuery(query);
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
 
@@ -982,6 +983,11 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
         id: true,
         wbLogin: true,
         fullName: true,
+        roleTitle: true,
+        operationalStatus: true,
+        admissionDate: true,
+        terminationDate: true,
+        user: { select: { status: true, deletedAt: true } },
         lob: { select: { name: true } },
         shift: { select: { id: true, name: true } },
         supervisor: { select: { id: true, fullName: true } }
@@ -1198,9 +1204,10 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     if (includedEmployees.has(employee.id)) continue;
     const duration = moderationDurations.get(employee.id);
     const searchedWithoutData = Boolean(search) && employee.lob.name.toUpperCase() === requestedLob;
+    const activeWithoutData = isPerformanceAgentRosterVisible(employee, requestedLob, { start, end });
     // A night shift may contain production only on the following civil date.
     // A searched, registered agent must also be able to display genuine missing data.
-    if (duration?.seconds == null && !searchedWithoutData) continue;
+    if (duration?.seconds == null && !searchedWithoutData && !activeWithoutData) continue;
     filteredRows.push({
       employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin, lob: requestedLob,
       supervisorId: employee.supervisor?.id ?? null, supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
@@ -1243,6 +1250,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     filters,
     summary: {
       agents,
+      agentsWithoutProduction: filteredRows.filter(row => !row.legacyMetricsAvailable).length,
       submit,
       outputAveragePerDay: round2(outputAveragePerDay),
       daysWithData: activeDates.size,
@@ -1289,6 +1297,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
 }
 
 export async function exportPerformanceAgentsXlsxData(actor: Actor, query: PerformanceAgentsQuery = {}): Promise<XlsxExportPayload> {
+  query = normalizePerformanceAgentsSlaQuery(query);
   const user = await requireActiveUser(actor);
   if (!canExportPerformance(permissionUser(user))) {
     throw new PerformanceError("Você não tem permissão para exportar Performance.", 403);
@@ -1381,6 +1390,8 @@ async function getPerformanceAgentExportRowsByPeriod(
     where: { deletedAt: null, ...(ownEmployeeId ? { id: ownEmployeeId } : {}) },
     select: {
       id: true, wbLogin: true, fullName: true,
+      roleTitle: true, operationalStatus: true, admissionDate: true, terminationDate: true,
+      user: { select: { status: true, deletedAt: true } }, lob: { select: { name: true } },
       shift: { select: { id: true, name: true } },
       supervisor: { select: { id: true, fullName: true } }
     }
@@ -1503,6 +1514,26 @@ async function getPerformanceAgentExportRowsByPeriod(
       shiftId: employee.shift?.id ?? null, shift: employee.shift?.name ?? "Sem turno",
       queueId: durationQueueIds[0], submit: 0, moderationSeconds: 0, activeDates: []
     });
+  }
+  for (const employee of profiles) {
+    if (!isPerformanceAgentRosterVisible(employee, requestedLob, { start, end })) continue;
+    for (let cursor = start; cursor <= end;) {
+      const period = dashboardViewPeriod(cursor, view);
+      const key = `${formatDateKey(period.start)}:${employee.id}`;
+      if (!existingPeriods.has(key) && isPerformanceAgentRosterVisible(employee, requestedLob, {
+        start: cursor, end: period.end < end ? period.end : end
+      })) {
+        existingPeriods.add(key);
+        rawRows.push({
+          legacyMetricsAvailable: false, periodStart: period.start,
+          employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin,
+          supervisorId: employee.supervisor?.id ?? null, supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+          shiftId: employee.shift?.id ?? null, shift: employee.shift?.name ?? "Sem turno",
+          queueId: durationQueueIds[0], submit: 0, moderationSeconds: 0, activeDates: []
+        });
+      }
+      cursor = addDays(period.end, 1);
+    }
   }
   const aggregateMap = new Map<string, {
     periodStart: Date;
@@ -2132,6 +2163,7 @@ function emptyPerformanceAgentsPayload(
     filters,
     summary: {
       agents: 0,
+      agentsWithoutProduction: 0,
       submit: 0,
       outputAveragePerDay: 0,
       daysWithData: 0,
@@ -5287,12 +5319,31 @@ function parseRealtimeCycleDate(value: string) {
 }
 
 function performanceSlaTargetOptions(lob: string) {
+  if (lob === "VIDEO") return [15, 30, 300, 1440];
   if (!lob || lob === "CEC" || lob === "N/A") return [];
   return unique(
     queueIdsByPerformanceLob(lob)
       .map((queueId) => getPerformanceQueueMetadataById(queueId).slaTargetMinutes)
       .filter((target): target is number => typeof target === "number" && target > 0)
   ).sort((left, right) => left - right);
+}
+
+function normalizePerformanceAgentsSlaQuery(query: PerformanceAgentsQuery) {
+  if (query.lob?.trim().toUpperCase() === "VIDEO"
+    && !performanceSlaTargetOptions("VIDEO").includes(query.slaTargetMinutes ?? 0)) {
+    return { ...query, slaTargetMinutes: undefined };
+  }
+  return query;
+}
+
+function isPerformanceAgentRosterVisible(employee: {
+  roleTitle: string; operationalStatus: string; admissionDate: Date | null; terminationDate: Date | null;
+  lob: { name: string }; user: { status: string; deletedAt: Date | null } | null;
+}, lob: string, period: Period) {
+  return lob === "VIDEO" && employee.lob.name.toUpperCase() === lob
+    && isAgentJobTitle(employee.roleTitle) && isVisiblePerformanceAgent(employee)
+    && (!employee.admissionDate || employee.admissionDate <= period.end)
+    && (!employee.terminationDate || employee.terminationDate >= period.start);
 }
 
 function productionBucketSql(granularity: PerformanceProductionGranularity) {

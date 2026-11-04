@@ -202,6 +202,7 @@ type PerformanceAgentsResponse = {
   };
   summary: {
     agents: number;
+    agentsWithoutProduction?: number;
     submit: number;
     outputAveragePerDay: number;
     daysWithData: number;
@@ -512,6 +513,14 @@ export function PerformanceAutomationPage() {
     const timer = window.setTimeout(() => setDebouncedAgentSearch(agentSearch.trim()), 350);
     return () => window.clearTimeout(timer);
   }, [agentSearch]);
+
+  useEffect(() => {
+    if (agentsPayload?.selectedLob === agentLob && agentSlaTarget
+      && !agentsPayload.filters.slaTargets.includes(Number(agentSlaTarget))) {
+      setAgentSlaTarget("");
+      setAgentPage(1);
+    }
+  }, [agentsPayload, agentLob, agentSlaTarget]);
 
   useEffect(() => {
     if (activeTab !== "agents") return;
@@ -1174,6 +1183,11 @@ function AgentsView({
                 <div>
                   <h3 className="text-sm font-black text-navy-950">Agentes da operação</h3>
                   <p className="mt-1 text-xs font-bold text-muted">{formatNumber(payload?.pagination.totalRows ?? 0)} resultado(s) · clique no cabeçalho para ordenar</p>
+                  {payload?.summary.agentsWithoutProduction ? (
+                    <p className="mt-1 text-xs font-bold text-muted">
+                      {formatNumber(payload.summary.agentsWithoutProduction)} agente(s) sem produção na base de {payload.period.startDate.split("-").reverse().join("/")} a {payload.period.endDate.split("-").reverse().join("/")}: exibidos como Sem dados.
+                    </p>
+                  ) : null}
                 </div>
                 {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
               </div>
