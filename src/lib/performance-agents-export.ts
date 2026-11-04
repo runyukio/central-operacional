@@ -12,6 +12,7 @@ export type PerformanceAgentExportRow = {
   outputAveragePerDay: number;
   daysWithData: number;
   moderationSeconds: number;
+  moderationDuration?: string;
   ahtSeconds: number;
   cpdAverage?: number;
   cpdTickets?: number;
@@ -56,7 +57,8 @@ export function buildPerformanceAgentsExportPayload(input: {
       "qualidade_percentual",
       "qualidade_corretos",
       "qualidade_total",
-      "qualidade_erros"
+      "qualidade_erros",
+      "Moderation Duration"
     ],
     rows: input.agents.map((agent) => [
       agent.periodStart,
@@ -78,7 +80,8 @@ export function buildPerformanceAgentsExportPayload(input: {
       agent.quality,
       agent.qualityCorrect,
       agent.qualityTotal,
-      agent.qualityErrors
+      agent.qualityErrors,
+      agent.moderationDuration ?? "Sem dados"
     ])
   };
 }

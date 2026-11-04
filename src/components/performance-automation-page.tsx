@@ -1,6 +1,8 @@
 "use client";
 
 import { SupervisorSlaMetric } from "@/components/performance-supervisor-sla";
+import { ModerationDurationCell } from "@/components/performance-moderation-duration";
+import type { AgentModerationDuration } from "@/lib/performance-moderation-duration";
 import { formatSupervisorLatency, type SupervisorSla } from "@/lib/performance-supervisors-sla";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -161,6 +163,7 @@ type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" 
 type AgentSortDirection = "asc" | "desc";
 
 type PerformanceAgentRow = {
+  legacyMetricsAvailable?: boolean;
   employeeId: string | null;
   employeeName: string;
   wbLogin: string;
@@ -173,6 +176,7 @@ type PerformanceAgentRow = {
   outputAveragePerDay: number;
   daysWithData: number;
   moderationSeconds: number;
+  moderationDuration?: AgentModerationDuration;
   ahtSeconds: number;
   ahtMetric?: "AHT" | "CPD";
   cpdAverage?: number;
@@ -308,6 +312,7 @@ export function PerformanceAutomationPage() {
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
   const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
+  const [agentRequestGate] = useState(createClientRequestGate);
   const [supervisorRequestGate] = useState(createClientRequestGate);
   const [supervisorRevision, setSupervisorRevision] = useState(0);
   const [supervisorsPayload, setSupervisorsPayload] = useState<PerformanceSupervisorsResponse | null>(null);
@@ -426,6 +431,7 @@ export function PerformanceAutomationPage() {
   }, [qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
 
   const loadAgents = useCallback(async () => {
+    const request = agentRequestGate.begin();
     setLoadingAgents(true);
     const params = new URLSearchParams({
       view: agentView,
@@ -443,15 +449,17 @@ export function PerformanceAutomationPage() {
     if (agentSupervisorId) params.set("supervisorId", agentSupervisorId);
     if (debouncedAgentSearch) params.set("search", debouncedAgentSearch);
     try {
-      const data = await fetchPerformanceAgents(params);
+      const data = await fetchPerformanceAgents(params, request.signal);
+      if (!agentRequestGate.isCurrent(request)) return;
       setAgentsPayload(data);
       setMessage("");
     } catch (error) {
+      if (!agentRequestGate.isCurrent(request)) return;
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar os dados dos agentes.");
     } finally {
-      setLoadingAgents(false);
+      if (agentRequestGate.isCurrent(request)) setLoadingAgents(false);
     }
-  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
+  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch, agentRequestGate]);
 
   const loadSupervisors = useCallback(async () => {
     const request = supervisorRequestGate.begin();
@@ -506,8 +514,17 @@ export function PerformanceAutomationPage() {
   }, [agentSearch]);
 
   useEffect(() => {
-    if (activeTab === "agents") void loadAgents();
-  }, [activeTab, loadAgents, manualImportVersion]);
+    if (activeTab !== "agents") return;
+    void loadAgents();
+    const refresh = () => { if (document.visibilityState === "visible") void loadAgents(); };
+    const timer = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      agentRequestGate.cancel();
+    };
+  }, [activeTab, loadAgents, manualImportVersion, agentRequestGate]);
 
   useEffect(() => {
     if (activeTab === "supervisors") void loadSupervisors();
@@ -1044,6 +1061,7 @@ function AgentsView({
               <SlicerButton active={view === "daily"} label="Diário" onClick={() => onViewChange("daily")} />
             </SlicerGroup>
             <DateRangeFilter
+              label={selectedLob === "CEC" ? "Data" : "Shift Date"}
               startDate={startDate}
               endDate={endDate}
               minDate={payload?.dataRange?.startDate ?? ""}
@@ -1161,7 +1179,7 @@ function AgentsView({
                 {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1140px] text-left text-sm">
+                <table className="w-full min-w-[1320px] text-left text-sm">
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                     <tr>
                       <AgentSortHeader label="Agente" sortKey="employeeName" current={sort} onSort={handleSort} />
@@ -1173,6 +1191,7 @@ function AgentsView({
                       {selectedLob === "CEC" ? <AgentSortHeader label="Output" sortKey="outputTotal" current={sort} onSort={handleSort} align="right" /> : null}
                       {selectedLob !== "CEC" ? <AgentSortHeader label="Output médio/dia" sortKey="submit" current={sort} onSort={handleSort} align="right" /> : null}
                       <AgentSortHeader label={selectedLob === "CEC" ? "CPD" : "AHT"} sortKey="aht" current={sort} onSort={handleSort} align="right" />
+                      <th className="px-3 py-3 text-right">Moderation Duration</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
@@ -1193,20 +1212,21 @@ function AgentsView({
                             </>
                           ) : <span className="text-xs font-black text-slate-400">Sem base</span>}
                         </td>
-                        {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
+                        {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{agent.legacyMetricsAvailable === false ? "Sem dados" : formatNumber(agent.submit)}</td> : null}
                         {selectedLob !== "CEC" ? (
                           <td className="px-3 py-3 text-right font-black text-navy-950">
-                            {formatNumber(agent.outputAveragePerDay)}
-                            <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
+                            {agent.legacyMetricsAvailable === false ? "Sem dados" : formatNumber(agent.outputAveragePerDay)}
+                            {agent.legacyMetricsAvailable !== false ? <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span> : null}
                           </td>
                         ) : null}
                         <td className="px-3 py-3 text-right font-black text-navy-950">
-                          {selectedLob === "CEC" ? formatNumber(agent.cpdAverage ?? 0) : formatSeconds(agent.ahtSeconds)}
-                          {selectedLob === "CEC" ? <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.cpdDays ?? 0)} dia(s)</span> : null}
+                          {agent.legacyMetricsAvailable === false ? "Sem dados" : selectedLob === "CEC" ? formatNumber(agent.cpdAverage ?? 0) : formatSeconds(agent.ahtSeconds)}
+                          {selectedLob === "CEC" && agent.legacyMetricsAvailable !== false ? <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.cpdDays ?? 0)} dia(s)</span> : null}
                         </td>
+                        <td className="px-3 py-3"><ModerationDurationCell value={agent.moderationDuration} /></td>
                       </tr>
                     ))}
-                    {!payload?.agents.length ? <tr><td colSpan={8} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                    {!payload?.agents.length ? <tr><td colSpan={9} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -2114,7 +2134,8 @@ function DateRangeFilter({
   minDate,
   maxDate,
   onStartDateChange,
-  onEndDateChange
+  onEndDateChange,
+  label = "Data"
 }: {
   startDate: string;
   endDate: string;
@@ -2122,11 +2143,12 @@ function DateRangeFilter({
   maxDate: string;
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
+  label?: string;
 }) {
   const hasRange = Boolean(startDate || endDate);
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="w-full text-[11px] font-black uppercase tracking-wide text-muted">Data</span>
+      <span className="w-full text-[11px] font-black uppercase tracking-wide text-muted">{label}</span>
       <input
         type="date"
         value={startDate}
@@ -2195,8 +2217,8 @@ async function fetchPerformance(params: URLSearchParams): Promise<PerformancePro
   return data;
 }
 
-async function fetchPerformanceAgents(params: URLSearchParams): Promise<PerformanceAgentsResponse> {
-  const response = await fetch(`/api/performance/agents?${params.toString()}`, { cache: "no-store" });
+async function fetchPerformanceAgents(params: URLSearchParams, signal?: AbortSignal): Promise<PerformanceAgentsResponse> {
+  const response = await fetch(`/api/performance/agents?${params.toString()}`, { cache: "no-store", signal });
   const body = await response.json().catch(() => null) as (PerformanceAgentsResponse & { error?: string; message?: string }) | null;
   if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar os dados dos agentes.");
   if (body.mode !== "agents") throw new Error("Resposta de agentes inesperada.");
