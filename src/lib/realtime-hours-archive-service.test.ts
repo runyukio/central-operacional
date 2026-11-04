@@ -4,6 +4,10 @@ import { prisma } from "./prisma";
 import { archiveRealtimeHoursDate, getRealtimeHoursTimeline, maintainRealtimeHoursArchives, upsertRealtimeHoursIdentityMapping } from "./realtime-hours-service";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
 
+test.beforeEach((t) => {
+  if ("after" in t) mockPrismaDelegate(t, "auditLog", { findMany: async () => [] });
+});
+
 const legacyDay = (dateKey: string, sourceRecords: number) => ({
   dateKey, sourceRecords, sourceFingerprint: "old", rows: [],
   windowStart: new Date(`${dateKey}T03:00:00Z`), windowEnd: new Date(`${dateKey}T23:00:00Z`),

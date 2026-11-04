@@ -9,6 +9,8 @@ import { isRealtimeHoursArchiveFresh, REALTIME_HOURS_ARCHIVE_VERSION, selectReal
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { canAccessRealtimeHoursCapture, canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 import { prisma } from "@/lib/prisma";
+import { interpretRealtimeHoursPresence, isRealtimeHoursLockScreen } from "@/lib/realtime-hours-presence";
+import { applyRealtimeHoursEntryCorrections, parseRealtimeHoursEntryCorrection } from "@/lib/realtime-hours-entry-corrections";
 import {
   addDateKeyDays,
   buildRealtimeHoursPlannedShifts,
@@ -64,6 +66,8 @@ type RealtimeHoursPresenceRecord = {
   isSessionActive: boolean;
   sessionState: string | null;
   idleSeconds: number | null;
+  eventType?: string | null;
+  activeProcessName?: string | null;
 };
 
 type RealtimeHoursRowError = {
@@ -173,6 +177,8 @@ type TimelineRecord = {
   lastActivityAt?: Date | null;
   isSessionActive: boolean;
   idleSeconds: number | null;
+  sessionState?: string | null;
+  activeProcessName?: string | null;
 };
 
 type TimelineDeviceRecord = TimelineRecord & {
@@ -1068,7 +1074,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
 async function loadRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions): Promise<RealtimeHoursTimelineResult> {
   const startedAt = Date.now();
   const archived = await getArchivedRealtimeHoursTimeline(options);
-  const result = archived ?? await getRealtimeHoursTimelineFromRaw(options);
+  const result = await applyConfirmedTimelineEntries(archived ?? await getRealtimeHoursTimelineFromRaw(options));
   logPerformanceMetric("realtime-hours.timeline", startedAt, {
     date: result.date,
     records: result.sourceRecords ?? 0,
@@ -1076,6 +1082,20 @@ async function loadRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions):
     archived: Boolean(result.archived)
   });
   return result;
+}
+
+async function applyConfirmedTimelineEntries(timeline: RealtimeHoursTimelineResult) {
+  if (!timeline.rows.length) return timeline;
+  return applyRealtimeHoursEntryCorrections(timeline, await loadConfirmedEntryCorrections([timeline.date]));
+}
+
+async function loadConfirmedEntryCorrections(dates: string[]) {
+  const logs = await prisma.auditLog.findMany({
+    where: { entity: "RealTimeHoursEntryCorrection", OR: dates.map((date) => ({ entityId: { startsWith: `${date}:` } })) },
+    orderBy: { createdAt: "desc" }, select: { newValue: true }
+  });
+  return logs.map((log) => parseRealtimeHoursEntryCorrection(log.newValue))
+    .filter((item): item is NonNullable<typeof item> => item !== null);
 }
 
 export type RealtimeHoursPunctualityRow = { employeeId: string; data: string; slotId: string | null; entryAt: string | null; exitAt: string | null };
@@ -1111,7 +1131,11 @@ export function getRealtimeHoursPunctualityRange(options: { dates: string[]; eli
     }
     const scopedRows = rows.filter((row) => allowed.has(row.employeeId));
     logPerformanceMetric("realtime-hours.punctuality", startedAt, { days: dates.length, archivedDays: readable.length, rawDays: missing.length, rows: scopedRows.length });
-    return { rows: scopedRows, warnings };
+    const corrections = scopedRows.length ? await loadConfirmedEntryCorrections(dates) : [];
+    return { rows: scopedRows.map((row) => {
+      const correction = corrections.find((item) => item.date === row.data && item.employeeId === row.employeeId);
+      return correction ? { ...row, entryAt: correction.entryAt } : row;
+    }), warnings };
   });
 }
 
@@ -1165,9 +1189,10 @@ export async function getRealtimeHoursTimelineRange(options: {
     timelines.forEach((timeline) => results.set(timeline.date, timeline));
   }
 
-  return dates
+  return Promise.all(dates
     .map((date) => results.get(date))
-    .filter((timeline): timeline is RealtimeHoursTimelineResult => Boolean(timeline));
+    .filter((timeline): timeline is RealtimeHoursTimelineResult => Boolean(timeline))
+    .map(applyConfirmedTimelineEntries));
 }
 
 async function getArchivedRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions) {
@@ -1300,6 +1325,7 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
       isSessionActive: true,
       sessionState: true,
       idleSeconds: true,
+      activeProcessName: true,
       lastActivityAt: true
     }
   });
@@ -1580,6 +1606,8 @@ export async function getRealtimeHoursShiftActivityHours(
         eventType: true,
         lastActivityAt: true,
         isSessionActive: true,
+        sessionState: true,
+        activeProcessName: true,
         idleSeconds: true,
         hostname: true,
         windowsUser: true,
@@ -1724,8 +1752,9 @@ function buildRealtimeHoursTimelineRow({
   period: RealtimeHoursTimelinePeriod;
   fallbackIndex?: number;
 }) {
+  const interpretedRecords = interpretRealtimeHoursPresence(slotRecords);
   const sortedRecords = [...slotRecords].sort((left, right) => left.capturedAt.getTime() - right.capturedAt.getTime());
-  const latest = sortedRecords[sortedRecords.length - 1];
+  const latest = interpretedRecords[interpretedRecords.length - 1];
   const segments = buildRealtimeHoursCapturedSegments(sortedRecords, plannedShift, assignmentWindow, period);
   const plannedStart = plannedShift ? new Date(plannedShift.start).getTime() : null;
   const plannedEnd = plannedShift ? new Date(plannedShift.end).getTime() : null;
@@ -1763,6 +1792,7 @@ function buildRealtimeHoursTimelineRow({
   const data = plannedShift?.sourceDate ?? fallbackDataFor(sortedRecords, period.date);
   const slotId = plannedShift?.id ?? null;
 
+
   return {
     key: `${personKey}:slot:${slotId ?? `${data}:fallback:${fallbackIndex}`}`,
     data,
@@ -1790,6 +1820,7 @@ function buildRealtimeHoursTimelineRow({
     arrivalDelayMs,
     earlyDepartureMs,
     sessionCount: activeSegments.length,
+    confirmedEntryAt: null as string | null,
     plannedShifts: plannedShift ? [plannedShift] : [],
     segments: segments.map((segment) => ({
       type: segment.type,
@@ -1912,9 +1943,13 @@ async function loadRecentRealtimeHoursStatusRecordsUncached(limit: number) {
     }
   });
   const latestByIdentity = new Map<string, typeof candidates[number]>();
-  for (const record of candidates) {
+  for (const record of interpretRealtimeHoursPresence(candidates).reverse()) {
     const key = identityKey(record.hostname, record.windowsUser) || record.hostname.trim().toLowerCase();
-    if (!latestByIdentity.has(key)) latestByIdentity.set(key, record);
+    const current = latestByIdentity.get(key);
+    if (!current || record.capturedAt > current.capturedAt
+      || (record.capturedAt.getTime() === current.capturedAt.getTime() && record.createdAt > current.createdAt)) {
+      latestByIdentity.set(key, record);
+    }
   }
   return Array.from(latestByIdentity.values());
 }
@@ -1985,7 +2020,8 @@ export function resolveRealtimeHoursPresenceStatus(
   const isFresh = referenceTime.getTime() - record.capturedAt.getTime() <= staleThresholdMinutes * 60_000;
   const sessionState = String(record.sessionState ?? "").trim().toUpperCase();
   if (!isFresh) return "OFFLINE";
-  if (sessionState === "LOCKED") return "LOCKED";
+  if (isRealtimeHoursLockScreen(record)) return "LOCKED";
+  if (record.eventType === "SESSION_END") return "OFFLINE";
   if (!record.isSessionActive || sessionState === "DISCONNECTED") return "OFFLINE";
   if ((record.idleSeconds ?? 0) > Math.max(600, thresholdSeconds)) return "IDLE";
   return "ONLINE";
@@ -2025,9 +2061,10 @@ export function buildTimelineSegments(
     at: Date;
     type: TimelineSegment["type"];
     isSessionEnd: boolean;
+    isLocked: boolean;
   }>();
 
-  for (const record of records) {
+  for (const record of interpretRealtimeHoursPresence(records.map((record) => ({ ...record, hostname: "timeline" })))) {
     const isActive = record.isSessionActive && (record.idleSeconds ?? 0) <= activityIdleThresholdSeconds;
     const capturedAt = record.capturedAt.getTime();
     const pointMs = capturedAt;
@@ -2037,9 +2074,12 @@ export function buildTimelineSegments(
     const key = String(pointMs);
     const type: TimelineSegment["type"] = isActive ? "ACTIVE" : "NO_ACTIVITY";
     const isSessionEnd = record.eventType === "SESSION_END";
+    const isLocked = isRealtimeHoursLockScreen(record);
     const current = pointIndex.get(key);
-    if (!current || isSessionEnd || (!current.isSessionEnd && current.type === "NO_ACTIVITY" && type === "ACTIVE")) {
-      pointIndex.set(key, { at: new Date(pointMs), type, isSessionEnd });
+    if (!current || isSessionEnd || (!current.isSessionEnd && (
+      (isLocked && !current.isLocked) || (!current.isLocked && current.type === "NO_ACTIVITY" && type === "ACTIVE")
+    ))) {
+      pointIndex.set(key, { at: new Date(pointMs), type, isSessionEnd, isLocked });
     }
   }
 

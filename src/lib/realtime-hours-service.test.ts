@@ -8,8 +8,83 @@ import {
   resolveRealtimeHoursPresenceStatus,
   selectRealtimeHoursPresenceRecord
 } from "./realtime-hours-service";
+import { getRealtimeHoursTimeline, getRealtimeHoursShiftActivityHours } from "./realtime-hours-service";
+import { mockPrismaDelegate } from "./prisma-test-delegate";
 
 const minute = 60_000;
+
+test.beforeEach((t) => {
+  if ("after" in t) mockPrismaDelegate(t, "auditLog", { findMany: async () => [] });
+});
+
+test("a locked signal wins over contradictory active duplicates at the same instant", () => {
+  const locked = { ...point("2026-11-04T11:00:00Z", true), activeProcessName: "lockapp" };
+  const active = { ...point("2026-11-04T11:00:00Z", true), activeProcessName: "chrome" };
+  for (const records of [[locked, active], [active, locked]]) {
+    assert.equal(activeDuration(buildTimelineSegments(records, new Date("2026-11-04T11:00:00Z"), new Date("2026-11-04T11:02:00Z"))), 0);
+  }
+});
+
+test("raw timeline and shift-hour readers both reprocess contradictory captures using process evidence", async (t) => {
+  const date = "2026-10-28";
+  const records = [
+    ["11:25", "LOCKED", false, null], ["11:26", "ACTIVE", true, null],
+    ["11:27", "ACTIVE", true, "lockapp"], ["17:06", "ACTIVE", true, "lockapp"],
+    ["18:00", "ACTIVE", true, "chrome"], ["18:01", "IDLE", false, "chrome"]
+  ].map(([hour, sessionState, isSessionActive, activeProcessName]) => ({
+    capturedAt: new Date(`${date}T${hour}:00Z`), sessionState, isSessionActive,
+    activeProcessName, hostname: "PC", windowsUser: "agent", wbLogin: "wb_agent",
+    employeeId: "employee", eventType: "HEARTBEAT", ipAddress: null,
+    idleSeconds: 0, lastActivityAt: null
+  }));
+  const before = structuredClone(records);
+  mockPrismaDelegate(t, "auditLog", { findMany: async () => [{ newValue: { date, employeeId: "employee", entryAt: `${date}T17:06:00.000Z` } }] });
+  mockPrismaDelegate(t, "realTimeHoursArchiveDay", { findUnique: async () => null, findMany: async () => [] });
+  mockPrismaDelegate(t, "realTimeHoursIdentityMapping", { findMany: async () => [] });
+  mockPrismaDelegate(t, "employeeProfile", { findMany: async () => [{ id: "employee", wbLogin: "wb_agent", fullName: "Agent", roleTitle: "Agente", lob: null, shift: null, supervisor: null }] });
+  mockPrismaDelegate(t, "schedule", { findMany: async () => [{ id: "shift", employeeId: "employee", date: new Date(`${date}T00:00:00Z`), startsAt: "14:00", endsAt: "23:00", status: "ESCALADO", shift: null }] });
+  const reads = mockPrismaDelegate(t, "realTimeHoursRecord", { findMany: async (args: any) => {
+    assert.equal(args.select.activeProcessName, true);
+    assert.equal(args.select.sessionState, true);
+    return records;
+  } }).findMany;
+  const timeline = await getRealtimeHoursTimeline({ date });
+  assert.equal(timeline.archived, false);
+  assert.equal(timeline.rows.length, 1);
+  assert.equal(timeline.rows[0].activeMs, minute);
+  assert.equal(timeline.rows[0].entryAt, `${date}T17:06:00.000Z`);
+  assert.equal(timeline.rows[0].confirmedEntryAt, `${date}T17:06:00.000Z`);
+  const hours = await getRealtimeHoursShiftActivityHours([{ key: "request", employeeId: "employee", wbLogin: "wb_agent", shiftDate: new Date(`${date}T00:00:00Z`) }]);
+  assert.equal(hours.get("request"), 1 / 60);
+  assert.equal(reads.mock.callCount(), 2);
+  assert.deepEqual(records, before);
+});
+
+test("lock screen activity is excluded retrospectively until a confirmed application appears", () => {
+  const segments = buildTimelineSegments([
+    { ...point("2026-11-04T11:25:00Z", false), sessionState: "LOCKED" },
+    { ...point("2026-11-04T11:26:00Z", true), activeProcessName: null },
+    { ...point("2026-11-04T11:27:00Z", true), activeProcessName: "lockapp" },
+    { ...point("2026-11-04T11:28:00Z", true), activeProcessName: "chrome" },
+    point("2026-11-04T11:29:00Z", false, "SESSION_END")
+  ], new Date("2026-11-04T11:25:00Z"), new Date("2026-11-04T11:30:00Z"));
+  assert.equal(activeDuration(segments), minute);
+  assert.equal(segments.find((segment) => segment.type === "ACTIVE")?.start.toISOString(), "2026-11-04T11:28:00.000Z");
+});
+
+test("false activity on a locked computer cannot hide real activity on another computer", () => {
+  const segments = buildMergedTimelineSegments([
+    { ...point("2026-11-04T11:00:00Z", true), hostname: "OLD", activeProcessName: "lockapp" },
+    { ...point("2026-11-04T11:00:00Z", true), hostname: "NEW", activeProcessName: "chrome" },
+    { ...point("2026-11-04T11:01:00Z", false, "SESSION_END"), hostname: "NEW" }
+  ], new Date("2026-11-04T11:00:00Z"), new Date("2026-11-04T11:05:00Z"));
+  assert.equal(activeDuration(segments), minute);
+});
+
+test("presence recognizes LockApp even when the agent reports ACTIVE", () => {
+  const capturedAt = new Date("2026-11-04T11:00:00Z");
+  assert.equal(resolveRealtimeHoursPresenceStatus({ capturedAt, isSessionActive: true, sessionState: "ACTIVE", idleSeconds: 0, activeProcessName: "LockApp.exe" }, capturedAt), "LOCKED");
+});
 
 function point(at: string, isSessionActive: boolean, eventType: string | null = "HEARTBEAT", idleSeconds = 0) {
   return {

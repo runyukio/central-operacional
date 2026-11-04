@@ -17,6 +17,12 @@ import {
 
 const date = "2026-07-17";
 
+test("preserves a human-confirmed entry without recreating rejected activity", () => {
+  const comparison = compareRealtimeHoursPlannedShift(row({ confirmedEntryAt: `${date}T11:06:00Z` }), date, `${date}T18:00:00Z`);
+  assert.equal(comparison.label, "6m de atraso");
+  assert.equal(comparison.arrivalDelayMs, 6 * 60_000);
+});
+
 function row(overrides: Partial<RealtimeHoursTimelineFilterRow> = {}): RealtimeHoursTimelineFilterRow {
   return {
     data: date,

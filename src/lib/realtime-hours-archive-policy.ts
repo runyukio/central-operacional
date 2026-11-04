@@ -1,5 +1,5 @@
 /** Change whenever timeline rules or their input projections change. */
-export const REALTIME_HOURS_ARCHIVE_VERSION = "preserved-raw-v2";
+export const REALTIME_HOURS_ARCHIVE_VERSION = "preserved-raw-v3-lock-screen";
 
 export function isRealtimeHoursArchiveFresh(
   archivedFingerprint: string | null | undefined,

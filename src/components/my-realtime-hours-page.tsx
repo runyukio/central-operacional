@@ -144,7 +144,7 @@ export function MyRealtimeHoursPage() {
         <StatCard title="Total considerado" value={formatDurationMs(payload?.summary.activeMs ?? 0)} helper={formatRangeLabel(payload?.range)} icon={Wifi} tone="green" />
         <StatCard title="Total capturado" value={formatDurationMs(payload?.summary.capturedActiveMs ?? 0)} helper="sinal bruto do computador" icon={MonitorCog} tone="blue" />
         <StatCard title="Total sem atividade" value={formatDurationMs(payload?.summary.noActivityMs ?? 0)} helper="intervalos sem sinal ativo" icon={Clock} tone="orange" />
-        <StatCard title="Total de sessões" value={payload?.summary.sessions ?? 0} helper={`${payload?.summary.users ?? 0} dia(s) com captura`} icon={ListChecks} tone="cyan" />
+        <StatCard title="Blocos de atividade" value={payload?.summary.sessions ?? 0} helper={`${payload?.summary.users ?? 0} dia(s) com captura`} icon={ListChecks} tone="cyan" />
         <StatCard title="Ajustes aprovados" value={payload?.summary.approvedAdjustments ?? 0} helper={lastSeenAt ? `último sinal ${formatDateTime(lastSeenAt)}` : "sem captura no período"} icon={ShieldCheck} tone="purple" />
       </div>
 
@@ -188,7 +188,7 @@ export function MyRealtimeHoursPage() {
                   <th className="w-36 px-3 py-3">Considerado</th>
                   <th className="w-36 px-3 py-3">Capturado</th>
                   <th className="w-36 px-3 py-3">Sem atividade</th>
-                  <th className="w-24 px-3 py-3">Sessões</th>
+                  <th className="w-24 px-3 py-3">Blocos</th>
                   <th className="px-3 py-3">Timeline 24h</th>
                 </tr>
               </thead>
@@ -222,7 +222,7 @@ function DailyTimelineRow({ day, expanded, onToggle }: { day: TimelineDay; expan
     <>
       <tr className={cn("align-middle transition-colors hover:bg-blue-50/30", !hasCapture && "bg-slate-50/30")}>
         <td className="px-3 py-3">
-          <button type="button" onClick={onToggle} disabled={!segments.length} className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-white text-blue-600 shadow-soft transition hover:bg-blue-50 disabled:cursor-default disabled:text-slate-300 disabled:shadow-none" title={segments.length ? (expanded ? "Ocultar sessões" : "Ver sessões") : "Sem sessões neste dia"}>
+          <button type="button" onClick={onToggle} disabled={!segments.length} className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-white text-blue-600 shadow-soft transition hover:bg-blue-50 disabled:cursor-default disabled:text-slate-300 disabled:shadow-none" title={segments.length ? (expanded ? "Ocultar blocos de atividade" : "Ver blocos de atividade") : "Sem blocos de atividade neste dia"}>
             <ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} />
           </button>
         </td>

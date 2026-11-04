@@ -73,6 +73,7 @@ export type RealtimeHoursTimelineFilterRow = {
   arrivalDelayMs: number;
   earlyDepartureMs: number;
   sessionCount: number;
+  confirmedEntryAt?: string | null;
   plannedShifts: RealtimeHoursPlannedShift[];
   segments: TimelineSegment[];
 };
@@ -239,7 +240,7 @@ export function realtimeHoursScheduleStatusLabel(status: string) {
 export function compareRealtimeHoursPlannedShift(
   row: Pick<
     RealtimeHoursTimelineFilterRow,
-    "plannedShifts" | "segments" | "entryAt" | "exitAt" | "arrivalDelayMs" | "earlyDepartureMs"
+    "plannedShifts" | "segments" | "entryAt" | "exitAt" | "arrivalDelayMs" | "earlyDepartureMs" | "confirmedEntryAt"
   >,
   date: string,
   calculationEnd: string
@@ -262,7 +263,8 @@ export function compareRealtimeHoursPlannedShift(
   const plannedStart = new Date(plannedShift.start).getTime();
   const plannedEnd = new Date(plannedShift.end).getTime();
   const activity = realtimeHoursShiftDateActivity(row, date, calculationEnd);
-  const firstActiveAt = activity.firstActiveAt;
+  const confirmedEntry = row.confirmedEntryAt ? new Date(row.confirmedEntryAt).getTime() : NaN;
+  const firstActiveAt = Number.isFinite(confirmedEntry) ? confirmedEntry : activity.firstActiveAt;
   const lastActiveAt = activity.lastActiveAt;
   const arrivalDelayMs = firstActiveAt !== null
     ? Math.max(0, firstActiveAt - plannedStart)
