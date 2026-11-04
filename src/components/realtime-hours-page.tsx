@@ -150,6 +150,7 @@ type RealtimeHoursTimelineRow = {
   arrivalDelayMs: number;
   earlyDepartureMs: number;
   sessionCount: number;
+  confirmedEntryAt?: string | null;
   plannedShifts: RealtimeHoursPlannedShift[];
   segments: RealtimeHoursTimelineSegment[];
 };
@@ -801,7 +802,7 @@ function TimelinePanel({
           <div className="grid gap-2.5 md:grid-cols-3">
             <TimelineSummaryCard title="Tempo ativo" value={formatDurationMs(visibleSummary.activeMs)} tone="green" />
             <TimelineSummaryCard title="Sem atividade" value={formatDurationMs(visibleSummary.noActivityMs)} tone="slate" />
-            <TimelineSummaryCard title="Sessões" value={visibleSummary.sessions} tone="blue" />
+            <TimelineSummaryCard title="Blocos de atividade" value={visibleSummary.sessions} tone="blue" />
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-500">
@@ -902,7 +903,7 @@ function TimelineTableRow({
             type="button"
             onClick={onToggle}
             className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-white text-blue-600 shadow-soft transition hover:bg-blue-50"
-            title={expanded ? "Ocultar sessões" : "Ver sessões"}
+            title={expanded ? "Ocultar blocos de atividade" : "Ver blocos de atividade"}
           >
             <ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} />
           </button>
@@ -923,7 +924,7 @@ function TimelineTableRow({
         </td>
         <td className="px-3 py-3">
           <p className="text-sm font-black text-navy-950">{formatDateLabel(row.data)}</p>
-          <p className="text-xs font-bold text-muted">{row.sessionCount} sessão(ões)</p>
+          <p className="text-xs font-bold text-muted">{row.sessionCount} bloco(s) de atividade</p>
         </td>
         <td className="px-3 py-3 text-sm font-black text-emerald-600">{formatDurationMs(row.activeMs)}</td>
         <td className="px-3 py-3">
@@ -1132,7 +1133,7 @@ function ActivityBreakdown({ row }: { row: RealtimeHoursTimelineRow }) {
       <div className="grid gap-2.5 md:grid-cols-3">
         <TimelineSummaryCard title="Tempo ativo" value={formatDurationMs(row.activeMs)} tone="green" />
         <TimelineSummaryCard title="Sem atividade" value={formatDurationMs(row.noActivityMs)} tone="slate" />
-        <TimelineSummaryCard title="Sessões" value={row.sessionCount} tone="blue" />
+        <TimelineSummaryCard title="Blocos de atividade" value={row.sessionCount} tone="blue" />
       </div>
       <div className="max-h-[320px] space-y-1.5 overflow-y-auto pr-1">
         {row.segments.map((segment, index) => (

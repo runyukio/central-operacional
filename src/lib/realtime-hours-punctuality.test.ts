@@ -4,6 +4,10 @@ import { prisma } from "./prisma";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
 import { getRealtimeHoursPunctualityRange } from "./realtime-hours-service";
 
+test.beforeEach((t) => {
+  if ("after" in t) mockPrismaDelegate(t, "auditLog", { findMany: async () => [] });
+});
+
 for (const legacy of [false, true]) {
   test(`compact punctuality preserves ${legacy ? "legacy archive history" : "fresh archive values"} and employee scope`, async (t) => {
     const dateKey = legacy ? "2026-06-12" : "2026-06-11";

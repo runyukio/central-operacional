@@ -134,7 +134,7 @@ function buildCaptureHoursExportResponse(exportRows: RealtimeHoursExportRow[]) {
     "Tempo de atraso",
     "Atraso",
     "Hora extra",
-    "Sessões",
+    "Blocos de atividade",
     "Máquinas",
     "Usuários Windows",
     "IP",
