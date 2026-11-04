@@ -1039,7 +1039,7 @@ function AgentsView({
           <p className="mt-1 text-xs font-bold text-muted">
             {selectedLob === "CEC"
               ? "CPD e qualidade calculados a partir das bases CEC vigentes."
-              : "Output, AHT e qualidade consolidados a partir das bases vigentes."}
+              : "Output, AHT e qualidade consolidados a partir das bases vigentes. Moderation Duration considera o Shift Date da escala."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1061,7 +1061,6 @@ function AgentsView({
               <SlicerButton active={view === "daily"} label="Diário" onClick={() => onViewChange("daily")} />
             </SlicerGroup>
             <DateRangeFilter
-              label={selectedLob === "CEC" ? "Data" : "Shift Date"}
               startDate={startDate}
               endDate={endDate}
               minDate={payload?.dataRange?.startDate ?? ""}
