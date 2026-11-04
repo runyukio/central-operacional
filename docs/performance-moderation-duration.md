@@ -14,6 +14,8 @@ A coluna adicional Moderation Duration aplica o período selecionado ao Shift Da
 
 LOB e SLA selecionam as filas no backend. A listagem mantém os filtros originais de turno e supervisor do cadastro; na Moderation Duration, esses filtros também restringem os slots associados. A busca aceita nome ou WB normalizado. Uma busca por agente cadastrado sem produção permite exibir `Sem dados`.
 
+Em Vídeo, os filtros oferecidos são Todas, 15 min, 30 min, 5h e 1 dia. Todas mantém os dados de todas as filas de Vídeo, inclusive as metas que não têm botão próprio. Uma seleção antiga removida volta para Todas. Agentes ativos de Vídeo, já admitidos no período e com cargo de agente, permanecem visíveis mesmo sem produção na base filtrada; são identificados como `Sem dados` e não alteram os totais de produção. Isso também se aplica ao XLSX. O resumo informa quantos registros não têm produção e o período efetivamente consultado.
+
 ## Soma e apresentação
 
 O banco soma todas as filas/horas e retorna somente agregados por ID do agente e Shift Date. A soma usa os segundos sem arredondamento prévio. O backend arredonda apenas a duração final, formata com divisão inteira e não usa relógios ou objetos Date para formatar a duração.

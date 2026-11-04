@@ -279,12 +279,14 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
     const actor = { role: "ADMIN" as const, name: "Admin", email: "admin@example.test" };
     const input = { lob: "VIDEO", startDate: day, endDate: day, view: "daily" as const };
     const all = await getPerformanceAgentsDashboard(actor, input);
+    assert.deepEqual(all.filters.slaTargets, [15, 30, 300, 1440]);
     assert.equal(all.summary.submit, 105);
     assert.equal(all.summary.ahtSeconds, 60);
     assert.equal(all.summary.agents, 4);
     assert.equal(all.agents.find(row => row.employeeId === "b")?.moderationDuration.duration, "Sem dados");
     assert.equal(all.agents.find(row => row.employeeId === "c")?.legacyMetricsAvailable, true);
     assert.equal(all.agents.find(row => row.wbLogin === "wb_external")?.submit, 5);
+    assert.equal((await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 2180 })).summary.submit, all.summary.submit);
     const fifteen = await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 15 });
     assert.equal(fifteen.summary.submit, 65);
     assert.equal(fifteen.agents.find(row => row.employeeId === "a")?.moderationDuration.duration, "00:10:00");
@@ -303,5 +305,32 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
     assert.equal(exported.rows[0][8], 20);
     assert.equal(exported.rows[0][12], 60);
     assert.equal(exported.rows[0][20], "Sem dados");
+
+    profiles.push({ id: "d", fullName: "Tarde sem base", wbLogin: "wb_d", shift: { id: "afternoon", name: "Tarde" },
+      lob: { name: "VIDEO" }, supervisor: { id: "sup", fullName: "Supervisor" },
+      roleTitle: "Agente", operationalStatus: "Ativo", admissionDate: new Date("2026-10-01"), terminationDate: null,
+      user: { status: "ACTIVE", deletedAt: null }
+    } as any);
+    profiles.push({ ...profiles.at(-1)!, id: "inactive", wbLogin: "wb_inactive", user: { status: "INACTIVE", deletedAt: null } } as any);
+    profiles.push({ ...profiles.at(-2)!, id: "future", wbLogin: "wb_future", admissionDate: new Date("2026-11-01") } as any);
+    profiles.push({ ...profiles.at(-3)!, id: "supervisor", wbLogin: "wb_supervisor", roleTitle: "Supervisor" } as any);
+    const withRoster = await getPerformanceAgentsDashboard(actor, { ...input, shiftId: "afternoon", supervisorId: "sup", slaTargetMinutes: 15 });
+    assert.deepEqual(withRoster.agents.map(row => row.wbLogin), ["wb_b", "wb_d"]);
+    assert.equal(withRoster.summary.submit, 20);
+    assert.equal(withRoster.summary.agents, 1);
+    assert.equal(withRoster.summary.agentsWithoutProduction, 1);
+    assert.equal(withRoster.agents[1].legacyMetricsAvailable, false);
+    assert.equal(withRoster.agents[1].moderationDuration.duration, "Sem dados");
+    assert.equal((await getPerformanceAgentsDashboard(actor, { ...input, search: "WB_D" })).agents[0].wbLogin, "wb_d");
+    assert.equal((await getPerformanceAgentsDashboard(actor, { ...input, supervisorId: "other" })).agents.length, 0);
+    const rosterExport = await exportPerformanceAgentsXlsxData(actor, { ...input, shiftId: "afternoon", slaTargetMinutes: 15 });
+    assert.deepEqual(rosterExport.rows.map(row => row[4]), ["wb_b", "wb_d"]);
+    assert.equal(rosterExport.rows[1][8], "Sem dados");
+    assert.equal(rosterExport.rows[1][20], "Sem dados");
+    await db.exec(`DELETE FROM "ProductionRecord" WHERE "employeeId" = 'b'`);
+    const missingAfternoon = await getPerformanceAgentsDashboard(actor, { ...input, shiftId: "afternoon" });
+    assert.deepEqual(missingAfternoon.agents.map(row => row.wbLogin), ["wb_d"]);
+    assert.equal(missingAfternoon.summary.submit, 0);
+    assert.equal(missingAfternoon.summary.agentsWithoutProduction, 1);
   });
 });
