@@ -24,6 +24,9 @@ import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { isPerformanceAdsQueueId, PERFORMANCE_ADS_QUEUE_IDS } from "@/lib/performance-ads-queues";
 import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-export";
+import { getPerformanceAgentShiftProduction } from "@/lib/performance-moderation-duration-service";
+import { formatModerationDuration, normalizeModerationLogin } from "@/lib/performance-moderation-duration";
+import { addDateKeyDays } from "@/lib/realtime-hours-timeline";
 import { needsRealtimeHourlyInputFallback, realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
@@ -977,6 +980,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       where: { deletedAt: null, ...(ownEmployeeId ? { id: ownEmployeeId } : {}) },
       select: {
         id: true,
+        wbLogin: true,
+        fullName: true,
+        lob: { select: { name: true } },
         shift: { select: { id: true, name: true } },
         supervisor: { select: { id: true, fullName: true } }
       }
@@ -1010,7 +1016,10 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     slaTargets: performanceSlaTargetOptions(requestedLob)
   };
   const dataRange = selectedRange.min && selectedRange.max
-    ? { startDate: formatDateKey(selectedRange.min), endDate: formatDateKey(selectedRange.max) }
+    ? {
+        startDate: requestedLob === "CEC" ? formatDateKey(selectedRange.min) : addDateKeyDays(formatDateKey(selectedRange.min), -1),
+        endDate: requestedLob === "CEC" ? formatDateKey(selectedRange.max) : addDateKeyDays(formatDateKey(selectedRange.max), 1)
+      }
     : !requestedLob && allRangeDates.length
       ? {
           startDate: formatDateKey(new Date(Math.min(...allRangeDates.map((date) => date.getTime())))),
@@ -1022,8 +1031,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     return emptyPerformanceAgentsPayload(start, end, dataRange, filters, view);
   }
 
-  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
-  const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const durationQueueIds = queueIdsByPerformanceLob(requestedLob).filter(queueId =>
+    !query.slaTargetMinutes || getPerformanceQueueMetadataById(queueId).slaTargetMinutes === query.slaTargetMinutes
+  );
   const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   type AgentDashboardRawRow = {
     employeeId: string | null;
@@ -1038,7 +1048,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     moderationSeconds: number;
     activeDates: Date[];
   };
-  const [rawRows, qualityByIdentity] = await Promise.all([
+  const [rawRows, qualityByIdentity, shiftProduction] = await Promise.all([
     requestedLob === "CEC"
     ? prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
       SELECT
@@ -1073,40 +1083,28 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
         e."shiftId",
         sh."name"
     `)
-    : prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
-    SELECT
-      p."employeeId" AS "employeeId",
-      COALESCE(e."fullName", p."wbLogin") AS "employeeName",
-      COALESCE(e."wbLogin", p."wbLogin") AS "wbLogin",
-      e."supervisorId" AS "supervisorId",
-      COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
-      e."shiftId" AS "shiftId",
-      COALESCE(sh."name", 'Sem turno') AS "shift",
-      p."queueId" AS "queueId",
-      COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
-      COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds",
-      ARRAY_AGG(DISTINCT p."bzDay") AS "activeDates"
-    FROM "ProductionRecord" p
-    LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
-    LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
-    LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
-    WHERE p."bzDay" >= ${start}
-      AND p."bzDay" <= ${end}
-      ${ownProductionEmployeeSql}
-      ${queueSql}
-    GROUP BY
-      p."employeeId",
-      e."fullName",
-      e."wbLogin",
-      p."wbLogin",
-      e."supervisorId",
-      s."fullName",
-      e."shiftId",
-      sh."name",
-      p."queueId"
-    `),
-    getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId)
+    : Promise.resolve([] as AgentDashboardRawRow[]),
+    getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId),
+    getPerformanceAgentShiftProduction({
+      employees: employeeOptions.map(employee => ({ employeeId: employee.id, wbLogin: employee.wbLogin })),
+      startDate: formatDateKey(start), endDate: formatDateKey(end), queueIds: durationQueueIds,
+      shiftId: query.shiftId, supervisorId: query.supervisorId
+    })
   ]);
+  const moderationDurations = shiftProduction.durations;
+  const profileById = new Map(employeeOptions.map(employee => [employee.id, employee]));
+  for (const source of shiftProduction.production) {
+    const employee = profileById.get(source.employeeId);
+    if (!employee) continue;
+    rawRows.push({
+      employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin,
+      supervisorId: query.supervisorId ?? employee.supervisor?.id ?? null,
+      supervisor: query.supervisorId ? supervisors.find(item => item.id === query.supervisorId)?.fullName ?? "Sem supervisor" : employee.supervisor?.fullName ?? "Sem supervisor",
+      shiftId: query.shiftId ?? employee.shift?.id ?? null, shift: source.shift || employee.shift?.name || "Sem turno",
+      queueId: durationQueueIds[0], submit: Number(source.submit), moderationSeconds: Number(source.seconds),
+      activeDates: [parseDate(source.shiftDate)!]
+    });
+  }
 
   const aggregateMap = new Map<string, {
     employeeId: string | null;
@@ -1148,9 +1146,11 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   }
 
   const rowsWithQuality = Array.from(aggregateMap.values()).map((row) => {
-    const quality = qualityByIdentity.get(row.employeeId ? `employee:${row.employeeId}` : `wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
+    const quality = (row.employeeId ? qualityByIdentity.get(`employee:${row.employeeId}`) : undefined)
+      ?? qualityByIdentity.get(`wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
     return {
       ...row,
+      legacyMetricsAvailable: true,
       qualityCorrect: quality?.correct ?? 0,
       qualityTotal: quality?.total ?? 0,
       qualityErrors: quality?.errors ?? 0,
@@ -1158,13 +1158,38 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     };
   });
   const search = query.search?.trim().toLocaleLowerCase("pt-BR") ?? "";
-  const filteredRows = rowsWithQuality.filter((row) => {
+  const matchesFilters = (row: { employeeName: string; wbLogin: string; supervisorId: string | null; shiftId: string | null }) => {
     if (query.supervisorId && row.supervisorId !== query.supervisorId) return false;
     if (query.shiftId && row.shiftId !== query.shiftId) return false;
     if (!search) return true;
     return row.employeeName.toLocaleLowerCase("pt-BR").includes(search)
-      || row.wbLogin.toLocaleLowerCase("pt-BR").includes(search);
-  });
+      || normalizeModerationLogin(row.wbLogin).includes(normalizeModerationLogin(search));
+  };
+  const baselineRows = rowsWithQuality.filter(matchesFilters);
+  const durationProfiles = employeeOptions.filter(employee => matchesFilters({
+    employeeName: employee.fullName, wbLogin: employee.wbLogin,
+    supervisorId: employee.supervisor?.id ?? null, shiftId: employee.shift?.id ?? null
+  }));
+  const employeeByLogin = new Map(employeeOptions.map(employee => [normalizeModerationLogin(employee.wbLogin), employee]));
+  const durationEmployeeId = (row: { employeeId: string | null; wbLogin: string }) =>
+    employeeByLogin.get(normalizeModerationLogin(row.wbLogin))?.id ?? row.employeeId;
+  const filteredRows = [...baselineRows];
+  const includedEmployees = new Set(baselineRows.map(durationEmployeeId));
+  for (const employee of durationProfiles) {
+    if (includedEmployees.has(employee.id)) continue;
+    const duration = moderationDurations.get(employee.id);
+    const searchedWithoutData = Boolean(search) && employee.lob.name.toUpperCase() === requestedLob;
+    // A night shift may contain production only on the following civil date.
+    // A searched, registered agent must also be able to display genuine missing data.
+    if (duration?.seconds == null && !searchedWithoutData) continue;
+    filteredRows.push({
+      employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin, lob: requestedLob,
+      supervisorId: employee.supervisor?.id ?? null, supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+      shiftId: employee.shift?.id ?? null, shift: employee.shift?.name ?? "Sem turno",
+      submit: 0, moderationSeconds: 0, activeDates: new Set<string>(), outputAveragePerDay: 0,
+      legacyMetricsAvailable: false, qualityCorrect: 0, qualityTotal: 0, qualityErrors: 0, quality: 0
+    });
+  }
   const sortBy = query.sortBy ?? "submit";
   const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
   filteredRows.sort((a, b) => comparePerformanceAgentRows(a, b, sortBy, sortDirection));
@@ -1178,15 +1203,17 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     ? 1
     : Math.min(totalPages, Math.max(1, Math.trunc(query.page ?? 1)));
   const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
-  const submit = filteredRows.reduce((total, row) => total + row.submit, 0);
-  const moderationSeconds = filteredRows.reduce((total, row) => total + row.moderationSeconds, 0);
-  const activeDates = new Set(filteredRows.flatMap((row) => Array.from(row.activeDates)));
-  const cpdDays = filteredRows.reduce((total, row) => total + row.activeDates.size, 0);
+  // Keep original KPI formulas and unrounded source values; the Agents date
+  // filter now consistently selects production by the assigned Shift Date.
+  const submit = baselineRows.reduce((total, row) => total + row.submit, 0);
+  const moderationSeconds = baselineRows.reduce((total, row) => total + row.moderationSeconds, 0);
+  const activeDates = new Set(baselineRows.flatMap((row) => Array.from(row.activeDates)));
+  const cpdDays = baselineRows.reduce((total, row) => total + row.activeDates.size, 0);
   const outputAveragePerDay = activeDates.size > 0 ? submit / activeDates.size : 0;
   const cpdAverage = cpdDays > 0 ? submit / cpdDays : 0;
-  const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
-  const qualityCorrect = filteredRows.reduce((total, row) => total + row.qualityCorrect, 0);
-  const qualityTotal = filteredRows.reduce((total, row) => total + row.qualityTotal, 0);
+  const agents = new Set(baselineRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
+  const qualityCorrect = baselineRows.reduce((total, row) => total + row.qualityCorrect, 0);
+  const qualityTotal = baselineRows.reduce((total, row) => total + row.qualityTotal, 0);
 
   return {
     mode: "agents" as const,
@@ -1222,10 +1249,13 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       supervisor: row.supervisor,
       shiftId: row.shiftId,
       shift: row.shift,
+      legacyMetricsAvailable: row.legacyMetricsAvailable,
       submit: Math.round(row.submit),
       outputAveragePerDay: round2(row.outputAveragePerDay),
       daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
+      moderationDuration: moderationDurations.get(durationEmployeeId(row) ?? "")
+        ?? { seconds: null, duration: "Sem dados", byShiftDate: [] },
       ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
       ahtMetric: requestedLob === "CEC" ? "CPD" as const : "AHT" as const,
       cpdAverage: requestedLob === "CEC" ? round2(row.outputAveragePerDay) : 0,
@@ -1321,10 +1351,19 @@ async function getPerformanceAgentExportRowsByPeriod(
   const requestedLob = dashboard.selectedLob;
   const role = normalizeRole(user.role.name);
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
-  const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const bucketSql = performanceAgentBucketSql(view, requestedLob === "CEC" ? "cec" : "production");
-  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
+  const durationQueueIds = queueIdsByPerformanceLob(requestedLob).filter(queueId =>
+    !query.slaTargetMinutes || getPerformanceQueueMetadataById(queueId).slaTargetMinutes === query.slaTargetMinutes
+  );
+  const profiles = requestedLob === "CEC" ? [] : await prisma.employeeProfile.findMany({
+    where: { deletedAt: null, ...(ownEmployeeId ? { id: ownEmployeeId } : {}) },
+    select: {
+      id: true, wbLogin: true, fullName: true,
+      shift: { select: { id: true, name: true } },
+      supervisor: { select: { id: true, fullName: true } }
+    }
+  });
 
   type AgentExportRawRow = {
     periodStart: Date;
@@ -1341,7 +1380,7 @@ async function getPerformanceAgentExportRowsByPeriod(
     activeDates: Date[];
   };
 
-  const [rawRows, qualityByPeriodIdentity] = await Promise.all([
+  const [rawRows, qualityByPeriodIdentity, shiftProduction] = await Promise.all([
     requestedLob === "CEC"
       ? prisma.$queryRaw<AgentExportRawRow[]>(Prisma.sql`
           SELECT
@@ -1378,42 +1417,28 @@ async function getPerformanceAgentExportRowsByPeriod(
             e."shiftId",
             sh."name"
         `)
-      : prisma.$queryRaw<AgentExportRawRow[]>(Prisma.sql`
-          SELECT
-            ${bucketSql} AS "periodStart",
-            p."employeeId" AS "employeeId",
-            COALESCE(e."fullName", p."wbLogin") AS "employeeName",
-            COALESCE(e."wbLogin", p."wbLogin") AS "wbLogin",
-            e."supervisorId" AS "supervisorId",
-            COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
-            e."shiftId" AS "shiftId",
-            COALESCE(sh."name", 'Sem turno') AS "shift",
-            p."queueId" AS "queueId",
-            COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
-            COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds",
-            ARRAY_AGG(DISTINCT p."bzDay") AS "activeDates"
-          FROM "ProductionRecord" p
-          LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
-          LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
-          LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
-          WHERE p."bzDay" >= ${start}
-            AND p."bzDay" <= ${end}
-            ${ownProductionEmployeeSql}
-            ${queueSql}
-          GROUP BY
-            ${bucketSql},
-            p."employeeId",
-            e."fullName",
-            e."wbLogin",
-            p."wbLogin",
-            e."supervisorId",
-            s."fullName",
-            e."shiftId",
-            sh."name",
-            p."queueId"
-        `),
-    getPerformanceAgentQualityByPeriodIdentity(requestedLob, start, end, ownEmployeeId, view)
+      : Promise.resolve([] as AgentExportRawRow[]),
+    getPerformanceAgentQualityByPeriodIdentity(requestedLob, start, end, ownEmployeeId, view),
+    getPerformanceAgentShiftProduction({
+      employees: profiles.map(employee => ({ employeeId: employee.id, wbLogin: employee.wbLogin })),
+      startDate: dashboard.period.startDate, endDate: dashboard.period.endDate, queueIds: durationQueueIds,
+      shiftId: query.shiftId, supervisorId: query.supervisorId
+    })
   ]);
+  const profileById = new Map(profiles.map(employee => [employee.id, employee]));
+  for (const source of shiftProduction.production) {
+    const employee = profileById.get(source.employeeId);
+    if (!employee) continue;
+    const shiftDate = parseDate(source.shiftDate)!;
+    rawRows.push({
+      periodStart: dashboardViewPeriod(shiftDate, view).start,
+      employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin,
+      supervisorId: query.supervisorId ?? employee.supervisor?.id ?? null,
+      supervisor: query.supervisorId ? profiles.find(item => item.supervisor?.id === query.supervisorId)?.supervisor?.fullName ?? "Sem supervisor" : employee.supervisor?.fullName ?? "Sem supervisor",
+      shiftId: query.shiftId ?? employee.shift?.id ?? null, shift: source.shift || employee.shift?.name || "Sem turno",
+      queueId: durationQueueIds[0], submit: Number(source.submit), moderationSeconds: Number(source.seconds), activeDates: [shiftDate]
+    });
+  }
 
   const aggregateMap = new Map<string, {
     periodStart: Date;
@@ -1464,11 +1489,12 @@ async function getPerformanceAgentExportRowsByPeriod(
     if (query.shiftId && row.shiftId !== query.shiftId) return [];
     if (search
       && !row.employeeName.toLocaleLowerCase("pt-BR").includes(search)
-      && !row.wbLogin.toLocaleLowerCase("pt-BR").includes(search)) return [];
+      && !normalizeModerationLogin(row.wbLogin).includes(normalizeModerationLogin(search))) return [];
 
     const periodKey = formatDateKey(row.periodStart);
     const identity = row.employeeId ? `employee:${row.employeeId}` : `wb:${normalizePerformanceWbLogin(row.wbLogin)}`;
-    const quality = qualityByPeriodIdentity.get(`${periodKey}:${identity}`);
+    const quality = qualityByPeriodIdentity.get(`${periodKey}:${identity}`)
+      ?? qualityByPeriodIdentity.get(`${periodKey}:wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
     const bounds = performanceAgentBucketBounds(row.periodStart, view, start, end);
     return [{
       periodStart: formatDateKey(bounds.start),
@@ -1482,6 +1508,7 @@ async function getPerformanceAgentExportRowsByPeriod(
       outputAveragePerDay: round2(row.outputAveragePerDay),
       daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
+      moderationDuration: formatModerationDuration(requestedLob === "CEC" ? null : row.moderationSeconds),
       ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
       cpdAverage: requestedLob === "CEC" ? round2(row.outputAveragePerDay) : 0,
       cpdTickets: requestedLob === "CEC" ? Math.round(row.submit) : 0,

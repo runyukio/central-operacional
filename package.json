@@ -4,6 +4,7 @@
   "private": true,
   "description": "Central Operacional interna para escalas, solicitações, performance, qualidade, logística, clima e gestão.",
   "scripts": {
+    "test:moderation-duration": "tsx --test src/lib/performance-moderation-duration.test.ts src/components/performance-moderation-duration.test.tsx",
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
@@ -91,6 +92,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
