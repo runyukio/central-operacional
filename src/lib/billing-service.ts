@@ -6,7 +6,7 @@ export { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
-import { getBillingFiscalDocumentCodeException, type BillingFiscalDocumentContext } from "@/lib/billing-fiscal-document-exceptions";
+import { getBillingFiscalCodeExceptionId, isBillingFiscalCodeExceptionAllowed, type BillingFiscalDocumentContext } from "@/lib/billing-fiscal-document-exceptions";
 import {
   BillingFiscalExtractionError,
   createBillingFiscalValidationToken,
@@ -809,11 +809,11 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
             supplierTaxId: extraction.supplierTaxId,
             taxationCode: extraction.taxationCode,
             nbsCode: extraction.nbsCode,
-            fiscalCodeException: getBillingFiscalDocumentCodeException({
+            fiscalCodeException: getBillingFiscalCodeExceptionId({
               wbLogin,
               referenceMonth,
               documentHash: extraction.documentHash
-            }, extraction)?.id ?? null,
+            }, extraction),
             invoiceFileName: fileData.fileName,
             finalAmount: calculated.finalAmount,
             totalMinutes: calculated.totalConsideredMinutes
@@ -3656,18 +3656,20 @@ function hasReusableBillingFiscalExtraction(
     && row.invoiceNumber
     && Number(row.grossAmount) > 0
   );
-  const codeException = getBillingFiscalDocumentCodeException({ ...documentContext, documentHash: row?.documentHash }, {
+  const codeException = isBillingFiscalCodeExceptionAllowed({ ...documentContext, documentHash: row?.documentHash }, {
     accessKey: row?.accessKey ?? "",
     invoiceNumber: row?.invoiceNumber ?? "",
     serviceAmount: Number(row?.grossAmount),
     customerTaxId: row?.customerTaxId ?? "",
-    supplierTaxId: row?.supplierTaxId ?? ""
+    supplierTaxId: row?.supplierTaxId ?? "",
+    taxationCode: row?.taxationCode,
+    nbsCode: row?.nbsCode
   });
   return hasBaseFields && (!requireCompliance || Boolean(
     row?.customerTaxId
     && row.supplierTaxId
     && row.taxationCode
-    && (row.nbsCode || (codeException && row.taxationCode === codeException.taxationCode))
+    && (row.nbsCode || codeException)
   ));
 }
 
