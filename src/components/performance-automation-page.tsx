@@ -515,12 +515,16 @@ export function PerformanceAutomationPage() {
   }, [agentSearch]);
 
   useEffect(() => {
-    if (agentsPayload?.selectedLob === agentLob && agentSlaTarget
-      && !agentsPayload.filters.slaTargets.includes(Number(agentSlaTarget))) {
+    if (agentsPayload?.selectedLob !== agentLob) return;
+    if (agentSlaTarget && !agentsPayload.filters.slaTargets.includes(Number(agentSlaTarget))) {
       setAgentSlaTarget("");
       setAgentPage(1);
     }
-  }, [agentsPayload, agentLob, agentSlaTarget]);
+    if (agentShiftId && !agentsPayload.filters.shifts.some(shift => shift.id === agentShiftId)) {
+      setAgentShiftId("");
+      setAgentPage(1);
+    }
+  }, [agentsPayload, agentLob, agentSlaTarget, agentShiftId]);
 
   useEffect(() => {
     if (activeTab !== "agents") return;

@@ -22,6 +22,7 @@ import {
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
+import { cleanShiftName } from "@/lib/shift-display";
 import { isPerformanceAdsQueueId, PERFORMANCE_ADS_QUEUE_IDS } from "@/lib/performance-ads-queues";
 import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-export";
 import { getPerformanceAgentShiftProduction } from "@/lib/performance-moderation-duration-service";
@@ -1011,10 +1012,13 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     employeeOptions.flatMap((employee) => employee.supervisor ? [employee.supervisor] : []),
     (item) => item.id
   ).sort((a, b) => a.fullName.localeCompare(b.fullName, "pt-BR"));
+  const shiftOrder = ["Manhã", "Tarde", "Noite"];
   const shifts = uniqueBy(
     employeeOptions.map((employee) => employee.shift),
     (item) => item.id
-  ).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  ).map(shift => ({ ...shift, name: cleanShiftName(shift.name) }))
+    .filter(shift => shiftOrder.includes(shift.name))
+    .sort((a, b) => shiftOrder.indexOf(a.name) - shiftOrder.indexOf(b.name));
   const filters = {
     lobs: validLobs,
     supervisors,
