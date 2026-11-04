@@ -61,6 +61,30 @@ export function getBillingFiscalDocumentCodeException(
   )) ?? null;
 }
 
+// Luiza's recurring authorization applies to these two existing invoice formats,
+// independently of month/file. Supplier identity and all other checks still apply.
+type BillingFiscalCodeFields = Partial<BillingFiscalDocumentIdentity> & { taxationCode?: string | null; nbsCode?: string | null };
+
+export function getBillingFiscalCodeExceptionId(
+  context: BillingFiscalDocumentContext | undefined,
+  fields: BillingFiscalCodeFields
+) {
+  const digits = (value: string | null | undefined) => String(value ?? "").replace(/\D/g, "");
+  const taxationCode = digits(fields.taxationCode);
+  const hasNbs = Boolean(String(fields.nbsCode ?? "").trim());
+  const documentException = getBillingFiscalDocumentCodeException(context, fields);
+  if (documentException && taxationCode === digits(documentException.taxationCode) && !hasNbs) return documentException.id;
+
+  return String(context?.wbLogin ?? "").trim().toLowerCase() === "wb_luiza03"
+    && digits(fields.supplierTaxId) === "15269932000101"
+    && ((taxationCode === "170601" && digits(fields.nbsCode) === "121013000")
+      || (taxationCode === "03115" && !hasNbs)) ? "LUIZA03_RECURRING_CODES" : null;
+}
+
+export function isBillingFiscalCodeExceptionAllowed(context: BillingFiscalDocumentContext | undefined, fields: BillingFiscalCodeFields) {
+  return getBillingFiscalCodeExceptionId(context, fields) !== null;
+}
+
 function matchesDocumentIdentity(
   actual: Partial<BillingFiscalDocumentIdentity> | undefined,
   expected: BillingFiscalDocumentIdentity

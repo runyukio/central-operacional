@@ -282,7 +282,7 @@ test("permite o código municipal e a ausência de NBS somente para o documento 
   assert.equal(isBillingFiscalAmountMismatchExempt("wb_luiza03"), false);
 });
 
-test("aceita a NFS-e municipal 31 da Luiza no invoice de setembro sem liberar outros documentos", () => {
+test("preserva a autorização da NFS-e municipal 31 da Luiza e a identidade do prestador", () => {
   const fields = extractBillingFiscalFieldsFromText(
     municipalFiscalSampleText
       .replaceAll("00000029", "00000031")
@@ -303,9 +303,7 @@ test("aceita a NFS-e municipal 31 da Luiza no invoice de setembro sem liberar ou
 
   for (const context of [
     undefined,
-    { ...luiza31MunicipalDocumentContext, wbLogin: "wb_outro" },
-    { ...luiza31MunicipalDocumentContext, referenceMonth: "2026-10" },
-    { ...luiza31MunicipalDocumentContext, documentHash: "outro-documento" }
+    { ...luiza31MunicipalDocumentContext, wbLogin: "wb_outro" }
   ]) {
     assert.throws(
       () => validateBillingFiscalComplianceFields(fields, "15269932000101", context),

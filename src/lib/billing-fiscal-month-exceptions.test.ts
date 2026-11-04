@@ -7,6 +7,7 @@ import ts from "typescript";
 import { billingFiscalUploadIsReady, EMPTY_BILLING_FISCAL_UPLOAD } from "../components/billing-fiscal-invoice-upload";
 import { isBillingFiscalAmountMismatchExempt } from "./billing-fiscal-invoice";
 import { BillingFiscalExtractionError } from "./billing-fiscal-invoice-extraction";
+import { isBillingFiscalCodeExceptionAllowed } from "./billing-fiscal-document-exceptions";
 
 function sourceFile(file: string) {
   return ts.createSourceFile(file, readFileSync(new URL(file, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true,
@@ -44,6 +45,23 @@ test("as cinco consultas da exceção usam o ciclo da nota no servidor e nas dua
 // Execute the actual submission guard with isolated validation doubles.
 // These tests cannot reach storage, the database, or Omie.
 const submission = compileFunction("resolveBillingFiscalSubmission");
+const reusableExtraction = vm.runInNewContext(compileFunction("hasReusableBillingFiscalExtraction"), {
+  Boolean, Number, isBillingFiscalCodeExceptionAllowed
+}) as (row: unknown, compliance: boolean, context: unknown) => boolean;
+
+test("a nota municipal salva da Luiza pode ser reutilizada em ciclos futuros sem inventar NBS", () => {
+  const row = {
+    accessKey: "test-key", documentHash: "novo-hash", extractionMethod: "PDF_TEXT", invoiceNumber: "32",
+    grossAmount: 3136.36, customerTaxId: "58151940000161", supplierTaxId: "15269932000101",
+    taxationCode: "03115", nbsCode: null
+  };
+  const context = { wbLogin: "wb_luiza03", referenceMonth: "2026-10" };
+  assert.equal(reusableExtraction(row, true, context), true);
+  assert.equal(reusableExtraction(row, true, { ...context, referenceMonth: "2027-01" }), true);
+  assert.equal(reusableExtraction(row, true, { ...context, wbLogin: "wb_outro" }), false);
+  assert.equal(reusableExtraction({ ...row, supplierTaxId: "11111111000111" }, true, context), false);
+  assert.equal(reusableExtraction({ ...row, customerTaxId: null }, true, context), false);
+});
 const document = {
   accessKey: "test-key", invoiceNumber: "123", serviceAmount: 900,
   serviceDescription: "Serviços", customerTaxId: "test-customer", supplierTaxId: "test-supplier",
@@ -109,6 +127,24 @@ test("a exceção mantém token válido, validação fiscal e bloqueio de NF dup
       await assert.rejects(scenario(wbLogin, "2026-09", { saved, duplicate: true }).run, /Nota já utilizada/);
     }
   }
+});
+
+test("a autorização de códigos da Luiza não ignora o valor esperado nem a duplicidade", async () => {
+  await assert.rejects(scenario("wb_luiza03", "2026-10").run, /diferente do valor esperado/);
+  const calls: string[] = [];
+  const invoke = vm.runInNewContext(submission, {
+    BillingFiscalExtractionError, Number,
+    verifyBillingFiscalValidationToken: async () => document,
+    currencyEquals: () => true,
+    validateBillingFiscalComplianceFields: () => calls.push("compliance"),
+    ensureBillingFiscalDocumentAvailable: async () => { calls.push("duplicate"); throw new BillingFiscalExtractionError("Nota já utilizada"); }
+  });
+  await assert.rejects(invoke({
+    file: {}, validationToken: "valid-token", wbLogin: "wb_luiza03", referenceMonth: "2026-10",
+    actorEmail: "luiza@example.com", employeeId: "luiza", billingGrossAmount: 900,
+    allowAmountMismatch: false, enforceCompliance: true, supplierTaxId: "15269932000101"
+  }), /Nota já utilizada/);
+  assert.deepEqual(calls, ["compliance", "duplicate"]);
 });
 
 test("a tela libera o anexo divergente apenas para a combinação WB e referência", () => {

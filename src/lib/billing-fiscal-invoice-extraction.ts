@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 
 import { BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH, isValidBillingFiscalInvoiceNumber } from "@/lib/billing-fiscal-invoice";
-import { getBillingFiscalDocumentCodeException, type BillingFiscalDocumentContext, type BillingFiscalDocumentIdentity } from "@/lib/billing-fiscal-document-exceptions";
+import { isBillingFiscalCodeExceptionAllowed, type BillingFiscalDocumentContext, type BillingFiscalDocumentIdentity } from "@/lib/billing-fiscal-document-exceptions";
 
 const VALIDATION_TOKEN_VERSION = 1;
 const VALIDATION_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -232,8 +232,7 @@ export function validateBillingFiscalComplianceFields(
     );
   }
 
-  const codeException = getBillingFiscalDocumentCodeException(documentContext, fields);
-  if (codeException && taxationCode === codeException.taxationCode && !String(fields.nbsCode ?? "").trim()) {
+  if (isBillingFiscalCodeExceptionAllowed(documentContext, { ...fields, taxationCode })) {
     return { customerTaxId, supplierTaxId, taxationCode, nbsCode };
   }
   if (!taxationCode) {
@@ -292,7 +291,7 @@ async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, 
 
     const nativeFields = extractBillingFiscalFieldsFromText(nativeText, metadataText);
     if (hasAllRequiredFields(nativeFields, requireComplianceFields,
-      getBillingFiscalDocumentCodeException(documentContext, nativeFields)?.taxationCode)) {
+      isBillingFiscalCodeExceptionAllowed(documentContext, nativeFields))) {
       return { fields: nativeFields, method: "PDF_TEXT" as const };
     }
 
@@ -310,7 +309,7 @@ async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, 
       ocrText += `\n${await recognizeBillingFiscalText(canvas.toBuffer("image/png"))}`;
       const fields = extractBillingFiscalFieldsFromText(`${nativeText}\n${ocrText}`, metadataText);
       if (hasAllRequiredFields(fields, requireComplianceFields,
-        getBillingFiscalDocumentCodeException(documentContext, fields)?.taxationCode)) {
+        isBillingFiscalCodeExceptionAllowed(documentContext, fields))) {
         return { fields, method: "OCR" as const };
       }
     }
@@ -517,7 +516,7 @@ function findPartyTaxId(text: string, sectionPatterns: RegExp[], endMarkers: str
     if (taxId.length === 14) return taxId;
     // Municipal PDFs may put the field labels before the values in reading order.
     // Keep the fallback inside the same party section to avoid swapping the CNPJs.
-    const formattedTaxId = section.match(/\b\d{2}[.,]\d{3}[.,]\d{3}\/\d{4}-\d{2}\b/)?.[0] ?? "";
+    const formattedTaxId = section.match(/\b\d{2}\s*[.,]\s*\d{3}\s*[.,]\s*\d{3}\s*\/\s*\d{4}\s*-\s*\d{2}\b/)?.[0] ?? "";
     if (formattedTaxId) return normalizeTaxId(formattedTaxId);
   }
   return "";
@@ -615,7 +614,7 @@ function hasAllRequiredFields(
     nbsCode: string;
   },
   requireComplianceFields: boolean,
-  exemptMunicipalCode?: string
+  allowMissingNbs = false
 ) {
   const hasBaseFields = fields.accessKey.length >= 44
     && fields.accessKey.length <= 60
@@ -626,7 +625,7 @@ function hasAllRequiredFields(
     fields.customerTaxId
     && fields.supplierTaxId
     && fields.taxationCode
-    && (fields.nbsCode || (exemptMunicipalCode && fields.taxationCode === exemptMunicipalCode))
+    && (fields.nbsCode || allowMissingNbs)
   ));
 }
 
