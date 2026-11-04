@@ -1031,6 +1031,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     return emptyPerformanceAgentsPayload(start, end, dataRange, filters, view);
   }
 
+  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
+  const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const durationQueueIds = queueIdsByPerformanceLob(requestedLob).filter(queueId =>
     !query.slaTargetMinutes || getPerformanceQueueMetadataById(queueId).slaTargetMinutes === query.slaTargetMinutes
   );
@@ -1083,7 +1085,38 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
         e."shiftId",
         sh."name"
     `)
-    : Promise.resolve([] as AgentDashboardRawRow[]),
+    : prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
+    SELECT
+      p."employeeId" AS "employeeId",
+      COALESCE(e."fullName", p."wbLogin") AS "employeeName",
+      COALESCE(e."wbLogin", p."wbLogin") AS "wbLogin",
+      e."supervisorId" AS "supervisorId",
+      COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+      e."shiftId" AS "shiftId",
+      COALESCE(sh."name", 'Sem turno') AS "shift",
+      p."queueId" AS "queueId",
+      COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
+      COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds",
+      ARRAY_AGG(DISTINCT p."bzDay") AS "activeDates"
+    FROM "ProductionRecord" p
+    LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
+    LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+    LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
+    WHERE p."bzDay" >= ${start}
+      AND p."bzDay" <= ${end}
+      ${ownProductionEmployeeSql}
+      ${queueSql}
+    GROUP BY
+      p."employeeId",
+      e."fullName",
+      e."wbLogin",
+      p."wbLogin",
+      e."supervisorId",
+      s."fullName",
+      e."shiftId",
+      sh."name",
+      p."queueId"
+    `),
     getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId),
     getPerformanceAgentShiftProduction({
       employees: employeeOptions.map(employee => ({ employeeId: employee.id, wbLogin: employee.wbLogin })),
@@ -1092,20 +1125,6 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     })
   ]);
   const moderationDurations = shiftProduction.durations;
-  const profileById = new Map(employeeOptions.map(employee => [employee.id, employee]));
-  for (const source of shiftProduction.production) {
-    const employee = profileById.get(source.employeeId);
-    if (!employee) continue;
-    rawRows.push({
-      employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin,
-      supervisorId: query.supervisorId ?? employee.supervisor?.id ?? null,
-      supervisor: query.supervisorId ? supervisors.find(item => item.id === query.supervisorId)?.fullName ?? "Sem supervisor" : employee.supervisor?.fullName ?? "Sem supervisor",
-      shiftId: query.shiftId ?? employee.shift?.id ?? null, shift: source.shift || employee.shift?.name || "Sem turno",
-      queueId: durationQueueIds[0], submit: Number(source.submit), moderationSeconds: Number(source.seconds),
-      activeDates: [parseDate(source.shiftDate)!]
-    });
-  }
-
   const aggregateMap = new Map<string, {
     employeeId: string | null;
     employeeName: string;
@@ -1203,8 +1222,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     ? 1
     : Math.min(totalPages, Math.max(1, Math.trunc(query.page ?? 1)));
   const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
-  // Keep original KPI formulas and unrounded source values; the Agents date
-  // filter now consistently selects production by the assigned Shift Date.
+  // Moderation Duration enriches rows; it must not replace the original
+  // production population or change Submit, output, AHT and SLA filtering.
   const submit = baselineRows.reduce((total, row) => total + row.submit, 0);
   const moderationSeconds = baselineRows.reduce((total, row) => total + row.moderationSeconds, 0);
   const activeDates = new Set(baselineRows.flatMap((row) => Array.from(row.activeDates)));
@@ -1351,6 +1370,8 @@ async function getPerformanceAgentExportRowsByPeriod(
   const requestedLob = dashboard.selectedLob;
   const role = normalizeRole(user.role.name);
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
+  const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
   const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const bucketSql = performanceAgentBucketSql(view, requestedLob === "CEC" ? "cec" : "production");
   const durationQueueIds = queueIdsByPerformanceLob(requestedLob).filter(queueId =>
@@ -1366,6 +1387,7 @@ async function getPerformanceAgentExportRowsByPeriod(
   });
 
   type AgentExportRawRow = {
+    legacyMetricsAvailable?: boolean;
     periodStart: Date;
     employeeId: string | null;
     employeeName: string;
@@ -1417,7 +1439,40 @@ async function getPerformanceAgentExportRowsByPeriod(
             e."shiftId",
             sh."name"
         `)
-      : Promise.resolve([] as AgentExportRawRow[]),
+      : prisma.$queryRaw<AgentExportRawRow[]>(Prisma.sql`
+          SELECT
+            ${bucketSql} AS "periodStart",
+            p."employeeId" AS "employeeId",
+            COALESCE(e."fullName", p."wbLogin") AS "employeeName",
+            COALESCE(e."wbLogin", p."wbLogin") AS "wbLogin",
+            e."supervisorId" AS "supervisorId",
+            COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+            e."shiftId" AS "shiftId",
+            COALESCE(sh."name", 'Sem turno') AS "shift",
+            p."queueId" AS "queueId",
+            COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
+            COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds",
+            ARRAY_AGG(DISTINCT p."bzDay") AS "activeDates"
+          FROM "ProductionRecord" p
+          LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
+          LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+          LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
+          WHERE p."bzDay" >= ${start}
+            AND p."bzDay" <= ${end}
+            ${ownProductionEmployeeSql}
+            ${queueSql}
+          GROUP BY
+            ${bucketSql},
+            p."employeeId",
+            e."fullName",
+            e."wbLogin",
+            p."wbLogin",
+            e."supervisorId",
+            s."fullName",
+            e."shiftId",
+            sh."name",
+            p."queueId"
+        `),
     getPerformanceAgentQualityByPeriodIdentity(requestedLob, start, end, ownEmployeeId, view),
     getPerformanceAgentShiftProduction({
       employees: profiles.map(employee => ({ employeeId: employee.id, wbLogin: employee.wbLogin })),
@@ -1426,22 +1481,32 @@ async function getPerformanceAgentExportRowsByPeriod(
     })
   ]);
   const profileById = new Map(profiles.map(employee => [employee.id, employee]));
+  const profileByLogin = new Map(profiles.map(employee => [normalizeModerationLogin(employee.wbLogin), employee]));
+  const moderationByPeriodEmployee = new Map<string, number>();
+  const existingPeriods = new Set(rawRows.map(row => {
+    const employeeId = profileByLogin.get(normalizeModerationLogin(row.wbLogin))?.id ?? row.employeeId;
+    return `${formatDateKey(row.periodStart)}:${employeeId}`;
+  }));
   for (const source of shiftProduction.production) {
     const employee = profileById.get(source.employeeId);
     if (!employee) continue;
-    const shiftDate = parseDate(source.shiftDate)!;
+    const periodStart = dashboardViewPeriod(parseDate(source.shiftDate)!, view).start;
+    const key = `${formatDateKey(periodStart)}:${employee.id}`;
+    moderationByPeriodEmployee.set(key, (moderationByPeriodEmployee.get(key) ?? 0) + Number(source.seconds));
+    if (existingPeriods.has(key)) continue;
+    existingPeriods.add(key);
+    // Keep night-only Shift Dates without moving or inventing legacy values.
     rawRows.push({
-      periodStart: dashboardViewPeriod(shiftDate, view).start,
-      employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin,
-      supervisorId: query.supervisorId ?? employee.supervisor?.id ?? null,
-      supervisor: query.supervisorId ? profiles.find(item => item.supervisor?.id === query.supervisorId)?.supervisor?.fullName ?? "Sem supervisor" : employee.supervisor?.fullName ?? "Sem supervisor",
-      shiftId: query.shiftId ?? employee.shift?.id ?? null, shift: source.shift || employee.shift?.name || "Sem turno",
-      queueId: durationQueueIds[0], submit: Number(source.submit), moderationSeconds: Number(source.seconds), activeDates: [shiftDate]
+      legacyMetricsAvailable: false,
+      periodStart, employeeId: employee.id, employeeName: employee.fullName, wbLogin: employee.wbLogin,
+      supervisorId: employee.supervisor?.id ?? null, supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+      shiftId: employee.shift?.id ?? null, shift: employee.shift?.name ?? "Sem turno",
+      queueId: durationQueueIds[0], submit: 0, moderationSeconds: 0, activeDates: []
     });
   }
-
   const aggregateMap = new Map<string, {
     periodStart: Date;
+    legacyMetricsAvailable: boolean;
     employeeId: string | null;
     employeeName: string;
     wbLogin: string;
@@ -1463,6 +1528,7 @@ async function getPerformanceAgentExportRowsByPeriod(
     const key = `${periodKey}:${identity}:${lob}`;
     const current = aggregateMap.get(key) ?? {
       periodStart: row.periodStart,
+      legacyMetricsAvailable: row.legacyMetricsAvailable !== false,
       employeeId: row.employeeId,
       employeeName: row.employeeName,
       wbLogin: row.wbLogin,
@@ -1496,7 +1562,9 @@ async function getPerformanceAgentExportRowsByPeriod(
     const quality = qualityByPeriodIdentity.get(`${periodKey}:${identity}`)
       ?? qualityByPeriodIdentity.get(`${periodKey}:wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
     const bounds = performanceAgentBucketBounds(row.periodStart, view, start, end);
+    const employeeId = profileByLogin.get(normalizeModerationLogin(row.wbLogin))?.id ?? row.employeeId;
     return [{
+      legacyMetricsAvailable: row.legacyMetricsAvailable,
       periodStart: formatDateKey(bounds.start),
       periodEnd: formatDateKey(bounds.end),
       employeeName: row.employeeName,
@@ -1508,7 +1576,7 @@ async function getPerformanceAgentExportRowsByPeriod(
       outputAveragePerDay: round2(row.outputAveragePerDay),
       daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
-      moderationDuration: formatModerationDuration(requestedLob === "CEC" ? null : row.moderationSeconds),
+      moderationDuration: formatModerationDuration(moderationByPeriodEmployee.get(`${periodKey}:${employeeId}`)),
       ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
       cpdAverage: requestedLob === "CEC" ? round2(row.outputAveragePerDay) : 0,
       cpdTickets: requestedLob === "CEC" ? Math.round(row.submit) : 0,

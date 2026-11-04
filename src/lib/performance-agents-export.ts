@@ -1,6 +1,7 @@
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export type PerformanceAgentExportRow = {
+  legacyMetricsAvailable?: boolean;
   periodStart: string;
   periodEnd: string;
   employeeName: string;
@@ -69,11 +70,11 @@ export function buildPerformanceAgentsExportPayload(input: {
       agent.lob,
       agent.supervisor,
       agent.shift,
-      agent.submit,
-      agent.outputAveragePerDay,
-      agent.daysWithData,
-      agent.moderationSeconds,
-      agent.ahtSeconds,
+      agent.legacyMetricsAvailable === false ? "Sem dados" : agent.submit,
+      agent.legacyMetricsAvailable === false ? "Sem dados" : agent.outputAveragePerDay,
+      agent.legacyMetricsAvailable === false ? "Sem dados" : agent.daysWithData,
+      agent.legacyMetricsAvailable === false ? "Sem dados" : agent.moderationSeconds,
+      agent.legacyMetricsAvailable === false ? "Sem dados" : agent.ahtSeconds,
       agent.cpdAverage ?? 0,
       agent.cpdTickets ?? 0,
       agent.cpdDays ?? 0,

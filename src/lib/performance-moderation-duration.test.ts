@@ -24,6 +24,8 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
   const db = await PGlite.create();
   t.after(() => db.close());
   await db.exec(`
+    CREATE TABLE "EmployeeProfile" (id text primary key, "fullName" text, "wbLogin" text, "supervisorId" text, "shiftId" text);
+    CREATE TABLE "Shift" (id text primary key, name text);
     CREATE TABLE "PerformanceImportBatch" (id text primary key, status text);
     CREATE TABLE "ProductionRecord" (
       id text primary key, "productionKey" text unique, "wbLogin" text, "employeeId" text,
@@ -35,7 +37,9 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
   const sqlValues = (values: unknown[]) => values.map(value => value instanceof Date ? value.toISOString() : value);
 
   async function fixture(c: TestContext, schedules: ModerationSchedule[] = [slot()]) {
-    await db.exec('TRUNCATE "ProductionRecord", "PerformanceImportBatch"');
+    await db.exec(`TRUNCATE "ProductionRecord", "PerformanceImportBatch", "EmployeeProfile", "Shift";
+      INSERT INTO "Shift" VALUES ('morning','Manhã'),('afternoon','Tarde'),('night','Noite');
+      INSERT INTO "EmployeeProfile" VALUES ('a','Agente','wb_a','sup','morning'),('sup','Supervisor','sup',null,null);`);
     mockPrismaDelegate(c, "schedule", { findMany: async (args: any) => schedules.filter(s =>
       args.where.employeeId.in.includes(s.employeeId)
       && s.date >= args.where.date.gte && s.date <= args.where.date.lte
@@ -201,8 +205,8 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
       shift: { id: "morning", name: "Manhã" }, supervisor: { id: "sup", fullName: "Supervisor" }
     }] });
     c.mock.method(prisma, "$queryRaw", async (query: any) => {
-      if (query.text.includes("WITH identities AS")) return (await db.query(query.text, sqlValues(query.values))).rows as any;
       if (query.text.includes('FROM "QualityRecord"')) return [{ periodStart: date, employeeId: null, wbLogin: "WB_A", correct: 9, total: 10 }] as any;
+      if (query.text.includes("WITH identities AS") || query.text.includes('FROM "ProductionRecord"')) return (await db.query(query.text, sqlValues(query.values))).rows as any;
       return [];
     });
     const actor = { role: "ADMIN" as const, name: "Admin", email: "admin@example.test" };
@@ -233,15 +237,71 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
     const overnight = await getPerformanceAgentsDashboard(actor, { ...input, shiftId: undefined, search: undefined });
     assert.equal(overnight.agents[0].moderationDuration.duration, "01:00:00");
     assert.equal(overnight.agents[0].moderationDuration.byShiftDate[0].shiftDate, day);
-    assert.equal(overnight.agents[0].legacyMetricsAvailable, true);
-    assert.equal(overnight.agents[0].submit, 1);
+    assert.equal(overnight.agents[0].legacyMetricsAvailable, false);
+    assert.equal(overnight.agents[0].submit, 0);
+    assert.equal(overnight.summary.submit, 0);
     assert.equal(overnight.dataRange?.startDate, "2026-10-25");
     mockPrismaDelegate(c, "auditLog", { create: async () => ({}) });
     const exported = await exportPerformanceAgentsXlsxData(actor, { ...input, view: "daily", shiftId: undefined });
     assert.equal(exported.headers[20], "Moderation Duration");
     assert.equal(exported.rows[0][0], day);
-    assert.equal(exported.rows[0][8], 1);
-    assert.equal(exported.rows[0][11], 3600);
+    assert.equal(exported.rows[0][8], "Sem dados");
+    assert.equal(exported.rows[0][11], "Sem dados");
     assert.equal(exported.rows[0][20], "01:00:00");
+  });
+
+  await t.test("SLA, afternoon and night rows retain the original production even without a schedule", async c => {
+    await fixture(c);
+    await db.exec(`INSERT INTO "EmployeeProfile" VALUES
+      ('b','Agente Tarde','wb_b','sup','afternoon'),('c','Agente Noite','wb_c','sup','night');
+      INSERT INTO "ProductionRecord" (id,"wbLogin","employeeId","bzTime","bzDay","queueId","submitNum","moderationSeconds") VALUES
+      ('m','wb_a','a','2026-10-26 09:00','2026-10-26','5860',10,600),
+      ('t','wb_b','b','2026-10-26 15:00','2026-10-26','5860',20,1200),
+      ('t30','wb_b','b','2026-10-26 16:00','2026-10-26','5857',40,2400),
+      ('n','wb_c','c','2026-10-26 23:00','2026-10-26','5860',30,1800),
+      ('unknown','wb_external',null,'2026-10-26 21:00','2026-10-26','5860',5,300),
+      ('na','wb_b','b','2026-10-26 20:00','2026-10-26','unknown_queue',7,420);`);
+    const date = new Date(day + "T00:00:00Z");
+    const profiles = [
+      { id: "a", fullName: "Agente", wbLogin: "wb_a", shift: { id: "morning", name: "Manhã" } },
+      { id: "b", fullName: "Agente Tarde", wbLogin: "wb_b", shift: { id: "afternoon", name: "Tarde" } },
+      { id: "c", fullName: "Agente Noite", wbLogin: "wb_c", shift: { id: "night", name: "Noite" } }
+    ].map(profile => ({ ...profile, lob: { name: "VIDEO" }, supervisor: { id: "sup", fullName: "Supervisor" } }));
+    mockPrismaDelegate(c, "user", { findUnique: async () => ({ id: "admin", status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" } }) });
+    mockPrismaDelegate(c, "productionRecord", { aggregate: async () => ({ _min: { bzDay: date }, _max: { bzDay: date } }) });
+    mockPrismaDelegate(c, "performanceCecCpdRecord", { aggregate: async () => ({ _min: {}, _max: {} }) });
+    mockPrismaDelegate(c, "employeeProfile", { findMany: async () => profiles });
+    mockPrismaDelegate(c, "auditLog", { create: async () => ({}) });
+    c.mock.method(prisma, "$queryRaw", async (query: any) => {
+      if (/FROM "(QualityRecord|TnsQualityRecord|CecQualityRecord)"/.test(query.text)) return [];
+      return (await db.query(query.text, sqlValues(query.values))).rows as any;
+    });
+    const actor = { role: "ADMIN" as const, name: "Admin", email: "admin@example.test" };
+    const input = { lob: "VIDEO", startDate: day, endDate: day, view: "daily" as const };
+    const all = await getPerformanceAgentsDashboard(actor, input);
+    assert.equal(all.summary.submit, 105);
+    assert.equal(all.summary.ahtSeconds, 60);
+    assert.equal(all.summary.agents, 4);
+    assert.equal(all.agents.find(row => row.employeeId === "b")?.moderationDuration.duration, "Sem dados");
+    assert.equal(all.agents.find(row => row.employeeId === "c")?.legacyMetricsAvailable, true);
+    assert.equal(all.agents.find(row => row.wbLogin === "wb_external")?.submit, 5);
+    const fifteen = await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 15 });
+    assert.equal(fifteen.summary.submit, 65);
+    assert.equal(fifteen.agents.find(row => row.employeeId === "a")?.moderationDuration.duration, "00:10:00");
+    const thirty = await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 30 });
+    assert.equal(thirty.summary.submit, 40);
+    assert.deepEqual(thirty.agents.map(row => row.wbLogin), ["wb_b"]);
+    assert.equal((await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 1440 })).agents.length, 0);
+    const unmapped = await getPerformanceAgentsDashboard(actor, { ...input, lob: "N/A" });
+    assert.equal(unmapped.summary.submit, 7);
+    assert.equal(unmapped.agents[0].wbLogin, "wb_b");
+    assert.equal((await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 15, shiftId: "afternoon", supervisorId: "sup" })).summary.submit, 20);
+    assert.equal((await getPerformanceAgentsDashboard(actor, { ...input, slaTargetMinutes: 15, shiftId: "night", search: "WB_C" })).summary.submit, 30);
+    const exported = await exportPerformanceAgentsXlsxData(actor, { ...input, slaTargetMinutes: 15, shiftId: "afternoon", supervisorId: "sup" });
+    assert.equal(exported.rows.length, 1);
+    assert.equal(exported.rows[0][4], "wb_b");
+    assert.equal(exported.rows[0][8], 20);
+    assert.equal(exported.rows[0][12], 60);
+    assert.equal(exported.rows[0][20], "Sem dados");
   });
 });
