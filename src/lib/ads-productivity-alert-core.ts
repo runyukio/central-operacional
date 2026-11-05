@@ -53,8 +53,9 @@ function normalized(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 }
 
-function eligible(row: AlertReading) {
-  return normalized(row.lob) === "ads" && normalized(row.personType) === "agente"
+export type OperationalAlertLob = "ADS" | "VIDEO" | "COMMENTS";
+function eligible(row: AlertReading, lob: OperationalAlertLob) {
+  return normalized(row.lob) === normalized(lob) && normalized(row.personType) === "agente"
     && normalized(row.crossingStatus) === "encontrado" && isRealtimeActiveEmployeeStatus(row.employeeStatus)
     && Boolean(row.employeeId);
 }
@@ -67,7 +68,8 @@ export function evaluateAdsProductivityHour(
   readings: AlertReading[],
   interval: ReturnType<typeof latestClosedAlertHour>,
   presenceOnly = false,
-  checkpointMinutes: 5 | 30 = 30
+  checkpointMinutes: 5 | 30 = 30,
+  lob: OperationalAlertLob = "ADS"
 ) {
   const start = parseAlertCycle(interval.start);
   if (parseAlertCycle(interval.middle) - start !== HOUR / 2 || parseAlertCycle(interval.end) - start !== HOUR) {
@@ -86,12 +88,12 @@ export function evaluateAdsProductivityHour(
   let outsideInterval = 0;
   for (const [employeeId, history] of byAgent) {
     const current = history.get(interval.end)?.[0];
-    if (!current || !eligible(current)) continue;
+    if (!current || !eligible(current,lob)) continue;
     if (cycles.some((cycle) => history.get(cycle)?.length !== 1)) {
       issues.push({ employeeId, reason: "missing_or_duplicate_checkpoint" }); continue;
     }
     const points = cycles.map((cycle) => history.get(cycle)![0]);
-    if (points.some((point) => !eligible(point) || !point.sourceValid || !validNumber(point.submit)
+    if (points.some((point) => !eligible(point,lob) || !point.sourceValid || !validNumber(point.submit)
       || !Number.isInteger(point.submit) || !validNumber(point.moderationMs))) {
       issues.push({ employeeId, reason: "invalid_or_missing_source" }); continue;
     }

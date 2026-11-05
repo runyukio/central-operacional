@@ -47,7 +47,7 @@ export function OperationalReportImage({ report, page, preview = false }: { repo
   const widths = four ? ["48%","17%","18%","17%"] : ["52%","22%","26%"];
   return <div style={{ display:"flex",flexDirection:"column",width:"100%",height:"100%",padding:32,background:"#F4F7FE",fontFamily:"Inter",color:COLORS.text }}>
     <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:20 }}>
-      <div style={{ display:"flex",fontWeight:700,color:COLORS.blue,letterSpacing:1.5 }}>{preview ? "ADS · TESTE DE VALIDAÇÃO" : "ADS · ALERTA OPERACIONAL"}</div>
+      <div style={{ display:"flex",fontWeight:700,color:COLORS.blue,letterSpacing:1.5 }}>{`${report.lob??"ADS"} · ${preview ? "TESTE DE VALIDAÇÃO" : "ALERTA OPERACIONAL"}`}</div>
       <div style={{ display:"flex",fontSize:17,color:COLORS.muted }}>{`Página ${page.page}/${page.count}`}</div>
     </div>
     <div style={{ display:"flex",fontSize:39,fontWeight:700,marginTop:12 }}>{clean(report.title,80)}</div>
@@ -62,7 +62,7 @@ export function OperationalReportImage({ report, page, preview = false }: { repo
     {page.groups.map((group,groupIndex) => <div key={groupIndex} style={{ display:"flex",flexDirection:"column",border:"1px solid #E1E8F5",borderRadius:13,overflow:"hidden",marginBottom:16,background:"white" }}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",height:50,padding:"0 20px",background:"#EAF0FF",color:"#2B48B8" }}>
         <div style={{ display:"flex",fontSize:22,fontWeight:700 }}>{clean(group.title,72)}</div>
-        <div style={{ display:"flex",fontSize:16 }}>{`${group.rows.length} ${report.kind==="required"?"turno":report.kind==="volume"?"referência":report.pending?"registro":"agente"}${group.rows.length===1?"":"s"}`}</div>
+        <div style={{ display:"flex",fontSize:16 }}>{`${group.rows.length} ${report.kind==="required"?"turno":report.kind==="volume"||(report.lob&&report.lob!=="ADS"&&group.rows.every(row=>row.name===report.lob))?"referência":report.pending?"registro":"agente"}${group.rows.length===1?"":"s"}`}</div>
       </div>
       <div style={{ display:"flex",height:30,alignItems:"center",padding:"0 20px",fontSize:14,fontWeight:700,color:COLORS.muted }}>
         {report.headings.map((heading,index) => <div key={index} style={{ display:"flex",width:widths[index] }}>{heading}</div>)}

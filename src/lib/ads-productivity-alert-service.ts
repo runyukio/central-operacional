@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   AlertReading, KimAlertDeliveryPayload, alertCycle, buildAdsAlertMessages, buildAdsAlertSummary, buildAdsAlertMentions, evaluateAdsProductivityHour,
-  kimAcceptedMessageKey, latestClosedAlertHour, parseAlertCycle, validateAdsAlertWebhook
+  kimAcceptedMessageKey, latestClosedAlertHour, parseAlertCycle, validateAdsAlertWebhook, type OperationalAlertLob
 } from "@/lib/ads-productivity-alert-core";
 
 type SourceRow = Omit<AlertReading, "sourceValid" | "observedPresence"> & {
@@ -59,7 +59,7 @@ export function prepareAlertReadings(rows: SourceRow[], rawRows: RawSource[]): A
   });
 }
 
-export async function readAdsProductivityAlert(now = new Date(), presenceOnly = true) {
+export async function readAdsProductivityAlert(now = new Date(), presenceOnly = true, lob: OperationalAlertLob = "ADS") {
   const interval = latestClosedAlertHour(now);
   const cycles = Array.from({ length: 13 }, (_, index) => alertCycle(parseAlertCycle(interval.start) + index * 300_000));
   const slots = cycles.map((cycle) => ({ cycle,
@@ -90,7 +90,7 @@ export async function readAdsProductivityAlert(now = new Date(), presenceOnly = 
     JOIN picked p ON p."batchId" = a."batchId" AND p."sourceCycle" = a."cycleDownload"
     LEFT JOIN "EmployeeProfile" e ON e.id = a."employeeId" AND e."deletedAt" IS NULL
     LEFT JOIN "EmployeeProfile" s ON s.id = e."supervisorId" AND s."deletedAt" IS NULL
-    WHERE upper(trim(a.lob)) = 'ADS'
+    WHERE upper(trim(a.lob)) = ${lob}
     ORDER BY p.cycle, a."wbLoginNormalized", a.id
   `);
   const available = new Set(rows.map((row) => row.cycle));
@@ -104,8 +104,8 @@ export async function readAdsProductivityAlert(now = new Date(), presenceOnly = 
   const readings = prepareAlertReadings(rows, rawRows);
   // The confirmed rule excludes zero-submit agents altogether. A positive valid
   // submit delta itself proves activity, so capture/schedules need not be queried.
-  const result = evaluateAdsProductivityHour(readings, interval, presenceOnly, 5);
-  return { status: "ready" as const, result, messages: buildAdsAlertMessages(result),
+  const result = evaluateAdsProductivityHour(readings, interval, presenceOnly, 5,lob);
+  return { status: "ready" as const, result, messages: lob === "ADS" ? buildAdsAlertMessages(result) : [],
     sourceBatchIds: [...new Set(rows.map((row) => row.batchId))] };
 }
 
