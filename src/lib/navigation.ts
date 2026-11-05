@@ -64,6 +64,7 @@ export const navSections: NavSection[] = [
     label: "Rotina",
     items: [
       { label: "Meu Espaço", href: "/meu-espaco", icon: "LayoutDashboard", roles: [...meuEspacoRoles] },
+      { label: "Meu Real Time", href: "/meu-real-time", icon: "MonitorCog", roles: personalRoles },
       { label: "Minhas Horas", href: "/minhas-horas", icon: "Clock", roles: personalRoles },
       { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: rolesWithCapability("WORK_HOURS_VIEW") },
       { label: "Report de Turno", href: "/report-turno", icon: "ClipboardCheck", roles: shiftReportRoles },
@@ -98,6 +99,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
   return navItems.filter((item) => {
     if (item.hidden) return false;
     if (item.href === "/meu-espaco") return canAccessMeuEspaco(permissionUser);
+    if (item.href === "/meu-real-time") return canAccessOwnRealtimeHours(permissionUser);
     if (item.href === "/captura-horas/atividade") return canAccessRealtimeHoursActivity(permissionUser);
     if (item.href === "/captura-horas") return canAccessRealtimeHoursCapture(permissionUser);
     if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
@@ -128,6 +130,7 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
 
   if (pathname === "/" || pathname === "/alterar-senha") return true;
+  if (pathname === "/meu-real-time" || pathname.startsWith("/meu-real-time/") || pathname === "/api/realtime/me" || pathname.startsWith("/api/realtime/me/")) return canAccessOwnRealtimeHours(permissionUser);
   if (pathname === "/weekly-quality-report" || pathname.startsWith("/weekly-quality-report/") || pathname === "/api/quality-weekly" || pathname.startsWith("/api/quality-weekly/")) return normalizedRole === "ADMIN" || normalizedRole === "WFM";
   if (pathname === "/api/employees/reset-password" || pathname.startsWith("/api/employees/reset-password/")) return canResetEmployeePassword(permissionUser);
   if (pathname === "/meu-espaco" || pathname.startsWith("/meu-espaco/") || pathname === "/api/meu-espaco" || pathname.startsWith("/api/meu-espaco/")) return canAccessMeuEspaco(permissionUser);
