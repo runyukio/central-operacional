@@ -8,6 +8,7 @@ import {
   currencyEquals,
   extractBillingFiscalInvoice,
   extractBillingFiscalFieldsFromText,
+  findBillingFiscalInvoiceNumberOcrRegion,
   hashBillingFiscalFile,
   validateBillingFiscalComplianceFields,
   verifyBillingFiscalValidationToken
@@ -405,6 +406,50 @@ test("extrai chave, número, descrição e valor da NFS-e nacional", () => {
     taxationCode: "17.02.01",
     nbsCode: "1.1703.99.00"
   });
+});
+
+for (const invoiceNumber of ["1", "987654", "12345678901234567890"]) {
+  test(`extrai o número ${invoiceNumber} do DANFSe v2 com cabeçalhos em linhas separadas`, () => {
+    const fields = extractBillingFiscalFieldsFromText(`DANFSe v2.0\n${sampleText}`.replace(
+      "Número da NFS-e Competência da NFS-e\n5 23/07/2026",
+      `NÚMERO DA NFS-E\n\nCOMPETÊNCIA DA NFS-E\n\nDATA E HORA DA EMISSÃO DA NFS-E\n\n${invoiceNumber} 23/07/2026 23/07/2026 10:13:02\nNÚMERO DA DPS\n100000000000001`
+    ));
+    assert.equal(fields.invoiceNumber, invoiceNumber);
+    assert.equal(fields.serviceAmount, 457.24);
+  });
+}
+
+test("não confunde datas, número da DPS ou um número longo com o número ausente da NFS-e", () => {
+  for (const value of ["", "05/11/2026 05/11/2026 10:13:02", "123456789012345678901"]) {
+    const fields = extractBillingFiscalFieldsFromText(
+      `DANFSe v2.0\nNÚMERO DA NFS-E\nCOMPETÊNCIA DA NFS-E\nDATA E HORA DA EMISSÃO DA NFS-E\n${value}\nNÚMERO DA DPS\n100000000000001`
+    );
+    assert.equal(fields.invoiceNumber, "", value);
+  }
+});
+
+for (const separator of ["/", "|", "["]) {
+  test(`lê o valor da operação do DANFSe v2 com separador ${separator} antes do líquido e das retenções`, () => {
+    const fields = extractBillingFiscalFieldsFromText(sampleText.replace(
+      "Valor do Serviço Desconto Incondicionado\nR$ 457,24 -",
+      `VALOR TOTAL DA NFS-E\nTotal das Retenções\nR$ 50,00\nValor da Operação ${separator} Serviço\nR$ 457,24\nValor Líquido da NFS-e\nR$ 407,24\nTotal do IBS/CBS\nR$ 0,00`
+    ));
+    assert.equal(fields.serviceAmount, 457.24);
+  });
+}
+
+test("localiza a releitura do número pela posição do rótulo, mesmo se o OCR juntar o dígito a NÚMERO", () => {
+  const tsv = [
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+    "5\t1\t9\t1\t1\t1\t34\t132\t61\t26\t96\tNÚMERO",
+    "5\t1\t9\t1\t1\t2\t100\t135\t19\t10\t96\tDA",
+    "5\t1\t9\t1\t1\t3\t124\t135\t41\t10\t96\tNFS-E"
+  ].join("\n");
+  assert.deepEqual(findBillingFiscalInvoiceNumberOcrRegion(tsv), { left: 34, top: 147, width: 210, height: 20 });
+  assert.equal(findBillingFiscalInvoiceNumberOcrRegion(tsv.replace("NFS-E", "DPS")), null);
+  assert.equal(findBillingFiscalInvoiceNumberOcrRegion(tsv.replace("124\t135", "124\t235")), null);
+  assert.equal(findBillingFiscalInvoiceNumberOcrRegion(tsv.replace("34\t132", "NaN\t132")), null);
+  assert.equal(findBillingFiscalInvoiceNumberOcrRegion(""), null);
 });
 
 test("extrai identificador, número e valor da NFS-e municipal de São Paulo", () => {
