@@ -27,6 +27,25 @@ test("resolve as categorias principais por cargo/função", () => {
   assert.equal(resolveBillingOmieMainCategory("WFM", "RTA"), "2.10.88");
 });
 
+test("Gerente usa provisoriamente a categoria de Coordenador, preservando rateio e departamento por LOB", () => {
+  for (const roleTitle of ["Gerente", " GERENTE ", "gerente"]) {
+    for (const lob of ["ALL", "ADS", "CEC", "TNS"]) {
+      const input = { lob, finalAmount: 1950, bonusAmount: 150, campaignAmount: 100, advanceAmount: 300 };
+      const allocation = buildBillingOmieAllocation({ ...input, roleTitle });
+      assert.deepEqual(allocation, buildBillingOmieAllocation({ ...input, roleTitle: "Coordenador" }));
+      assert.equal(allocation.mainCategoryCode, "2.10.89");
+      assert.equal(allocation.documentAmount, 1950);
+      assert.equal(allocation.documentTypeCode, "NF");
+      assert.deepEqual(allocation.categories, [
+        { code: "2.10.89", value: 1700 },
+        { code: "2.02.04", value: 150 },
+        { code: "2.02.99", value: 100 }
+      ]);
+    }
+  }
+  assert.equal(resolveBillingOmieDepartment("ALL", "Gerente").code, BILLING_OMIE_DEPARTMENT_CODES.OPERATIONS);
+});
+
 test("rateia IT/TI como Analista de Dados por cargo ou skill, mantendo bônus e campanha separados", () => {
   for (const alias of ["IT", "TI", "Logística/TI", "Logistics IT"]) {
     for (const assignment of [{ roleTitle: alias }, { roleTitle: "WFM", skill: alias }]) {

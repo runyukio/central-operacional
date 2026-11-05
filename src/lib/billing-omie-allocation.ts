@@ -24,6 +24,8 @@ const MAIN_CATEGORY_BY_ROLE: Record<string, string> = {
   coordinator: "2.10.89",
   coordenador: "2.10.89",
   coordenadora: "2.10.89",
+  // Mapeamento provisório autorizado: Gerente usa a categoria de Coordenador.
+  gerente: "2.10.89",
   qualidade: "2.10.98",
   quality: "2.10.98",
   supervisor: "2.10.97",
@@ -90,6 +92,7 @@ const DEPARTMENT_BY_ROLE: Record<string, keyof typeof BILLING_OMIE_DEPARTMENT_CO
   agent: "OPERATIONS",
   coordenador: "OPERATIONS",
   coordenadora: "OPERATIONS",
+  gerente: "OPERATIONS",
   qualidade: "OPERATIONS",
   quality: "OPERATIONS",
   supervisor: "OPERATIONS",
