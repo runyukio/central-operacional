@@ -264,6 +264,61 @@ test("compacta a nota fiscal e a anexa ao lançamento de Contas a Pagar", async 
   assert.equal(result.alreadyAttached, false);
 });
 
+for (const status of [200, 500]) {
+  test(`anexa a nota quando a primeira página de anexos está vazia (HTTP ${status})`, async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push(body);
+      if (body.call === "ListarClientes") return Response.json({ clientes_cadastro: [{ codigo_cliente_omie: 4214850, cnpj_cpf: input.cnpj }] });
+      if (body.call === "UpsertContaPagar") return Response.json({ codigo_lancamento_omie: 987654 });
+      if (body.call === "ListarAnexo") return Response.json({ faultstring: "ERROR: Não existem registros para a página [1]!" }, { status });
+      return Response.json({ nIdAnexo: 7654321, cCodStatus: "0" });
+    };
+    const result = await upsertBillingAccountPayable(input, { config, fetchImpl: fetchImpl as typeof fetch });
+    const attachment = await attachBillingInvoiceDocument({
+      employeeInvoiceId: input.employeeInvoiceId, documentHash: "document-hash", launchCode: result.launchCode,
+      fileName: "nota.pdf", file: Buffer.from("nota fiscal")
+    }, { config, fetchImpl: fetchImpl as typeof fetch });
+    assert.deepEqual(requests.map((request) => request.call), ["ListarClientes", "UpsertContaPagar", "ListarAnexo", "IncluirAnexo"]);
+    assert.equal(attachment.attachmentId, "7654321");
+    assert.equal(attachment.alreadyAttached, false);
+    assert.equal((requests[3].param as Array<Record<string, unknown>>)[0].nId, 987654);
+  });
+}
+
+test("explica fornecedor ausente e não cria lançamento quando a consulta de clientes está vazia", async () => {
+  for (const response of [Response.json({ clientes_cadastro: [] }), Response.json({ faultstring: "ERROR: Não existem registros para a página [1]!" }, { status: 500 })]) {
+    const calls: string[] = [];
+    await assert.rejects(upsertBillingAccountPayable(input, { config, fetchImpl: (async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)).call);
+      return response;
+    }) as typeof fetch }), /Fornecedor com CNPJ .* não encontrado no Omie\. Confira o CNPJ e o cadastro/);
+    assert.deepEqual(calls, ["ListarClientes"]);
+  }
+});
+
+test("preserva erros de autenticação e páginas diferentes na consulta de anexos", async () => {
+  for (const faultstring of ["Falha de autenticação", "ERROR: Não existem registros para a página [2]!", "ERROR: Não existem registros para a página [1]! Acesso negado."]) {
+    const calls: string[] = [];
+    await assert.rejects(attachBillingInvoiceDocument({
+      employeeInvoiceId: input.employeeInvoiceId, launchCode: "987654", fileName: "nota.pdf", file: Buffer.from("nota")
+    }, { config, fetchImpl: (async (_url, init) => {
+      calls.push(JSON.parse(String(init?.body)).call);
+      return Response.json({ faultstring }, { status: 500 });
+    }) as typeof fetch }), (error: unknown) => error instanceof OmieIntegrationError && error.message === faultstring);
+    assert.deepEqual(calls, ["ListarAnexo"]);
+  }
+});
+
+test("não ignora a mesma mensagem quando ocorre na inclusão do anexo", async () => {
+  await assert.rejects(attachBillingInvoiceDocument({
+    employeeInvoiceId: input.employeeInvoiceId, launchCode: "987654", fileName: "nota.pdf", file: Buffer.from("nota")
+  }, { config, fetchImpl: (async (_url, init) => JSON.parse(String(init?.body)).call === "ListarAnexo"
+    ? Response.json({ listaAnexos: [] })
+    : Response.json({ faultstring: "ERROR: Não existem registros para a página [1]!" }, { status: 500 })) as typeof fetch }), /Não existem registros/);
+});
+
 test("não duplica a nota fiscal quando o anexo já existe no lançamento", async () => {
   const requests: Array<Record<string, unknown>> = [];
   const integrationCode = buildOmieAttachmentIntegrationCode(input.employeeInvoiceId, "document-hash");

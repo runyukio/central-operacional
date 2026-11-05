@@ -379,10 +379,13 @@ async function findSupplierByCnpj(cnpj: string, config: OmieConfig, fetchImpl: F
     }],
     config,
     fetchImpl
-  );
+  ).catch((error: unknown) => {
+    if (isEmptyOmieFirstPage(error)) return { clientes_cadastro: [] };
+    throw error;
+  });
   const expected = normalizeBrazilianTaxId(cnpj);
   const supplier = (response.clientes_cadastro ?? []).find((item) => normalizeBrazilianTaxId(item.cnpj_cpf ?? "") === expected);
-  if (!supplier) throw new OmieIntegrationError(`Fornecedor com CNPJ ${maskCnpj(cnpj)} não encontrado no Omie.`);
+  if (!supplier) throw new OmieIntegrationError(`Fornecedor com CNPJ ${maskCnpj(cnpj)} não encontrado no Omie. Confira o CNPJ e o cadastro do fornecedor no Omie antes de tentar novamente.`);
   return supplier;
 }
 
@@ -403,8 +406,19 @@ async function findExistingAttachment(
     }],
     config,
     fetchImpl
-  );
+  ).catch((error: unknown) => {
+    // Omie reports an empty first page as a fault, including HTTP 500.
+    // A new payable has no attachments yet; continue with IncluirAnexo.
+    if (isEmptyOmieFirstPage(error)) return { listaAnexos: [] };
+    throw error;
+  });
   return (response.listaAnexos ?? []).find((attachment) => attachment.cCodIntAnexo === integrationCode) ?? null;
+}
+
+function isEmptyOmieFirstPage(error: unknown) {
+  if (!(error instanceof OmieIntegrationError)) return false;
+  const message = error.message.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  return /^(?:ERROR:\s*)?Nao existem registros para a pagina\s*\[1\][!.]?$/i.test(message);
 }
 
 async function callOmie<T>(endpoint: string, call: string, param: unknown[], config: OmieConfig, fetchImpl: FetchLike): Promise<T> {
