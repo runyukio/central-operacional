@@ -7,6 +7,7 @@ export type AdsAlertCell = { value: string; color?: "text" | "red" | "orange" | 
 export type AdsAlertRow = { name: string; detail: string; cells: AdsAlertCell[] };
 export type AdsAlertGroup = { title: string; rows: AdsAlertRow[] };
 export type AdsOperationalReport = {
+  lob?: "ADS" | "VIDEO" | "COMMENTS";
   kind: AdsAlertKind; periodKey: string; title: string; subtitle: string;
   metrics: { label: string; value: string }[]; summary: string;
   headings: string[]; groups: AdsAlertGroup[]; notes: string[]; pending?: boolean;

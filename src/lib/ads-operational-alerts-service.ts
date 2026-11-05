@@ -14,7 +14,7 @@ export type AdsOperationalDeliveryStore = {
 const store: AdsOperationalDeliveryStore = {
   async claim(key,digest) {
     try {
-      await prisma.systemConfig.create({ data: { key, description: "ADS operational report delivery receipt (private)",
+      await prisma.systemConfig.create({ data: { key, description: "Operational report delivery receipt (private)",
         value: { status: "claimed", digest, claimedAt: new Date().toISOString() } } });
       return true;
     } catch(error) {
@@ -29,7 +29,8 @@ export async function deliverOperationalReport(report: AdsOperationalReport, web
   prepare?: (report: AdsOperationalReport, webhook: string) => Promise<string[]>;
 } = {}) {
   const webhook=validateAdsAlertWebhook(webhookValue), receipt=dependencies.store??store;
-  const deliveryKey=`ads-operational-alert:v1:${report.periodKey}`;
+  const namespace=report.lob&&report.lob!=="ADS"?`${report.lob.toLowerCase()}-operational-alert`:"ads-operational-alert";
+  const deliveryKey=`${namespace}:v1:${report.periodKey}`;
   const digest=createHash("sha256").update(JSON.stringify(report)).digest("hex");
   if (!await receipt.claim(deliveryKey,digest)) return { status: "already_claimed" as const, sent: 0 };
   const messageKeys: string[]=[];
