@@ -353,11 +353,63 @@ async function recognizeBillingFiscalText(image: Buffer) {
 
   try {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-    const result = await worker.recognize(image);
-    return result.data.text;
+    const result = await worker.recognize(image, {}, { tsv: true });
+    const text = result.data.text;
+    if (!/danfse\s+v2\b/i.test(text) || findInvoiceNumber(normalizeSearchText(text))) return text;
+
+    // AUTO can merge a short invoice number into its label in DANFSe v2.
+    // Locate that label instead of relying on fixed page coordinates, then read
+    // only the value underneath it at a larger scale.
+    const region = findBillingFiscalInvoiceNumberOcrRegion(result.data.tsv ?? "");
+    if (!region) return text;
+    const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+    const source = await loadImage(image);
+    const width = Math.min(region.width, source.width - region.left);
+    const height = Math.min(region.height, source.height - region.top);
+    if (width <= 0 || height <= 0) return text;
+    const canvas = createCanvas(width * 3 + 40, height * 3 + 40);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(source, region.left, region.top, width, height, 20, 20, width * 3, height * 3);
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: "0123456789" });
+    const focused = await worker.recognize(canvas.toBuffer("image/png"));
+    const invoiceNumber = focused.data.text.trim();
+    return isValidBillingFiscalInvoiceNumber(invoiceNumber)
+      ? `${text}\nNúmero da NFS-e\n${invoiceNumber}\n`
+      : text;
   } finally {
     await worker.terminate();
   }
+}
+
+export function findBillingFiscalInvoiceNumberOcrRegion(tsv: string) {
+  const words = tsv.split(/\r?\n/).slice(1).map((line) => {
+    const cells = line.split("\t");
+    return {
+      level: cells[0],
+      left: Number(cells[6]), top: Number(cells[7]),
+      width: Number(cells[8]), height: Number(cells[9]),
+      text: normalizeSearchText(cells[11] ?? "")
+    };
+  }).filter((word) => word.level === "5" && word.text && [word.left, word.top, word.width, word.height].every(Number.isFinite));
+  for (let index = 0; index < words.length - 2; index += 1) {
+    const label = words.slice(index, index + 3);
+    if (label.map((word) => word.text).join(" ") !== "numero da nfs-e") continue;
+    // Use DA/NFS-E for the baseline: NÚMERO may include the digit below it.
+    const height = Math.max(label[1].height, label[2].height);
+    if (height <= 0 || label.some((word) => word.width <= 0)
+      || Math.abs(label[1].top - label[2].top) > height
+      || label[1].left <= label[0].left || label[2].left <= label[1].left) continue;
+    const left = label[0].left;
+    return {
+      left,
+      top: Math.round(Math.max(label[1].top + label[1].height, label[2].top + label[2].height) + height * 0.2),
+      width: Math.ceil((label[2].left + label[2].width - left) * 1.6),
+      height: height * 2
+    };
+  }
+  return null;
 }
 
 function extractBillingFiscalFieldsFromXml(xml: string) {
@@ -450,13 +502,16 @@ function findInvoiceNumber(text: string) {
   )?.[1];
   if (genericNoteInline) return genericNoteInline;
 
-  const nextLine = text.match(/numero da nfs-?e[^\n]*\n\s*(\d{1,20})\b/i)?.[1];
+  const nationalText = text.replace(/(?:competencia da nfs-?e|data e hora da emissao da nfs-?e)/gi, "");
+  const nextLine = nationalText.match(/numero da nfs-?e[^\n]*\n\s*(\d{1,20})(?![\d/])\b/i)?.[1];
   if (nextLine) return nextLine;
-  const inline = text.match(/(?:numero|n[ºo])\s*(?:da\s*)?nfs-?e\s*[:#-]?\s*(\d{1,20})\b/i)?.[1];
+  const inline = nationalText.match(/(?:numero|n[ºo])\s*(?:da\s*)?nfs-?e\s*[:#-]?\s*(\d{1,20})(?![\d/])\b/i)?.[1];
   return inline ?? "";
 }
 
 function findServiceAmount(text: string) {
+  const operation = text.match(/valor da operacao\s*[/|\[]\s*servico[\s\S]{0,260}?r?\s*\$\s*([\d.]+,\d{2})/i)?.[1];
+  if (operation) return parseCurrency(operation);
   const labeled = text.match(/valor (?:total )?d(?:o|os) servicos?[\s\S]{0,260}?r?\s*\$\s*([\d.]+,\d{2})/i)?.[1];
   if (labeled) return parseCurrency(labeled);
   const fallback = text.match(/valor (?:total )?(?:da )?nfs-?e[\s\S]{0,260}?r?\s*\$\s*([\d.]+,\d{2})/i)?.[1];
