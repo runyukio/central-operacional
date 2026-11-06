@@ -7,6 +7,7 @@ export type PersonalInterval = {
   start: string; end: string; cycle: string | null; hour?: string;
   metrics: PersonalMetrics | null; cpd: number | null;
   status: PersonalSourceStatus; capturedMs: number | null;
+  captureOnly?: boolean;
 };
 export type PersonalShift = {
   date: string; start: string; end: string; observedUntil: string; startsAt: string; endsAt: string;

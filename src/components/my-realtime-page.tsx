@@ -119,7 +119,7 @@ export function MyRealtimePage() {
             <StatCard title="Refresh" value={count(metrics?.refresh)} helper={helper} icon={RotateCw} tone="blue" />
             <StatCard title="Timeout" value={count(metrics?.timeout)} helper={helper} icon={Clock} tone="blue" />
           </>}
-          <StatCard title="Horas capturadas" value={duration(payload.capture.capturedMs)} helper="Tempo ativo do computador no turno" icon={MonitorCog} tone="blue" />
+          <StatCard title="Horas capturadas" value={duration(payload.capture.capturedMs)} helper="Mesmo total da Captura de Horas neste Shift Date" icon={MonitorCog} tone="blue" />
         </div>
 
         <div className="grid gap-3 md:grid-cols-2" aria-live="polite">
@@ -130,7 +130,7 @@ export function MyRealtimePage() {
           </div>
           <div className="rounded-xl border border-border bg-white p-3 text-xs text-muted"><div className="mb-2 flex items-center gap-2"><strong className="text-navy-950">Captura de Horas</strong><Status status={payload.capture.status} /></div>
             <p>Último sinal: {payload.capture.lastSeenAt ? dateTime.format(new Date(payload.capture.lastSeenAt)) : "Sem sinal no turno"}</p>
-            <p className="mt-1">Ajustes e horas consideradas podem ser consultados em Minhas Horas.</p>
+            <p className="mt-1">Inclui antecipação e horas extras atribuídas ao turno pela Captura de Horas. Ajustes e horas consideradas ficam em Minhas Horas.</p>
             {payload.capture.message ? <p className="mt-2 font-bold">{payload.capture.message}</p> : null}
           </div>
         </div>
@@ -156,7 +156,7 @@ export function MyRealtimePage() {
                   <td className="px-3 py-3 tabular-nums">{aht(interval.metrics?.ahtMs)}</td>
                   <td className="px-3 py-3 tabular-nums">{count(interval.metrics?.refresh)}</td><td className="px-3 py-3 tabular-nums">{count(interval.metrics?.timeout)}</td>
                 </>}
-                <td className="px-3 py-3 tabular-nums">{duration(interval.capturedMs)}</td><td className="px-3 py-3"><Status status={interval.status} /></td>
+                <td className="px-3 py-3 tabular-nums">{duration(interval.capturedMs)}</td><td className="px-3 py-3">{interval.captureOnly ? <span className="text-xs font-bold text-muted">Somente captura</span> : <Status status={interval.status} />}</td>
               </tr>)}</tbody>
             </table>
           </div> : <p className="py-8 text-center text-sm text-muted">Ainda não há ciclos disponíveis neste turno.</p>}
