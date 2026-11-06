@@ -1,6 +1,8 @@
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
 
 export const QUEUE_DICTIONARY: Record<string, string> = {
+  "600003878": "Skits TV Series Information Review Brazilian Barrel Initial",
+  "600003876": "Skits Basic Information Review of the Repertoire Brazilian Barrel Initial",
   "600003263": "Effect Philippines Home",
   "600003264": "Effect Philippines Top Perfomance",
   "600003265": "Philippines Home Unit",
