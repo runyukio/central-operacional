@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { calculatePersonalModeration, personalCapture, personalCecCpd, personalCycleTime, personalHourlyIntervals, resolvePersonalShift,
+import { calculatePersonalModeration, calculatePersonalModerationWithOvertime, personalCapture, personalCecCpd, personalCycleTime, personalHourlyIntervals, resolvePersonalShift,
   type PersonalReading, type PersonalShift } from "./my-realtime";
 
 const at = (time: string) => `2026-11-05T${time}:00-03:00`;
@@ -16,7 +16,7 @@ const slot = (date = "2026-11-05", startsAt = "08:00", endsAt = "17:00", status 
 
 test("escala diurna, meia-noite, limites e ausência de escala não estimam jornada", () => {
   assert.equal(resolvePersonalShift([slot()], new Date(at("08:00"))).shiftState, "active");
-  assert.equal(resolvePersonalShift([slot()], new Date(at("17:00"))).shiftState, "outside_shift");
+  assert.equal(resolvePersonalShift([slot()], new Date(at("17:00"))).shiftState, "after_shift");
   assert.equal(resolvePersonalShift([], new Date(at("09:00"))).shiftState, "no_schedule");
   assert.equal(resolvePersonalShift([slot(undefined, undefined, undefined, "FOLGA")], new Date(at("09:00"))).shift, null);
   assert.equal(resolvePersonalShift([slot(undefined, "", "")], new Date(at("09:00"))).shift, null);
@@ -24,6 +24,53 @@ test("escala diurna, meia-noite, limites e ausência de escala não estimam jorn
   assert.equal(overnight.shift?.date, "2026-11-04");
   assert.equal(overnight.shift?.end, iso("06:00"));
   assert.equal(resolvePersonalShift([slot(), slot("2026-11-04", "22:00", "10:00")], new Date(at("09:00"))).shift, null);
+});
+
+test("antecipação e extensão usam o mesmo turno e os limites da Captura de Horas", () => {
+  const afternoon = [slot(undefined, "14:00", "23:00")];
+  const early = resolvePersonalShift(afternoon, new Date(at("13:30")));
+  assert.equal(early.shiftState, "before_shift");
+  assert.equal(early.shift?.date, "2026-11-05");
+  assert.equal(early.shift?.startsAt, "14:00");
+  assert.equal(early.shift?.observedFrom, iso("06:00"));
+  const afterMidnight = resolvePersonalShift(afternoon, new Date("2026-11-06T01:00:00-03:00"));
+  assert.equal(afterMidnight.shiftState, "after_shift");
+  assert.equal(afterMidnight.shift?.date, "2026-11-05");
+  assert.equal(resolvePersonalShift(afternoon, new Date("2026-11-06T07:00:00-03:00")).shiftState, "outside_shift");
+});
+
+test("a fronteira entre jornadas não mistura a extensão anterior com a antecipação seguinte", () => {
+  const schedules = [slot("2026-11-04", "14:00", "23:00"), slot("2026-11-05", "08:00", "17:00")];
+  assert.equal(resolvePersonalShift(schedules, new Date(at("03:29"))).shift?.date, "2026-11-04");
+  const next = resolvePersonalShift(schedules, new Date(at("03:30")));
+  assert.equal(next.shift?.date, "2026-11-05");
+  assert.equal(next.shift?.observedFrom, iso("03:30"));
+  const tomorrow = resolvePersonalShift([slot("2026-11-06", "06:00", "15:00")], new Date(at("23:30")));
+  assert.equal(tomorrow.shift?.date, "2026-11-06");
+  assert.equal(tomorrow.shiftState, "before_shift");
+});
+
+test("produção antecipada atravessa o reset das 13h sem incluir contadores anteriores à janela", () => {
+  const early = { ...shift, start: iso("14:00"), end: iso("23:00"), startsAt: "14:00", endsAt: "23:00",
+    observedFrom: iso("12:00"), observedUntil: iso("13:30") };
+  const readings = [point("11:30", 900), point("12:00", 100, 10_000, 0, 0), point("12:30", 120, 12_000, 0, 0),
+    point("13:00", 0, 0, 0, 0), point("13:30", 41, 4_100, 0, 0)];
+  const result = calculatePersonalModerationWithOvertime(early, readings);
+  assert.equal(result.start, iso("12:00"));
+  assert.equal(result.productivity.metrics?.submit, 61);
+  assert.equal(result.productivity.metrics?.moderationMs, 6_100);
+  assert.deepEqual(result.productivity.resetCycles, ["2026-11-05 13:00"]);
+  const hourly = personalHourlyIntervals({ ...early, start: result.start }, result.intervals, "moderation");
+  assert.equal(hourly.intervals[0].metrics?.submit, 20);
+  assert.equal(hourly.intervals[1].metrics?.submit, 41);
+});
+
+test("antecipação sem leitura não estima produção nem apresenta horas futuras", () => {
+  const early = { ...shift, start: iso("14:00"), observedFrom: iso("06:00"), observedUntil: iso("13:30") };
+  const result = calculatePersonalModerationWithOvertime(early, []);
+  assert.equal(result.start, iso("13:30"));
+  assert.equal(result.productivity.metrics, null);
+  assert.ok(personalHourlyIntervals({ ...early, start: result.start }, result.intervals, "moderation").intervals.every((row) => row.start <= row.end));
 });
 
 test("converte os ciclos locais e rejeita datas inválidas", () => {

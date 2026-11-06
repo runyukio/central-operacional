@@ -88,7 +88,7 @@ export function MyRealtimePage() {
   const helper = payload?.productivity.status === "partial" ? "Parcial · intervalos disponíveis" : "Acumulado do Shift Date";
 
   return <div className="space-y-4">
-    <PageHeader title="Meu Real Time" description="Seus números no turno atual. Atualização automática a cada 2 minutos." icon={MonitorCog}
+    <PageHeader title="Meu Real Time" description="Seus números da jornada, incluindo antecipação e horas extras. Atualização automática a cada 2 minutos." icon={MonitorCog}
       actions={<div className="flex flex-wrap items-center gap-2">
         <Link href="/minhas-horas" className="premium-control inline-flex h-9 items-center px-3 text-sm font-bold">Minhas Horas</Link>
         <button type="button" onClick={() => void load(true)} disabled={loading || refreshing} className="premium-button inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold disabled:opacity-60">
@@ -105,11 +105,13 @@ export function MyRealtimePage() {
     {payload ? <>
       <div className="card flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div><p className="text-sm font-extrabold text-navy-950">{payload.employee.fullName}</p><p className="mt-1 text-xs font-medium text-muted">WB {payload.employee.wbLogin} · {payload.employee.lob}</p></div>
-        <div className="text-xs font-bold text-muted sm:text-right">{shift ? <><p>Shift Date {shift.date.split("-").reverse().join("/")} · {shift.startsAt} às {shift.endsAt}</p><p className="mt-1">Consultado até {dateTime.format(new Date(shift.observedUntil))}</p></> : "Nenhum turno em andamento"}</div>
+        <div className="text-xs font-bold text-muted sm:text-right">{shift ? <><p>Shift Date {shift.date.split("-").reverse().join("/")} · Escala {shift.startsAt} às {shift.endsAt}</p>
+          {payload.shiftState === "before_shift" || payload.shiftState === "after_shift" ? <p className="mt-1">{payload.shiftState === "before_shift" ? "Antes do horário previsto" : "Após o horário previsto"} · incluindo os dados disponíveis</p> : null}
+          <p className="mt-1">Consultado até {dateTime.format(new Date(shift.observedUntil))}</p></> : "Nenhuma jornada associada a este horário"}</div>
       </div>
 
       {!shift ? <Panel title={payload.shiftState === "no_schedule" ? "Escala indisponível" : "Fora do turno"}>
-        <p className="text-sm text-muted">{payload.shiftState === "no_schedule" ? "Não foi possível determinar seu turno pela escala. Peça ao supervisor para conferir seu cronograma." : "Não há turno em andamento na sua escala. Seus números aparecerão aqui durante a jornada."}</p>
+        <p className="text-sm text-muted">{payload.shiftState === "no_schedule" ? "Não foi possível determinar seu turno pela escala. Peça ao supervisor para conferir seu cronograma." : "Não há jornada associada a este horário na sua escala. A antecipação e as horas extras aparecem junto ao turno de origem."}</p>
       </Panel> : <>
         <div className={cn("grid gap-3 sm:grid-cols-2", cec ? "xl:grid-cols-2" : "lg:grid-cols-3 xl:grid-cols-6")}>
           {cec ? <StatCard title="CPD do último ciclo" value={count(payload.productivity.cpd)} helper="Tickets distintos · não acumulado do turno" icon={Ticket} tone="blue" /> : <>
@@ -136,7 +138,7 @@ export function MyRealtimePage() {
         </div>
 
         <Panel title="Hora a hora">
-          <p className="mb-3 text-xs text-muted">{cec ? "Último CPD disponível em cada hora, sem somar ciclos. A captura corresponde à própria hora, limitada ao turno." : "13:00 representa 13h às 14h. O acumulado do Shift Date preserva a produção anterior ao reinício da fonte às 13h; a madrugada permanece no turno de origem. A hora em andamento é parcial."}</p>
+          <p className="mb-3 text-xs text-muted">{cec ? "Último CPD disponível em cada hora, sem somar ciclos. A captura inclui antecipação e horas extras atribuídas ao turno." : "13:00 representa 13h às 14h. O acumulado inclui antecipação e horas extras, preserva a produção anterior ao reinício da fonte às 13h e mantém a madrugada no turno de origem. A hora em andamento é parcial."}</p>
           {payload.intervals.length ? <div className="overflow-x-auto rounded-xl border border-border">
             <table className={cn("w-full border-collapse text-left text-sm", cec ? "min-w-[580px]" : "min-w-[1000px]")}>
               <caption className="sr-only">Suas métricas no turno atual</caption>
@@ -149,6 +151,8 @@ export function MyRealtimePage() {
                 <th scope="row" title={`${clock.format(new Date(interval.start))} às ${clock.format(new Date(interval.end))}`} className="whitespace-nowrap px-3 py-3 font-bold text-navy-950">
                   <span className="block">{clock.format(new Date(interval.hour ?? interval.start))}</span>
                   <span className="mt-1 block text-[11px] font-medium text-muted">{dayLabel.format(new Date(interval.hour ?? interval.start))}</span>
+                  {Date.parse(interval.end) <= Date.parse(shift.start) ? <span className="mt-1 block text-[11px] font-medium text-muted">Antes da escala</span>
+                    : Date.parse(interval.start) >= Date.parse(shift.end) ? <span className="mt-1 block text-[11px] font-medium text-muted">Após a escala</span> : null}
                   {cec && interval.cycle ? <span className="mt-1 block text-[11px] font-medium text-muted">Ciclo {interval.cycle.slice(11)}</span> : null}
                 </th>
                 {cec ? <td className="px-3 py-3 tabular-nums">{count(interval.cpd)}</td> : <>
