@@ -209,4 +209,6 @@ export const QUEUE_METADATA: Record<string, QueueMetadata> = {
   "600003278": { lob: "VIDEO", slaTargetMinutes: 1440 },
   "600003312": { lob: "ADS", slaTargetMinutes: 120 },
   "600003313": { lob: "ADS", slaTargetMinutes: 120 },
+  "600003876": { lob: "VIDEO", slaTargetMinutes: 1440 },
+  "600003878": { lob: "VIDEO", slaTargetMinutes: 1440 },
 };
