@@ -1,4 +1,5 @@
-import { buildRealtimeHoursPlannedShifts, type RealtimeHoursScheduleSlot } from "@/lib/realtime-hours-timeline";
+import { buildRealtimeHoursPlannedShifts, buildRealtimeHoursSlotAssignmentWindows, matchRealtimeHoursPlannedShift,
+  type RealtimeHoursScheduleSlot } from "@/lib/realtime-hours-timeline";
 
 export type PersonalSourceStatus = "complete" | "partial" | "unavailable";
 type PersonalCounters = { submit: number; moderationMs: number; refresh: number; timeout: number };
@@ -11,13 +12,14 @@ export type PersonalInterval = {
 };
 export type PersonalShift = {
   date: string; start: string; end: string; observedUntil: string; startsAt: string; endsAt: string;
+  observedFrom?: string;
 };
 export type MyRealtimePayload = {
   success: true;
   queriedAt: string;
   employee: { fullName: string; wbLogin: string; lob: string };
   kind: "moderation" | "cec";
-  shiftState: "active" | "no_schedule" | "outside_shift";
+  shiftState: "active" | "before_shift" | "after_shift" | "no_schedule" | "outside_shift";
   shift: PersonalShift | null;
   productivity: {
     status: PersonalSourceStatus; metrics: PersonalMetrics | null; cpd: number | null;
@@ -33,15 +35,38 @@ export const normalizePersonalName = (value: string) => value.normalize("NFKC").
 export function resolvePersonalShift(schedules: RealtimeHoursScheduleSlot[], now: Date) {
   const planned = buildRealtimeHoursPlannedShifts(schedules);
   const active = planned.filter((shift) => Date.parse(shift.start) <= now.getTime() && now.getTime() < Date.parse(shift.end));
-  if (active.length !== 1) return {
-    shiftState: active.length > 1 || !schedules.length ? "no_schedule" as const : "outside_shift" as const,
+  if (active.length > 1 || !planned.length) return {
+    shiftState: "no_schedule" as const,
     shift: null
   };
-  const shift = active[0];
+  const windows = buildRealtimeHoursSlotAssignmentWindows(planned);
+  const shift = active[0] ?? matchRealtimeHoursPlannedShift(now, windows);
+  if (!shift) return { shiftState: "outside_shift" as const, shift: null };
+  const window = windows.find((item) => item.shift.id === shift.id)!;
   return {
-    shiftState: "active" as const,
-    shift: { date: shift.sourceDate, start: shift.start, end: shift.end, observedUntil: now.toISOString(), startsAt: shift.startsAt, endsAt: shift.endsAt }
+    shiftState: active.length ? "active" as const : now.getTime() < Date.parse(shift.start) ? "before_shift" as const : "after_shift" as const,
+    shift: { date: shift.sourceDate, start: shift.start, end: shift.end, observedFrom: new Date(window.assignmentStart).toISOString(),
+      observedUntil: now.toISOString(), startsAt: shift.startsAt, endsAt: shift.endsAt }
   };
+}
+
+// Keep planned times for display. Only observed production can extend the
+// visible start before the roster, within the same assignment as Captura.
+export function personalObservationStart(shift: PersonalShift, intervals: PersonalInterval[]) {
+  const start = Math.min(Date.parse(shift.start), Date.parse(shift.observedUntil));
+  const activity = intervals.flatMap((interval) => {
+    const metrics = interval.metrics;
+    if (metrics && metricKeys.some((key) => metrics[key] > 0)) return [Date.parse(interval.start)];
+    return interval.cpd !== null && interval.cpd > 0 ? [Date.parse(interval.end)] : [];
+  });
+  const lowerBound = Math.min(Date.parse(shift.observedFrom ?? shift.start), start);
+  return new Date(Math.max(lowerBound, Math.min(start, ...activity))).toISOString();
+}
+
+export function calculatePersonalModerationWithOvertime(shift: PersonalShift, readings: PersonalReading[]) {
+  const extended = calculatePersonalModeration({ ...shift, start: shift.observedFrom ?? shift.start }, readings);
+  const start = personalObservationStart(shift, extended.intervals);
+  return { start, ...calculatePersonalModeration({ ...shift, start }, readings) };
 }
 
 // Cycle labels are local São Paulo wall-clock times, not UTC timestamps.

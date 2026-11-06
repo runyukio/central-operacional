@@ -74,18 +74,77 @@ test("sem sessão ou perfil autorizado não consulta cadastro nem dados", async 
   assert.equal(profiles.findMany.mock.callCount(), 0);
 });
 
-test("sem escala ou fora da jornada não consulta fontes", async (t) => {
+test("sem escala ou fora da janela da jornada não consulta fontes", async (t) => {
   const { schedules, raw, timeline } = fixture(t);
   schedules.findMany.mock.mockImplementation(async () => []);
   const missing = await getMyRealtime(actor, now);
   assert.ok("success" in missing);
   assert.equal(missing.shiftState, "no_schedule");
   schedules.findMany.mock.mockImplementation(async () => [schedule]);
-  const outside = await getMyRealtime(actor, new Date("2026-11-05T22:00:00Z"));
+  const outside = await getMyRealtime(actor, new Date("2026-11-06T05:00:00Z"));
   assert.ok("success" in outside);
   assert.equal(outside.shiftState, "outside_shift");
   assert.equal(raw.mock.callCount(), 0);
   assert.equal(timeline.mock.callCount(), 0);
+});
+
+test("antes das 14h mostra produção e captura antecipadas, incluindo o reset das 13h", async (t) => {
+  const { schedules, raw, timeline } = fixture(t, "VIDEO");
+  schedules.findMany.mock.mockImplementation(async () => [{ ...schedule, startsAt: "14:00", endsAt: "23:00" }]);
+  raw.mock.mockImplementation(async () => [
+    ["12:00", 100, 10_000], ["12:30", 120, 12_000], ["13:00", 0, 0], ["13:30", 41, 4_100]
+  ].map(([time, submit, moderationMs]) => ({ cycleDownload: `2026-11-05 ${time}`, importedAt: now,
+    submit, moderationMs, refresh: 0, timeout: 0 })));
+  timeline.mock.mockImplementation(async () => ({ rows: [{ data: "2026-11-05", employeeId: profile.id, wbLogin: profile.wbLogin,
+    activeMs: 5_400_000, lastSeenAt: "2026-11-05T16:30:00Z", segments: [{ type: "ACTIVE", start: "2026-11-05T15:00:00Z", end: "2026-11-05T16:30:00Z" }] }] }));
+  const result = await getMyRealtime(actor, new Date("2026-11-05T16:30:00Z"));
+  assert.ok("success" in result);
+  assert.equal(result.shiftState, "before_shift");
+  assert.equal(result.shift?.startsAt, "14:00");
+  assert.equal(result.productivity.metrics?.submit, 61);
+  assert.equal(result.capture.capturedMs, 5_400_000);
+  assert.equal(result.intervals.find((row) => row.hour === "2026-11-05T16:00:00.000Z")?.metrics?.submit, 41);
+  assert.ok(result.intervals.filter((row) => row.metrics).every((row) => !row.captureOnly));
+  assert.equal(result.intervals.reduce((sum, row) => sum + (row.capturedMs ?? 0), 0), result.capture.capturedMs);
+  const dates = schedules.findMany.mock.calls[0].arguments[0].where.date.in.map((date: Date) => date.toISOString().slice(0, 10));
+  assert.deepEqual(dates, ["2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"]);
+  assert.ok((raw.mock.calls[0].arguments[0] as unknown as { values: unknown[] }).values.includes("2026-11-05 06:00"));
+});
+
+test("extensão após as 23h mantém a produção da madrugada no Shift Date de origem", async (t) => {
+  const { schedules, raw, timeline } = fixture(t, "VIDEO");
+  schedules.findMany.mock.mockImplementation(async () => [
+    { ...schedule, startsAt: "14:00", endsAt: "23:00" },
+    { ...schedule, id: "next", date: new Date("2026-11-06T00:00:00Z"), startsAt: "08:00", endsAt: "17:00" }
+  ]);
+  raw.mock.mockImplementation(async () => [
+    ["2026-11-05 22:30", 100], ["2026-11-05 23:00", 110], ["2026-11-05 23:30", 130],
+    ["2026-11-06 00:00", 160], ["2026-11-06 00:30", 200], ["2026-11-06 01:00", 250]
+  ].map(([cycleDownload, submit]) => ({ cycleDownload, importedAt: now, submit, moderationMs: Number(submit) * 1_000, refresh: 0, timeout: 0 })));
+  timeline.mock.mockImplementation(async () => ({ rows: [{ data: "2026-11-05", employeeId: profile.id, wbLogin: profile.wbLogin,
+    activeMs: 9_000_000, lastSeenAt: "2026-11-06T04:00:00Z", segments: [{ type: "ACTIVE", start: "2026-11-06T01:30:00Z", end: "2026-11-06T04:00:00Z" }] }] }));
+  const result = await getMyRealtime(actor, new Date("2026-11-06T04:00:00Z"));
+  assert.ok("success" in result);
+  assert.equal(result.shiftState, "after_shift");
+  assert.equal(result.shift?.date, "2026-11-05");
+  assert.equal(result.productivity.metrics?.submit, 150);
+  assert.equal(result.capture.capturedMs, 9_000_000);
+  assert.equal(result.intervals.find((row) => row.hour === "2026-11-06T03:00:00.000Z")?.metrics?.submit, 90);
+  assert.deepEqual(result.productivity.resetCycles, []);
+  assert.equal(timeline.mock.calls[0].arguments[0]?.date, "2026-11-05");
+});
+
+test("CEC antecipado mantém o último CPD como snapshot, sem somar os ciclos", async (t) => {
+  const { schedules, raw } = fixture(t, "CEC");
+  schedules.findMany.mock.mockImplementation(async () => [{ ...schedule, startsAt: "14:00", endsAt: "23:00" }]);
+  raw.mock.mockImplementation(async () => ["12:30", "13:00", "13:30"].map((time, index) => ({
+    cycleDownload: `2026-11-05 ${time}`, importedAt: now, rawData: { agents: [{ agentName: profile.fullName, cpd: index + 1 }] }
+  })));
+  const result = await getMyRealtime(actor, new Date("2026-11-05T16:30:00Z"));
+  assert.ok("success" in result);
+  assert.equal(result.shiftState, "before_shift");
+  assert.equal(result.productivity.cpd, 3);
+  assert.equal(result.intervals.find((row) => row.hour === "2026-11-05T16:00:00.000Z")?.cpd, 3);
 });
 
 test("falha de produtividade preserva captura e falha de captura preserva produtividade", async (t) => {
