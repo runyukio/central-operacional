@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { applyApprovedRealtimeHoursAdjustments, applyApprovedRealtimeHoursAdjustmentsForRange } from "@/lib/realtime-hours-adjustments-service";
 import { canAccessOwnRealtimeHours } from "@/lib/realtime-hours-permissions";
 import { getRealtimeHoursTimeline, getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
+import { capturedHoursTotal, selectOwnCaptureRows } from "@/lib/personal-capture-hours";
 
 export const dynamic = "force-dynamic";
 
@@ -58,15 +59,14 @@ export async function GET(request: Request) {
       employeeId: employee.id,
       wbLogin: employee.wbLogin
     });
-    const employeeWbLogin = normalizeLogin(employee.wbLogin);
     const adjustedDays = await applyApprovedRealtimeHoursAdjustmentsForRange(timelines.map((timeline) => ({
       date: timeline.date,
       window: timeline.window,
-      rows: timeline.rows.filter((row) => row.employeeId === employee.id || normalizeLogin(row.wbLogin) === employeeWbLogin)
+      rows: selectOwnCaptureRows(timeline.rows, employee, timeline.date)
     })));
     const days = adjustedDays.map((day) => {
       const activeMs = day.rows.reduce((sum, row) => sum + row.consideredActiveMs, 0);
-      const capturedActiveMs = day.rows.reduce((sum, row) => sum + row.capturedActiveMs, 0);
+      const capturedActiveMs = capturedHoursTotal(day.rows);
       const noActivityMs = day.rows.reduce((sum, row) => sum + row.consideredNoActivityMs, 0);
       return {
         ...day,
@@ -83,6 +83,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
+      queriedAt: new Date().toISOString(),
       range: {
         startDate: range.startDate,
         endDate: range.endDate,
@@ -107,17 +108,17 @@ export async function GET(request: Request) {
     employeeId: employee.id,
     wbLogin: employee.wbLogin
   });
-  const employeeWbLogin = normalizeLogin(employee.wbLogin);
   const rows = await applyApprovedRealtimeHoursAdjustments(
     result.date,
-    result.rows.filter((row) => row.employeeId === employee.id || normalizeLogin(row.wbLogin) === employeeWbLogin)
+    selectOwnCaptureRows(result.rows, employee, result.date)
   );
   const activeMs = rows.reduce((sum, row) => sum + row.consideredActiveMs, 0);
-  const capturedActiveMs = rows.reduce((sum, row) => sum + row.capturedActiveMs, 0);
+  const capturedActiveMs = capturedHoursTotal(rows);
   const noActivityMs = rows.reduce((sum, row) => sum + row.consideredNoActivityMs, 0);
 
   return NextResponse.json({
     ...result,
+    queriedAt: new Date().toISOString(),
     summary: {
       users: rows.length,
       activeMs,
@@ -176,8 +177,4 @@ function employeePayload(employee: {
     lob: employee.lob?.name ?? "",
     shift: employee.shift?.name ?? ""
   };
-}
-
-function normalizeLogin(value?: string | null) {
-  return String(value ?? "").trim().toLowerCase();
 }

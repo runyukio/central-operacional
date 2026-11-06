@@ -5,8 +5,9 @@ import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursTimeline } from "@/lib/realtime-hours-service";
 import { canAccessOwnRealtimeHours } from "@/lib/realtime-hours-permissions";
 import { addDateKeyDays, saoPauloDateKey } from "@/lib/realtime-hours-timeline";
+import { allocateCapturedHours, canonicalPersonalCapture } from "@/lib/personal-capture-hours";
 import {
-  calculatePersonalModeration, normalizePersonalName, normalizePersonalWb, personalCapture, personalCecCpd,
+  calculatePersonalModeration, normalizePersonalName, normalizePersonalWb, personalCecCpd,
   personalCycleTime, personalHourlyIntervals, resolvePersonalShift,
   type MyRealtimePayload, type PersonalInterval, type PersonalReading, type PersonalShift
 } from "@/lib/my-realtime";
@@ -130,9 +131,16 @@ export async function getMyRealtime(actor: Actor, now = new Date()): Promise<MyR
     payload.intervals = personalHourlyIntervals(shift, [], payload.kind).intervals;
   }
   if (capture.status === "fulfilled") {
-    payload.capture = personalCapture(capture.value.rows, employee, shift.start, shift.observedUntil);
-    payload.intervals = payload.intervals.map((interval) => ({ ...interval,
-      capturedMs: personalCapture(capture.value.rows, employee, interval.start, interval.end).capturedMs }));
+    const canonical = canonicalPersonalCapture(capture.value.rows, employee, shift.date, { start: shift.start, end: shift.observedUntil });
+    payload.capture = canonical.summary;
+    // Keep the original productivity window, but display every capture hour
+    // assigned to this Shift Date, including anticipation/overtime.
+    const hourly = personalHourlyIntervals({ ...shift, start: canonical.start, observedUntil: canonical.end },
+      production.status === "fulfilled" ? production.value.intervals : [], payload.kind);
+    const allocated = allocateCapturedHours(canonical.rows, hourly.intervals);
+    payload.intervals = allocated.intervals.map((interval) => ({ ...interval,
+      captureOnly: Date.parse(interval.end) <= Date.parse(shift.start) || Date.parse(interval.start) >= Date.parse(shift.end) }));
+    if (!allocated.complete) payload.capture.message = "Total da Captura de Horas disponível; o detalhamento por hora não pôde ser conciliado com os segmentos desta leitura.";
   } else {
     console.error("[my-realtime] Falha na leitura de captura", capture.reason);
     payload.capture.message = "Não foi possível consultar a captura. Tente atualizar novamente.";

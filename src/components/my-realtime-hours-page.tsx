@@ -1,10 +1,11 @@
 "use client";
 
 import { AlertTriangle, CalendarDays, ChevronDown, Clock, ListChecks, MonitorCog, RefreshCw, ShieldCheck, Wifi } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PageHeader, Panel, StatCard } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { formatCapturedHours as formatDurationMs } from "@/lib/personal-capture-hours";
 
 type TimelineSegment = {
   type: "ACTIVE" | "NO_ACTIVITY";
@@ -56,6 +57,7 @@ type TimelineDay = {
 
 type MyTimelinePayload = {
   success: boolean;
+  queriedAt?: string;
   range: { startDate: string; endDate: string; days: number };
   summary: DaySummary;
   days: TimelineDay[];
@@ -75,27 +77,46 @@ export function MyRealtimeHoursPage() {
   const [range, setRange] = useState<DateRange>(initialRange);
   const [draftRange, setDraftRange] = useState<DateRange>(initialRange);
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
 
-  const loadData = useCallback(async (showRefreshing = false) => {
+  const loadData = useCallback(async (showRefreshing = false, background = false) => {
+    if (background && requestRef.current) return;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     if (showRefreshing) setRefreshing(true);
-    if (!showRefreshing) setLoading(true);
+    if (!showRefreshing && !background) setLoading(true);
     setError("");
     try {
       const params = new URLSearchParams({ startDate: range.startDate, endDate: range.endDate });
-      const response = await fetch(`/api/realtime-hours/me/timeline?${params.toString()}`, { cache: "no-store" });
+      const response = await fetch(`/api/realtime-hours/me/timeline?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const body = await response.json() as MyTimelinePayload;
+      if (controller.signal.aborted || requestRef.current !== controller) return;
       if (!response.ok || body.success === false) throw new Error(body.message || body.error || "Não foi possível carregar suas horas.");
       setPayload(body);
     } catch (loadError) {
+      if (controller.signal.aborted || requestRef.current !== controller) return;
       setError(loadError instanceof Error ? loadError.message : "Não foi possível carregar suas horas.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [range.endDate, range.startDate]);
 
   useEffect(() => {
     void loadData();
+    const refresh = () => { if (!document.hidden) void loadData(false, true); };
+    const timer = window.setInterval(refresh, 120_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      requestRef.current?.abort();
+      requestRef.current = null;
+    };
   }, [loadData]);
 
   const days = payload?.days ?? [];
@@ -123,7 +144,7 @@ export function MyRealtimeHoursPage() {
     <div className="space-y-4">
       <PageHeader
         title="Minhas Horas"
-        description="Acompanhe suas horas por dia e consulte qualquer período de até 93 dias."
+        description="Horas por Shift Date (dia de início do turno), incluindo a madrugada. Atualização automática a cada 2 minutos."
         icon={Clock}
         actions={
           <button type="button" onClick={() => void loadData(true)} disabled={refreshing || loading} className="premium-button inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold disabled:cursor-wait disabled:opacity-70">
@@ -142,13 +163,14 @@ export function MyRealtimeHoursPage() {
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <StatCard title="Total considerado" value={formatDurationMs(payload?.summary.activeMs ?? 0)} helper={formatRangeLabel(payload?.range)} icon={Wifi} tone="green" />
-        <StatCard title="Total capturado" value={formatDurationMs(payload?.summary.capturedActiveMs ?? 0)} helper="sinal bruto do computador" icon={MonitorCog} tone="blue" />
+        <StatCard title="Total capturado" value={formatDurationMs(payload?.summary.capturedActiveMs ?? 0)} helper="mesmo tempo ativo da Captura de Horas no período selecionado" icon={MonitorCog} tone="blue" />
         <StatCard title="Total sem atividade" value={formatDurationMs(payload?.summary.noActivityMs ?? 0)} helper="intervalos sem sinal ativo" icon={Clock} tone="orange" />
         <StatCard title="Blocos de atividade" value={payload?.summary.sessions ?? 0} helper={`${payload?.summary.users ?? 0} dia(s) com captura`} icon={ListChecks} tone="cyan" />
         <StatCard title="Ajustes aprovados" value={payload?.summary.approvedAdjustments ?? 0} helper={lastSeenAt ? `último sinal ${formatDateTime(lastSeenAt)}` : "sem captura no período"} icon={ShieldCheck} tone="purple" />
       </div>
 
-      <Panel title="Extrato diário de horas">
+      <Panel title="Extrato por Shift Date">
+        <p className="mb-3 text-xs text-muted">Compare o campo Capturado com a Captura de Horas na mesma data de início do turno. O campo Considerado inclui ajustes aprovados.{payload?.queriedAt ? ` Última consulta: ${formatDateTime(payload.queriedAt)}.` : ""}</p>
         <div className="mb-4 rounded-xl border border-border bg-slate-50/70 p-3">
           <div className="grid gap-3 lg:grid-cols-[minmax(180px,240px)_minmax(180px,240px)_auto_minmax(180px,1fr)] lg:items-end">
             <label className="block">
@@ -184,7 +206,7 @@ export function MyRealtimeHoursPage() {
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-[11px] font-black uppercase tracking-wide text-muted">
                   <th className="w-14 px-3 py-3">Ação</th>
-                  <th className="w-52 px-3 py-3">Data</th>
+                  <th className="w-52 px-3 py-3">Shift Date</th>
                   <th className="w-36 px-3 py-3">Considerado</th>
                   <th className="w-36 px-3 py-3">Capturado</th>
                   <th className="w-36 px-3 py-3">Sem atividade</th>
@@ -295,13 +317,6 @@ function currentMonthRange(): DateRange {
   };
 }
 
-function formatDurationMs(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0m";
-  const totalMinutes = Math.floor(value / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours > 0 ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${minutes}m`;
-}
 
 function formatTimeOnly(value?: string | null) {
   if (!value) return "-";

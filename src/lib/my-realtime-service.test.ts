@@ -18,8 +18,8 @@ function fixture(t: TestContext, lob = "ADS") {
     cycleDownload: `2026-11-05 ${time}`, importedAt: now, submit: index * 10, moderationMs: index * 1000, refresh: index, timeout: index
   })) as any);
   const timeline = t.mock.method(myRealtimeData, "timeline", async () => ({ success: true, rows: [
-    { employeeId: profile.id, wbLogin: profile.wbLogin, lastSeenAt: now.toISOString(), segments: [{ type: "ACTIVE", start: "2026-11-05T10:00:00Z", end: "2026-11-05T13:00:00Z" }] },
-    { employeeId: "someone-else", wbLogin: "other", lastSeenAt: now.toISOString(), segments: [] }
+    { data: "2026-11-05", activeMs: 7_200_000, employeeId: profile.id, wbLogin: profile.wbLogin, lastSeenAt: now.toISOString(), segments: [{ type: "ACTIVE", start: "2026-11-05T10:00:00Z", end: now.toISOString() }] },
+    { data: "2026-11-05", activeMs: 0, employeeId: "someone-else", wbLogin: "other", lastSeenAt: now.toISOString(), segments: [] }
   ] }) as any);
   return { profiles, schedules, raw, timeline };
 }
@@ -31,8 +31,10 @@ test("consulta pessoal restringe cadastro, escala, SQL e captura ao usuário aut
   assert.equal(result.employee.wbLogin, "own");
   assert.equal(result.productivity.metrics?.submit, 20);
   assert.equal(result.productivity.metrics?.ahtMs, 100);
-  assert.equal(result.intervals[0].metrics?.submit, 20);
-  assert.equal(result.capture.capturedMs, 3_600_000);
+  assert.equal(result.intervals.find((row) => row.hour === "2026-11-05T11:00:00.000Z")?.metrics?.submit, 20);
+  assert.equal(result.capture.capturedMs, 7_200_000);
+  assert.equal(result.intervals[0].captureOnly, true);
+  assert.equal(result.intervals.reduce((sum, row) => sum + (row.capturedMs ?? 0), 0), result.capture.capturedMs);
   const lookup = profiles.findMany.mock.calls[0].arguments[0].where.OR;
   assert.equal(lookup[0].user.email.equals, actor.email);
   assert.equal(lookup[1].userId, null);
@@ -92,7 +94,7 @@ test("falha de produtividade preserva captura e falha de captura preserva produt
   raw.mock.mockImplementation(async () => { throw new Error("source offline"); });
   const result = await getMyRealtime(actor, now);
   assert.ok("success" in result);
-  assert.equal(result.capture.capturedMs, 3_600_000);
+  assert.equal(result.capture.capturedMs, 7_200_000);
   assert.equal(result.productivity.metrics, null);
   assert.ok(result.productivity.message);
   raw.mock.mockImplementation(async () => ["08:00", "08:30"].map((time, index) => ({ cycleDownload: `2026-11-05 ${time}`, importedAt: now,
@@ -113,7 +115,7 @@ test("CEC mantém apenas o CPD do último ciclo sem somar snapshots nem expor ou
   assert.ok("success" in result);
   assert.equal(result.kind, "cec");
   assert.equal(result.productivity.cpd, 3);
-  assert.deepEqual(result.intervals.map((interval) => interval.cpd), [7, 3]);
+  assert.deepEqual(result.intervals.filter((interval) => interval.cpd !== null).map((interval) => interval.cpd), [7, 3]);
   assert.ok(!JSON.stringify(result).includes("Outro Nome"));
 });
 
