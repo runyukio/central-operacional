@@ -455,6 +455,7 @@ export function MySchedulePage() {
 
   async function moveMyRequest(id: string, status: string, actionInput?: Record<string, string>) {
     if (actionPending) return;
+    const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const reason = actionReason.trim();
     if (status === "Recusado" && !reason) {
       setDayOffMessage("Informe o motivo da recusa.");
@@ -486,13 +487,11 @@ export function MySchedulePage() {
       if (impact) {
         setCoverageWarning({
           impact,
+          returnFocus,
           onConfirm: async () => {
             setActionPending(`${id}:${status}`);
             try {
               await applyPayload(await patchStatus(true));
-              setCoverageWarning(null);
-            } catch (retryError) {
-              setDayOffMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
               setCoverageWarning(null);
             } finally {
               setActionPending("");

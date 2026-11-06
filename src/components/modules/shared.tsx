@@ -5,7 +5,8 @@ import { RequestSlaBadge } from "./request-sla-badge";
 
 import { canAdminRejectRequest, isDirectWfmRequest } from "@/lib/request-routing";
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
-import { type InputHTMLAttributes, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { type InputHTMLAttributes, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CalendarCheck, ClipboardList, Frown, Headphones, HeartPulse, Laptop, Meh, ShieldCheck, Smile } from "lucide-react";
 import { EmptyState, MetricPill } from "@/components/ui/primitives";
 import { employees } from "@/lib/demo-data";
@@ -97,6 +98,7 @@ export type CoverageImpactClient = {
 export type CoverageWarningDialogState = {
   impact: CoverageImpactClient;
   onConfirm: () => Promise<void>;
+  returnFocus?: HTMLElement | null;
 };
 
 
@@ -888,51 +890,77 @@ export function coverageImpactFromError(error: unknown): CoverageImpactClient | 
 
 export function CoverageWarningDialog({ warning, onClose }: { warning: CoverageWarningDialogState | null; onClose: () => void }) {
   const [confirming, setConfirming] = useState(false);
+  const confirmingRef = useRef(false);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const [confirmationError, setConfirmationError] = useState("");
+  useEffect(() => { setConfirmationError(""); }, [warning]);
   if (!warning) return null;
   const critical = warning.impact.impacts.find((row) => normalizedRowImpactStatus(row) === "IMPACTA") ?? warning.impact.impacts[0];
   const confirm = async () => {
-    if (confirming) return;
+    // Lock synchronously: two events can arrive before React commits disabled.
+    if (confirmingRef.current) return;
+    confirmingRef.current = true;
     setConfirming(true);
+    setConfirmationError("");
     try {
       await warning.onConfirm();
+    } catch (error) {
+      setConfirmationError(error instanceof Error ? error.message : "Não foi possível aprovar a solicitação. Tente novamente.");
     } finally {
+      confirmingRef.current = false;
       setConfirming(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center bg-navy-950/45 p-4 backdrop-blur-sm">
-      <div className="card w-full max-w-lg p-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-muted">Impacto na Necessidade</p>
-            <h2 className="mt-1 text-lg font-extrabold text-navy-950">Aprovação com impacto operacional</h2>
-          </div>
-          <CoverageImpactBadge impact={warning.impact} />
+    <Dialog.Root open>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[70] bg-navy-950/45 backdrop-blur-sm" />
+        <div className="pointer-events-none fixed inset-0 z-[70] grid place-items-center p-4">
+          <Dialog.Content
+            className="card pointer-events-auto max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto p-5"
+            // Join the editing dialog's dismissable-layer/focus stack instead of
+            // inheriting its body pointer-events:none outside the active modal.
+            onOpenAutoFocus={() => { returnFocusRef.current = warning.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null); }}
+            onCloseAutoFocus={(event) => { event.preventDefault(); returnFocusRef.current?.focus(); }}
+            // The existing warning closes only through its buttons.
+            onEscapeKeyDown={(event) => event.preventDefault()}
+            onInteractOutside={(event) => event.preventDefault()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-muted">Impacto na Necessidade</p>
+                <Dialog.Title className="mt-1 text-lg font-extrabold text-navy-950">Aprovação com impacto operacional</Dialog.Title>
+              </div>
+              <CoverageImpactBadge impact={warning.impact} />
+            </div>
+            <Dialog.Description className="mb-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              Após esta alteração, a cobertura prevista ficará abaixo da necessidade.
+            </Dialog.Description>
+            {critical ? (
+              <div className="grid gap-2 rounded-lg border border-border bg-slate-50 p-3 text-sm md:grid-cols-2">
+                <InfoLine label="Data" value={critical.date} />
+                <InfoLine label="LOB" value={critical.lob} />
+                <InfoLine label="Turno" value={critical.shift} />
+                <InfoLine label="Necessidade" value={critical.required ?? "Sem necessidade"} />
+                <InfoLine label="Programado atual" value={critical.currentAvailable} />
+                <InfoLine label="Programado previsto" value={critical.projectedAvailable} />
+                <InfoLine label="Gap atual" value={coverageValue(critical.currentGap)} />
+                <InfoLine label="Gap previsto" value={coverageValue(critical.projectedGap)} />
+              </div>
+            ) : null}
+            {confirmationError ? <p role="alert" className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{confirmationError}</p> : null}
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button type="button" onClick={onClose} className="rounded-lg border border-border bg-white px-4 py-3 text-sm font-bold text-navy-950 disabled:opacity-60">Voltar</button>
+              <button type="button" disabled={confirming} aria-busy={confirming} onClick={confirm} className="rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                {confirming ? "Aprovando..." : "Aprovar mesmo assim"}
+              </button>
+            </div>
+          </Dialog.Content>
         </div>
-        <p className="mb-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-          Após esta alteração, a cobertura prevista ficará abaixo da necessidade.
-        </p>
-        {critical ? (
-          <div className="grid gap-2 rounded-lg border border-border bg-slate-50 p-3 text-sm md:grid-cols-2">
-            <InfoLine label="Data" value={critical.date} />
-            <InfoLine label="LOB" value={critical.lob} />
-            <InfoLine label="Turno" value={critical.shift} />
-            <InfoLine label="Necessidade" value={critical.required ?? "Sem necessidade"} />
-            <InfoLine label="Programado atual" value={critical.currentAvailable} />
-            <InfoLine label="Programado previsto" value={critical.projectedAvailable} />
-            <InfoLine label="Gap atual" value={coverageValue(critical.currentGap)} />
-            <InfoLine label="Gap previsto" value={coverageValue(critical.projectedGap)} />
-          </div>
-        ) : null}
-        <div className="mt-5 grid grid-cols-2 gap-3">
-          <button disabled={confirming} onClick={onClose} className="rounded-lg border border-border bg-white px-4 py-3 text-sm font-bold text-navy-950 disabled:opacity-60">Voltar</button>
-          <button disabled={confirming} onClick={confirm} className="rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-            {confirming ? "Aprovando..." : "Aprovar mesmo assim"}
-          </button>
-        </div>
-      </div>
-    </div>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

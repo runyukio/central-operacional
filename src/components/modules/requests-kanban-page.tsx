@@ -332,6 +332,7 @@ export function RequestsKanbanPage() {
 
   async function moveStatus(id: string, status: string, actionInput?: Record<string, string>) {
     if (actionPending) return;
+    const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const reason = actionReason.trim();
     if (status === "Recusado" && !reason) {
       setActionMessage("Informe o motivo da recusa.");
@@ -362,13 +363,11 @@ export function RequestsKanbanPage() {
       if (impact) {
         setCoverageWarning({
           impact,
+          returnFocus,
           onConfirm: async () => {
             setActionPending(`${id}:${status}`);
             try {
               applyPayload(await patchStatus(true));
-              setCoverageWarning(null);
-            } catch (retryError) {
-              setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
               setCoverageWarning(null);
             } finally {
               setActionPending("");
