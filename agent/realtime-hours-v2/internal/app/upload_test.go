@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/queue"
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/transport"
@@ -38,6 +39,8 @@ func TestUploadAcknowledgementAndOfflineRecovery(t *testing.T) {
 			r := &Runtime{Queue: queue.Queue{Root: filepath.Join(dir, "queue"), FailedDir: filepath.Join(dir, "failed")},
 				Client: transport.Client{BaseURL: server.URL, DeviceID: "test-device", Secret: []byte("01234567890123456789012345678901"), HTTPClient: server.Client()},
 				Logger: log.New(io.Discard, "", 0)}
+			now := time.Now().UTC()
+			r.uploadNow = func() time.Time { return now }
 			if _, err := r.Queue.Upsert("heartbeat", "current", map[string]bool{"ok": true}); err != nil {
 				t.Fatal(err)
 			}
@@ -54,6 +57,7 @@ func TestUploadAcknowledgementAndOfflineRecovery(t *testing.T) {
 				t.Fatalf("pending=%d wantRetained=%v", len(pending), retained)
 			}
 			if retained {
+				now = now.Add(31 * time.Second)
 				status, body = 200, `{"success":true}`
 				if err := r.flush(context.Background(), "heartbeat"); err != nil {
 					t.Fatal(err)

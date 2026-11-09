@@ -45,18 +45,24 @@ func TestAcknowledgingOldCheckpointRetainsNewerObservedTime(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		writes++
 		if writes == 1 {
+			updated := activityTestPayload(1)
+			updated.Records[0].DurationSeconds = 20
+			updated.Records[0].EndedAt = updated.Records[0].StartedAt.Add(20 * time.Second)
 			r.queueMu.Lock()
-			_, err := r.Queue.Upsert("activity", "same-event", map[string]int{"durationSeconds": 20})
+			_, err := r.Queue.Upsert("activity", "same-event", updated)
 			r.queueMu.Unlock()
 			if err != nil {
 				t.Error(err)
 			}
 		}
-		_, _ = w.Write([]byte(`{"success":true}`))
+		acknowledgeActivity(t, w, request)
 	}))
 	defer server.Close()
 	r.Client = transport.Client{BaseURL: server.URL, DeviceID: "test", Secret: []byte("01234567890123456789012345678901"), HTTPClient: server.Client()}
-	_, _ = r.Queue.Upsert("activity", "same-event", map[string]int{"durationSeconds": 10})
+	initial := activityTestPayload(1)
+	initial.Records[0].DurationSeconds = 10
+	initial.Records[0].EndedAt = initial.Records[0].StartedAt.Add(10 * time.Second)
+	_, _ = r.Queue.Upsert("activity", "same-event", initial)
 	if err := r.flush(context.Background(), "activity"); err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +70,9 @@ func TestAcknowledgingOldCheckpointRetainsNewerObservedTime(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatal("newer checkpoint was deleted by an older acknowledgement")
 	}
-	var value map[string]int
+	var value ActivityPayload
 	_ = json.Unmarshal(pending[0].Data, &value)
-	if value["durationSeconds"] != 20 {
+	if value.Records[0].DurationSeconds != 20 {
 		t.Fatal("latest observed duration was lost")
 	}
 	if err := r.flush(context.Background(), "activity"); err != nil {

@@ -6,14 +6,16 @@ param(
   [string]$EnrollmentCode,
   [string]$EnrollmentFile,
   [string]$BaseUrl = "https://eastriverbrasil.com",
+  [ValidateRange(0, 1800)][int]$OpenCheckpointUploadIntervalSeconds = 240,
   [string]$InstallDir = "$env:ProgramData\CentralOperacional\RealtimeHoursV2"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+if ($OpenCheckpointUploadIntervalSeconds -gt 0 -and $OpenCheckpointUploadIntervalSeconds -lt 30) { throw 'O intervalo de checkpoint deve ser zero ou pelo menos 30 segundos.' }
 
-$ExpectedVersion = "1.0.0-alpha.2"
+$ExpectedVersion = "1.0.0-alpha.3"
 $TaskName = "Central Operacional - Realtime Hours V2"
 $HostName = "com.centraloperacional.realtimehours.v2"
 $LegacyHostName = "com.eastriver.realtime_hours"
@@ -303,6 +305,7 @@ try {
     schemaVersion = 1; baseUrl = $BaseUrl.TrimEnd('/'); perUserProfiles = $true; bootstrapFile = $secretPath
     secretFile = $secretPath; stateDir = $stateDir; queueDir = $queueDir; failedDir = $failedDir; logDir = $logDir
     sampleIntervalSeconds = 2; heartbeatIntervalSeconds = 60; uploadIntervalSeconds = 30
+    openCheckpointUploadIntervalSeconds = $OpenCheckpointUploadIntervalSeconds
     idleThresholdSeconds = 300; maxSegmentSeconds = 3600; browserStateMaxAgeSeconds = 45
   } | ConvertTo-Json -Depth 5 | ForEach-Object { Write-Utf8NoBom -Path $configPath -Content $_ }
 

@@ -2161,6 +2161,13 @@ model SystemConfig {
   updatedAt   DateTime @updatedAt
 }
 
+// Bounded V2 job results and per-day summary fingerprints; contains no application settings.
+model WorkstationMaintenanceStateV2 {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
 model EmployeeRegistrationRequest {
   id                           String                     @id @default(cuid())
   submittedAt                  DateTime                   @default(now())

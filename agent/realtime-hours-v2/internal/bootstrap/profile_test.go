@@ -73,6 +73,11 @@ func TestProfilesRemainIsolatedAcrossUsersAndReconnects(t *testing.T) {
 		t.Fatal("users share identity, browser state or queue")
 	}
 	options.SessionID = 9
+	// Applying the new machine policy must update existing profiles without
+	// reenrollment or touching their offline queue/credentials.
+	machine.HeartbeatIntervalSeconds = 60
+	machine.UploadIntervalSeconds = 30
+	machine.OpenCheckpointUploadIntervalSeconds = 240
 	resumed, err := Ensure(context.Background(), machine, options)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +87,10 @@ func TestProfilesRemainIsolatedAcrossUsersAndReconnects(t *testing.T) {
 	}
 	if resumed.Config.StateDir == alice.Config.StateDir {
 		t.Fatal("browser state from an old session was reused")
+	}
+	if resumed.Config.SampleIntervalSeconds != 2 || resumed.Config.HeartbeatIntervalSeconds != 60 ||
+		resumed.Config.UploadIntervalSeconds != 30 || resumed.Config.OpenCheckpointUploadIntervalSeconds != 240 {
+		t.Fatal("approved machine upload policy was not applied to the existing profile")
 	}
 	if data, err := os.ReadFile(filepath.Join(resumed.Config.QueueDir, "offline.json")); err != nil || string(data) != "alice offline event" {
 		t.Fatal("offline queue was not preserved")
