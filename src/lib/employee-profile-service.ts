@@ -2,7 +2,7 @@ import { Prisma, type EquipmentStatus, type RequestStatus, type ScheduleStatus, 
 
 import type { Actor } from "@/lib/mock-db";
 import { createNotFoundError, createPermissionError, createServerError, type ApiErrorPayload } from "@/lib/api-errors";
-import { DEFAULT_BILLING_REFERENCE_MONTH, getEmployeeBillingPreview } from "@/lib/billing-service";
+import { getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { getEmployeePerformanceSummary } from "@/lib/performance-service";
 import {
@@ -132,7 +132,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
       profileSection("performance", employee.id, buildPerformanceSummary(viewer, employee, period)),
       canViewBillingPreview
-        ? profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH))
+        ? profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id))
         : Promise.resolve(null),
       isOwnProfile
         ? profileSection("anonymous_feedback", employee.id, buildOwnAnonymousFeedbackSummary(viewer.id))

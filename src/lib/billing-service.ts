@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { billingBulkInvoiceStatus, billingBulkTargets, parseBillingStatusSelection } from "@/lib/billing-bulk-status";
-import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
+import { BILLING_START_MONTH } from "@/lib/billing-reference-month";
+import { resolveBillingReferenceMonth } from "@/lib/billing-reference-month-service";
 export { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
@@ -36,7 +37,7 @@ import {
 } from "@/lib/billing-rate-rules";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
-import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
+import { formatReferenceMonth } from "@/lib/monthly-advance-service";
 import {
   attachBillingInvoiceDocument,
   buildOmieIntegrationCode,
@@ -50,7 +51,7 @@ import { cleanShiftName } from "@/lib/shift-display";
 import { deletePrivateObject, downloadPrivateObject, isStorageConfigured, uploadPrivateObject, validateStorageUpload } from "@/lib/supabase-storage";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
-export const BILLING_START_MONTH = "2026-06";
+export { BILLING_START_MONTH } from "@/lib/billing-reference-month";
 
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para parceiros PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
@@ -306,7 +307,7 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
   if ("error" in scope) return scope;
   const scopedFilters = applyBillingScope(filters, scope);
 
-  const referenceMonth = normalizeBillingMonth(scopedFilters.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(scopedFilters.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
 
   const startedAt = Date.now();
@@ -364,7 +365,7 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
 }
 
 export async function getBillingFinanceCostSnapshot(referenceMonthInput: string) {
-  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
+  const referenceMonth = await normalizeBillingMonth(referenceMonthInput);
   if (!isBillingMonthAvailable(referenceMonth)) return { referenceMonth, rows: [] as BillingFinanceCostSnapshotRow[] };
   const [cycle, rates] = await Promise.all([
     prisma.billingCycle.findUnique({ where: { referenceMonth } }),
@@ -383,7 +384,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
-  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
+  const referenceMonth = await normalizeBillingMonth(referenceMonthInput);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
 
   const rates = await getBillingRates();
@@ -434,8 +435,8 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
   };
 }
 
-export async function getEmployeeBillingPreview(employeeId: string, referenceMonthInput = DEFAULT_BILLING_REFERENCE_MONTH) {
-  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
+export async function getEmployeeBillingPreview(employeeId: string, referenceMonthInput?: string | null) {
+  const referenceMonth = await normalizeBillingMonth(referenceMonthInput);
   if (!isBillingMonthAvailable(referenceMonth)) return null;
   const employee = await prisma.employeeProfile.findFirst({
     where: { id: employeeId, deletedAt: null },
@@ -487,7 +488,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   if (!input.file) return { error: "Selecione a nota fiscal para leitura automática.", status: 400 };
 
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
 
   let employee: BillingEmployee | null = null;
@@ -624,7 +625,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
   if (!cycle) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
@@ -846,7 +847,7 @@ export async function retryMyBillingInvoiceOmie(actor: Actor, referenceMonthInpu
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
-  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
+  const referenceMonth = await normalizeBillingMonth(referenceMonthInput);
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth }, select: { id: true } });
   if (!cycle) return { error: "Ciclo de Billing não encontrado.", status: 404 };
   const invoice = await prisma.billingEmployeeInvoice.findUnique({
@@ -1130,7 +1131,7 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   if (!input.type?.trim()) return { error: "Tipo do ajuste é obrigatório.", status: 400 };
   if (!input.questionedItem?.trim()) return { error: "Item questionado é obrigatório.", status: 400 };
@@ -1379,7 +1380,7 @@ export async function updateFilteredBillingInvoiceStatus(actor: Actor, input: { 
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
   if (denied) return denied;
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   const nextStatus = input.status?.trim();
   if (nextStatus !== "FINALIZADO_CONFERENCIA" && nextStatus !== "FECHADO") {
@@ -1445,7 +1446,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
   if (denied) return denied;
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   if (!input.employeeId?.trim()) return { error: "Parceiro obrigatório para finalizar invoice.", status: 400 };
 
@@ -1788,7 +1789,7 @@ export async function releaseEmployeeBillingInvoiceForReview(actor: Actor, input
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
   if (denied) return denied;
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   if (!input.employeeId?.trim()) return { error: "Parceiro obrigatório para liberar conferência.", status: 400 };
 
@@ -1836,7 +1837,7 @@ export async function setEmployeeBillingInvoicePaid(actor: Actor, input: {
   const user = await findActiveUser(actor.email);
   const denied = requireBillingPaymentStatusManagement(user);
   if (denied) return denied;
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   if (!input.employeeId?.trim()) return { error: "Parceiro obrigatório para atualizar o pagamento.", status: 400 };
 
@@ -1928,7 +1929,7 @@ export async function createBillingAdjustment(actor: Actor, input: {
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
   if (denied) return denied;
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   if (!input.type?.trim()) return { error: "Tipo de ajuste é obrigatório.", status: 400 };
   if (!input.description?.trim()) return { error: "Descrição do ajuste é obrigatória.", status: 400 };
@@ -1976,7 +1977,7 @@ export async function bulkCreateBillingAdjustments(actor: Actor, input: {
   const denied = requireBillingManagement(user);
   if (denied) return denied;
 
-  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const referenceMonth = await normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   const rows = input.rows ?? [];
   if (!rows.length) return { error: "A planilha não possui linhas para importar.", status: 400 };
@@ -3486,8 +3487,8 @@ async function nextRequestCode(tx: Prisma.TransactionClient) {
   return `REQ-${Date.now()}`;
 }
 
-function normalizeBillingMonth(input?: string | null) {
-  return normalizeReferenceMonth(input || DEFAULT_BILLING_REFERENCE_MONTH, DEFAULT_BILLING_REFERENCE_MONTH);
+async function normalizeBillingMonth(input?: string | null) {
+  return resolveBillingReferenceMonth(input);
 }
 
 function isBillingMonthAvailable(referenceMonth: string) {

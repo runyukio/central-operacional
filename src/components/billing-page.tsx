@@ -200,8 +200,8 @@ function billingInitialTab(): TabKey {
   return tab === "employees" || tab === "hours" || tab === "adjustments" || tab === "rates" ? tab : "lob";
 }
 
-export function BillingPage() {
-  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || DEFAULT_BILLING_REFERENCE_MONTH);
+export function BillingPage({ defaultReferenceMonth = DEFAULT_BILLING_REFERENCE_MONTH }: { defaultReferenceMonth?: string }) {
+  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || defaultReferenceMonth);
   const [employeeId] = useState(billingQueryParam("employeeId"));
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
