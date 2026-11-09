@@ -101,8 +101,8 @@ function invoiceQueryParam(name: string) {
   return new URLSearchParams(window.location.search).get(name) ?? "";
 }
 
-export function MyInvoicePage() {
-  const [referenceMonth, setReferenceMonth] = useState(invoiceQueryParam("referenceMonth") || DEFAULT_BILLING_REFERENCE_MONTH);
+export function MyInvoicePage({ defaultReferenceMonth = DEFAULT_BILLING_REFERENCE_MONTH }: { defaultReferenceMonth?: string }) {
+  const [referenceMonth, setReferenceMonth] = useState(invoiceQueryParam("referenceMonth") || defaultReferenceMonth);
   const [payload, setPayload] = useState<MyInvoicePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

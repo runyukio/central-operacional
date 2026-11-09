@@ -1,4 +1,6 @@
 import { randomUUID } from "crypto";
+import { BILLING_REFERENCE_MONTH_CONFIG_KEY, DEFAULT_BILLING_REFERENCE_MONTH, isValidBillingReferenceMonth } from "@/lib/billing-reference-month";
+import { getDefaultBillingReferenceMonth } from "@/lib/billing-reference-month-service";
 import bcrypt from "bcryptjs";
 import { assertActiveAdminRemains } from "@/lib/admin-invariant";
 import { assertPasswordSyncConfigured, passwordCredentialProviders } from "@/lib/password-credentials";
@@ -177,6 +179,7 @@ export async function getSystemSettings(actor: Actor) {
       rolePermissions,
       roleTitles,
       defaultMonth,
+      billingReferenceMonth,
       slaRules,
       approvalRules,
       coverageRules,
@@ -202,6 +205,7 @@ export async function getSystemSettings(actor: Actor) {
       readObjectConfig<Record<string, string[]>>(configKeys.rolePermissions, {}),
       readRoleTitles(),
       readStringConfig(configKeys.defaultMonth, "2026-07"),
+      getDefaultBillingReferenceMonth(),
       readRuleList(configKeys.slaRules),
       readRuleList(configKeys.approvalRules),
       readRuleList(configKeys.coverageRules),
@@ -263,6 +267,7 @@ export async function getSystemSettings(actor: Actor) {
         })),
         roleTitles,
         defaultMonth,
+        billingReferenceMonth,
         slaRules,
         approvalRules,
         coverageRules,
@@ -277,7 +282,7 @@ export async function getSystemSettings(actor: Actor) {
 }
 
 async function getLimitedSystemSettings() {
-  const [lobs, shifts, requestTypes, skills, teams, employees, supervisorEmployees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
+  const [lobs, shifts, requestTypes, skills, teams, employees, supervisorEmployees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, billingReferenceMonth, generalSettings] = await Promise.all([
     prisma.lob.findMany({ orderBy: { name: "asc" } }),
     prisma.shift.findMany({ orderBy: { name: "asc" } }),
     prisma.requestType.findMany({ orderBy: { name: "asc" } }),
@@ -291,6 +296,7 @@ async function getLimitedSystemSettings() {
     readStatusMap(configKeys.requestTypeStatus),
     readRoleTitles(),
     readStringConfig(configKeys.defaultMonth, "2026-07"),
+    getDefaultBillingReferenceMonth(),
     readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings())
   ]);
 
@@ -335,6 +341,7 @@ async function getLimitedSystemSettings() {
     })),
     roleTitles,
     defaultMonth,
+    billingReferenceMonth,
     generalSettings
   };
 }
@@ -367,6 +374,8 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
           return saveRoleTitle(tx, admin.id, action);
         case "skill":
           return saveOperationalSkill(tx, admin.id, action);
+        case "billingReferenceMonth":
+          return saveBillingReferenceMonth(tx, admin.id, action);
         case "defaultMonth":
           return saveDefaultMonth(tx, admin.id, action);
         case "slaRule":
@@ -595,6 +604,14 @@ async function saveOperationalSkill(tx: Prisma.TransactionClient, adminId: strin
   }
   await auditSettings(tx, adminId, id ? "EDICAO" : "CRIACAO", "OperationalSkill", skill.id, action, before ?? undefined);
   return { data: skill };
+}
+
+async function saveBillingReferenceMonth(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {
+  const value = text(action.value);
+  if (!isValidBillingReferenceMonth(value)) return { error: "Selecione um mês válido a partir de junho de 2026 (AAAA-MM)." };
+  await writeJsonConfig(tx, BILLING_REFERENCE_MONTH_CONFIG_KEY, value, "Mês de referência das prévias e invoices");
+  await auditSettings(tx, adminId, "EDICAO", "SystemConfig", BILLING_REFERENCE_MONTH_CONFIG_KEY, action);
+  return { data: { value } };
 }
 
 async function saveDefaultMonth(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {
@@ -846,6 +863,7 @@ function emptySettings() {
     employees: [],
     roleTitles: [],
     defaultMonth: "2026-07",
+    billingReferenceMonth: DEFAULT_BILLING_REFERENCE_MONTH,
     slaRules: [],
     approvalRules: [],
     coverageRules: [],

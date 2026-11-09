@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ChevronRight, Wrench } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
 import { EmptyState, MetricPill, PageHeader, Panel, SimpleTable, StatusBadge } from "@/components/ui/primitives";
+import { BILLING_START_MONTH, DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 import { cn } from "@/lib/utils";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName } from "@/lib/shift-display";
 import { FormInput, SystemSettings, apiJson, currentOperationalMonthInput, displaySystemRole } from './shared';
@@ -25,6 +26,7 @@ export function SettingsPage() {
   const [ruleDraft, setRuleDraft] = useState({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [generalDraft, setGeneralDraft] = useState<Record<string, unknown>>({});
   const [defaultMonthDraft, setDefaultMonthDraft] = useState(() => currentOperationalMonthInput());
+  const [billingMonthDraft, setBillingMonthDraft] = useState(DEFAULT_BILLING_REFERENCE_MONTH);
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
@@ -36,6 +38,7 @@ export function SettingsPage() {
       const payload = await apiJson<{ data: SystemSettings }>("/api/settings");
       setSettings(payload.data);
       setDefaultMonthDraft(payload.data.defaultMonth);
+      setBillingMonthDraft(payload.data.billingReferenceMonth);
       setGeneralDraft(payload.data.generalSettings ?? {});
     } catch (error) {
       setSettingsError(true);
@@ -388,6 +391,12 @@ export function SettingsPage() {
 
           {activeSection === "Configurações gerais" ? (
             <Panel title="Parâmetros e permissões">
+              <div className="mb-5 rounded-lg border border-border bg-slate-50 p-4">
+                <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                  <FormInput label="Mês de referência das prévias e invoices" type="month" min={BILLING_START_MONTH} value={billingMonthDraft} onChange={setBillingMonthDraft} helper="Define o mês exibido ao abrir Billing, Meu Invoice e a prévia no perfil. Meses anteriores continuam disponíveis nos filtros." />
+                  <button disabled={savingSettings || !settings || !billingMonthDraft} onClick={() => void saveSetting({ type: "billingReferenceMonth", value: billingMonthDraft }, "Mês das prévias e invoices atualizado.")} className="self-end rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">Salvar mês do invoice</button>
+                </div>
+              </div>
               <div className="mb-5 grid gap-3 md:grid-cols-[1fr_auto]">
                 <FormInput label="Mês padrão local" value={defaultMonthDraft} onChange={setDefaultMonthDraft} />
                 <button disabled={savingSettings} onClick={() => void saveSetting({ type: "defaultMonth", value: defaultMonthDraft }, "Mês padrão atualizado.")} className="self-end rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">Salvar</button>

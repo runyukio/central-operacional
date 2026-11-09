@@ -362,6 +362,7 @@ export type SystemSettings = {
   employees?: Array<{ id: string; name: string; email?: string; wb?: string; roleTitle?: string; roleName?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisorId?: string; supervisorName?: string; shiftId?: string; shift?: string; status?: string }>;
   roleTitles: Array<{ name: string; status: "ACTIVE" | "INACTIVE" }>;
   defaultMonth: string;
+  billingReferenceMonth: string;
   slaRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
   approvalRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
   coverageRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
