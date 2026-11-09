@@ -5,6 +5,8 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { SiteClassificationBadge, WorkstationSitesHub } from "@/components/workstation-sites-hub";
+import type { SiteClassification } from "@/lib/workstation-site-classification";
 
 type SourceType = "WEB" | "APP" | "IDLE" | "LOCKED" | "PRIVATE" | "UNKNOWN";
 type Summary = { rowCount: number; employees: number; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; privateSeconds: number; unknownSeconds: number; uniqueDomains: number };
@@ -16,6 +18,10 @@ type DetailTab = "WEB" | "APP" | "TIMELINE";
 const emptySummary: Summary = { rowCount: 0, employees: 0, totalSeconds: 0, webSeconds: 0, appSeconds: 0, idleSeconds: 0, lockedSeconds: 0, privateSeconds: 0, unknownSeconds: 0, uniqueDomains: 0 };
 
 export function WorkstationActivityPage() {
+  const [hubFilterOptions, setHubFilterOptions] = useState<{ lobs: string[]; shifts: string[] } | null>(null);
+  const [mode, setMode] = useState<"team" | "hub">("team");
+  const [classifications, setClassifications] = useState<Record<string, SiteClassification>>({});
+  const [classificationError, setClassificationError] = useState("");
   const [date, setDate] = useState(todayInSaoPaulo);
   const [search, setSearch] = useState("");
   const [agentSearch, setAgentSearch] = useState("");
@@ -40,7 +46,7 @@ export function WorkstationActivityPage() {
   }, [search]);
 
   useEffect(() => {
-    if (selectedKey) return;
+    if (selectedKey || mode === "hub") return;
     const controller = new AbortController();
     setLoading(true); setError("");
     const params = new URLSearchParams({ date, view: "overview" });
@@ -53,10 +59,10 @@ export function WorkstationActivityPage() {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Não foi possível carregar os agentes.");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [date, agentSearch, lob, shift, selectedKey, refresh]);
+  }, [date, agentSearch, lob, shift, selectedKey, refresh, mode]);
 
   useEffect(() => {
-    if (!selectedKey) return;
+    if (!selectedKey || mode === "hub") return;
     const controller = new AbortController();
     setDetailLoading(true); setDetailError("");
     const params = new URLSearchParams({ date, view: "agent", agentKey: selectedKey, limit: "5000", timeline: String(needsTimeline) });
@@ -66,7 +72,7 @@ export function WorkstationActivityPage() {
       if (!controller.signal.aborted) setDetailError(reason instanceof Error ? reason.message : "Não foi possível carregar o agente.");
     }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     return () => controller.abort();
-  }, [date, selectedKey, needsTimeline, refresh]);
+  }, [date, selectedKey, needsTimeline, refresh, mode]);
 
   useEffect(() => {
     const refreshVisible = () => { if (!document.hidden) setRefresh((value) => value + 1); };
@@ -74,6 +80,17 @@ export function WorkstationActivityPage() {
     document.addEventListener("visibilitychange", refreshVisible);
     return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", refreshVisible); };
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/realtime-hours/activity/sites/classifications", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok || !body.success) throw new Error("Não foi possível atualizar os badges dos sites.");
+        if (!controller.signal.aborted) { setClassifications(body.classifications); setClassificationError(""); }
+      }).catch(() => { if (!controller.signal.aborted) setClassificationError("Os badges não puderam ser atualizados. Tente atualizar novamente."); });
+    return () => controller.abort();
+  }, [refresh, mode]);
 
   const overviewMatchesFilters = overview?.date === date && (overview.filters?.lob ?? "") === lob && (overview.filters?.shift ?? "") === shift;
   const data = selected ? detail?.date === date && detail.agentKey === selectedKey ? detail : null : overviewMatchesFilters ? overview : null;
@@ -90,15 +107,19 @@ export function WorkstationActivityPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Atividades" description="Uma visão geral da equipe. Os detalhes aparecem ao selecionar um agente." icon={Activity}
+      <PageHeader title="Atividades" description="Consulte as atividades da equipe, classifique os sites e extraia relatórios." icon={Activity}
         actions={<div className="flex flex-wrap items-center gap-2">
           <label className="relative"><span className="sr-only">Data das atividades</span><CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
             <input type="date" aria-label="Data das atividades" value={date} onChange={(event) => { setDate(event.target.value || todayInSaoPaulo()); setPage(0); }} className="premium-control h-10 pl-9 pr-3 text-sm font-bold text-navy-950" />
           </label>
-          <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={busy} className="premium-button inline-flex h-10 items-center gap-2 px-3 text-sm font-bold disabled:opacity-60"><RefreshCw className={cn("h-4 w-4", busy && "animate-spin")} />Atualizar</button>
+          <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={mode === "team" && busy} className="premium-button inline-flex h-10 items-center gap-2 px-3 text-sm font-bold disabled:opacity-60"><RefreshCw className={cn("h-4 w-4", mode === "team" && busy && "animate-spin")} />Atualizar</button>
         </div>} />
 
-      {currentError ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{currentError}</div> : null}
+      <div role="group" aria-label="Visão das atividades" className="flex w-fit gap-1 rounded-xl border border-border bg-white p-1">
+        {([{ key: "team", label: "Equipe" }, { key: "hub", label: "Hub de links" }] as const).map((item) => <button key={item.key} type="button" aria-pressed={mode === item.key} onClick={() => setMode(item.key)} className={cn("rounded-lg px-4 py-2.5 text-sm font-bold", mode === item.key ? "bg-blue-600 text-white" : "text-muted hover:bg-slate-50")}>{item.label}</button>)}
+      </div>
+      {classificationError ? <p role="alert" className="text-sm text-amber-700">{classificationError}</p> : null}
+      {mode === "team" && currentError ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{currentError}</div> : null}
 
       {selected ? <div className="space-y-4">
         <button type="button" onClick={() => { setSelected(null); setPage(0); }} className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-800"><ArrowLeft className="h-4 w-4" />Voltar à visão geral</button>
@@ -110,10 +131,11 @@ export function WorkstationActivityPage() {
 
       {!selected ? <div className="space-y-4 rounded-2xl border border-border bg-white p-4 sm:p-5">
         <div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-navy-950">Filtrar equipe</p>{lob || shift ? <button type="button" onClick={() => { setLob(""); setShift(""); }} className="text-sm font-bold text-blue-600 hover:text-blue-800">Limpar filtros</button> : null}</div>
-        <ActivitySlicer label="LOB" value={lob} options={overview?.filterOptions?.lobs ?? []} onChange={setLob} />
-        <ActivitySlicer label="Turno" value={shift} options={overview?.filterOptions?.shifts ?? []} onChange={setShift} />
+        <ActivitySlicer label="LOB" value={lob} options={(mode === "hub" ? hubFilterOptions?.lobs : overview?.filterOptions?.lobs) ?? []} onChange={setLob} />
+        <ActivitySlicer label="Turno" value={shift} options={(mode === "hub" ? hubFilterOptions?.shifts : overview?.filterOptions?.shifts) ?? []} onChange={setShift} />
       </div> : null}
 
+      {mode === "hub" ? <WorkstationSitesHub date={date} lob={selected ? "" : lob} shift={selected ? "" : shift} agentKey={selectedKey ?? undefined} refresh={refresh} onFilterOptions={setHubFilterOptions} onClassified={(domain, classification) => setClassifications((current) => ({ ...current, [domain]: classification }))} /> : <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={busy}>
         <Metric title={selected ? "Tempo monitorado" : "Agentes e estações"} value={data ? selected ? formatDuration(summary.totalSeconds) : String(summary.employees) : "—"} icon={selected ? Clock : UsersRound} />
         <Metric title={selected ? "Em sites" : "Tempo monitorado"} value={data ? formatDuration(selected ? summary.webSeconds : summary.totalSeconds) : "—"} icon={selected ? Globe2 : Clock} />
@@ -137,14 +159,15 @@ export function WorkstationActivityPage() {
           {([{ key: "WEB", label: "Sites", icon: Globe2 }, { key: "APP", label: "Aplicativos", icon: AppWindow }, { key: "TIMELINE", label: "Linha do tempo", icon: Clock }] as const).map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-pressed={tab === key} aria-controls="activity-detail-content" onClick={() => { setTab(key); setPage(0); }} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors", tab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-slate-50 hover:text-navy-950")}><Icon className="h-4 w-4" />{label}</button>)}
         </div>
         <div id="activity-detail-content" role="region" aria-label={tab === "WEB" ? "Sites do agente" : tab === "APP" ? "Aplicativos do agente" : "Histórico do agente"}>
-          {detailLoading && (!data || (needsTimeline && !data.timelineIncluded)) ? <Loading label="Carregando atividade do agente..." /> : tab !== "TIMELINE" ? <RankingPanel title={tab === "WEB" ? "Sites utilizados" : "Aplicativos utilizados"} items={tab === "WEB" ? data?.topDomains ?? [] : data?.topApplications ?? []} total={tab === "WEB" ? summary.webSeconds : summary.appSeconds} applications={tab === "APP"} count={tab === "WEB" ? summary.uniqueDomains : undefined} /> : <Panel title="Linha do tempo">
+          {detailLoading && (!data || (needsTimeline && !data.timelineIncluded)) ? <Loading label="Carregando atividade do agente..." /> : tab !== "TIMELINE" ? <RankingPanel title={tab === "WEB" ? "Sites utilizados" : "Aplicativos utilizados"} items={tab === "WEB" ? data?.topDomains ?? [] : data?.topApplications ?? []} total={tab === "WEB" ? summary.webSeconds : summary.appSeconds} applications={tab === "APP"} count={tab === "WEB" ? summary.uniqueDomains : undefined} classifications={classifications} /> : <Panel title="Linha do tempo">
             {!data?.rows.length ? <EmptyState title="Sem atividade para este agente" description="Escolha outra data para consultar o histórico." /> : <>
-              <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full min-w-[650px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Intervalo</th><th className="px-4 py-3">Atividade</th><th className="px-4 py-3">Duração</th><th className="px-4 py-3">Estação</th></tr></thead><tbody className="divide-y divide-border">{pageRows.map((row) => <tr key={`${row.eventId}-${row.startedAt}`}><td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-muted">{formatTime(row.startedAt, true)} – {formatTime(row.endedAt, true)}</td><td className="px-4 py-3"><span className="block text-sm font-bold text-navy-950">{row.sourceType === "WEB" ? row.domain || "Domínio não identificado" : row.sourceType === "APP" ? formatApplication(row.applicationName) : sourceLabel(row.sourceType)}</span><span className="mt-0.5 block text-xs text-muted">{sourceLabel(row.sourceType)}</span></td><td className="px-4 py-3 text-sm font-semibold text-navy-950">{formatDuration(row.durationSeconds)}</td><td className="px-4 py-3 text-xs text-muted">{row.hostname}</td></tr>)}</tbody></table></div>
+              <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full min-w-[650px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Intervalo</th><th className="px-4 py-3">Atividade</th><th className="px-4 py-3">Duração</th><th className="px-4 py-3">Estação</th></tr></thead><tbody className="divide-y divide-border">{pageRows.map((row) => <tr key={`${row.eventId}-${row.startedAt}`}><td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-muted">{formatTime(row.startedAt, true)} – {formatTime(row.endedAt, true)}</td><td className="px-4 py-3"><span className="block text-sm font-bold text-navy-950">{row.sourceType === "WEB" ? row.domain || "Domínio não identificado" : row.sourceType === "APP" ? formatApplication(row.applicationName) : sourceLabel(row.sourceType)}</span><span className="mt-0.5 block text-xs text-muted">{sourceLabel(row.sourceType)}</span>{row.sourceType === "WEB" && row.domain ? <SiteClassificationBadge classification={classifications[row.domain]} /> : null}</td><td className="px-4 py-3 text-sm font-semibold text-navy-950">{formatDuration(row.durationSeconds)}</td><td className="px-4 py-3 text-xs text-muted">{row.hostname}</td></tr>)}</tbody></table></div>
               <div className="mt-4 flex items-center justify-between gap-3 text-xs text-muted"><span>Página {currentPage + 1} de {pages}</span><div className="flex gap-2"><button type="button" aria-label="Página anterior" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Próxima página" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>
               {data.truncated ? <p className="mt-3 text-xs text-amber-700">O histórico exibe até {data.limit.toLocaleString("pt-BR")} registros. Os totais e rankings consideram o dia completo.</p> : null}
             </>}
           </Panel>}
         </div>
+      </>}
       </>}
       <p className="flex items-center gap-2 px-1 text-xs text-muted"><ShieldCheck className="h-3.5 w-3.5 shrink-0" />Somente domínio, aplicativo e intervalo são coletados.</p>
     </div>
@@ -186,10 +209,10 @@ function TimeDistribution({ summary }: { summary: Summary }) {
   if (!summary.totalSeconds) return <p className="py-3 text-sm text-muted">O resumo será preenchido quando houver atividade nessa data.</p>;
   return <><div className="flex h-3 overflow-hidden rounded-full bg-slate-100" aria-label="Distribuição do tempo monitorado">{items.map((item) => <span key={item.label} className={item.color} style={{ width: `${(item.seconds / summary.totalSeconds) * 100}%` }} title={`${item.label}: ${formatDuration(item.seconds)}`} />)}</div><div className="mt-4 flex flex-wrap gap-x-6 gap-y-2">{items.map((item) => <span key={item.label} className="inline-flex items-center gap-2 text-xs text-muted"><span className={cn("h-2 w-2 rounded-full", item.color)} />{item.label}<span className="font-bold text-navy-950">{formatDuration(item.seconds)}</span></span>)}</div></>;
 }
-function RankingPanel({ title, items, total, applications, count }: { title: string; items: Ranking[]; total: number; applications: boolean; count?: number }) {
+function RankingPanel({ title, items, total, applications, count, classifications }: { title: string; items: Ranking[]; total: number; applications: boolean; count?: number; classifications: Record<string, SiteClassification> }) {
   return <Panel title={title}>{!items.length ? <EmptyState title={applications ? "Nenhum aplicativo registrado" : "Nenhum site registrado"} description="Não há registros desse tipo para o agente e a data selecionados." /> : <>
     <p className="mb-4 text-sm text-muted">{count !== undefined ? `${count} domínio${count === 1 ? "" : "s"} registrado${count === 1 ? "" : "s"}` : `${items.length} aplicativo${items.length === 1 ? "" : "s"}`} · {formatDuration(total)} no total{count && count > items.length ? ` · ${items.length} mais utilizados` : ""}</p>
-    <div className="overflow-hidden rounded-xl border border-border"><table className="w-full text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">{applications ? "Aplicativo" : "Domínio"}</th><th className="px-4 py-3 text-right">Tempo</th><th className="hidden w-52 px-4 py-3 sm:table-cell">Participação</th></tr></thead><tbody className="divide-y divide-border">{items.map((item) => { const percent = total ? Math.min(100, (item.seconds / total) * 100) : 0; return <tr key={item.label}><td className="px-4 py-4"><span className="inline-flex items-center gap-2.5 text-sm font-bold text-navy-950">{applications ? <AppWindow className="h-4 w-4 shrink-0 text-indigo-500" /> : <Globe2 className="h-4 w-4 shrink-0 text-blue-500" />}<span className="break-all">{applications ? formatApplication(item.label) : item.label}</span></span></td><td className="whitespace-nowrap px-4 py-4 text-right text-sm font-semibold text-navy-950">{formatDuration(item.seconds)}</td><td className="hidden px-4 py-4 sm:table-cell"><div className="flex items-center gap-3"><div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-blue-400" style={{ width: `${percent}%` }} /></div><span className="w-10 text-right text-xs text-muted">{percent.toFixed(1)}%</span></div></td></tr>; })}</tbody></table></div>
+    <div className="overflow-hidden rounded-xl border border-border"><table className="w-full text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">{applications ? "Aplicativo" : "Domínio"}</th><th className="px-4 py-3 text-right">Tempo</th><th className="hidden w-52 px-4 py-3 sm:table-cell">Participação</th></tr></thead><tbody className="divide-y divide-border">{items.map((item) => { const percent = total ? Math.min(100, (item.seconds / total) * 100) : 0; return <tr key={item.label}><td className="px-4 py-4"><span className="inline-flex items-center gap-2.5 text-sm font-bold text-navy-950">{applications ? <AppWindow className="h-4 w-4 shrink-0 text-indigo-500" /> : <Globe2 className="h-4 w-4 shrink-0 text-blue-500" />}<span className="break-all">{applications ? formatApplication(item.label) : item.label}</span></span>{!applications ? <span className="mt-2 block"><SiteClassificationBadge classification={classifications[item.label]} /></span> : null}</td><td className="whitespace-nowrap px-4 py-4 text-right text-sm font-semibold text-navy-950">{formatDuration(item.seconds)}</td><td className="hidden px-4 py-4 sm:table-cell"><div className="flex items-center gap-3"><div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-blue-400" style={{ width: `${percent}%` }} /></div><span className="w-10 text-right text-xs text-muted">{percent.toFixed(1)}%</span></div></td></tr>; })}</tbody></table></div>
   </>}</Panel>;
 }
 function sourceLabel(type: SourceType) { return { WEB: "Site", APP: "Aplicativo", IDLE: "Inatividade", LOCKED: "Tela bloqueada", PRIVATE: "Navegação privada", UNKNOWN: "Não identificado" }[type]; }

@@ -297,7 +297,7 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
   };
 }
 
-async function requireActivityViewer(actor: Actor) {
+export async function requireActivityViewer(actor: Actor) {
   const viewer = await prisma.user.findUnique({
     where: { email: actor.email },
     select: activityViewerSelect
@@ -322,7 +322,7 @@ async function requireActivityViewer(actor: Actor) {
   return { success: true, viewer } as const;
 }
 
-async function visibleEmployeeIdsForViewer(viewer: ActivityViewer): Promise<string[] | null> {
+export async function visibleEmployeeIdsForViewer(viewer: ActivityViewer): Promise<string[] | null> {
   if (normalizeAccessRole(viewer.role.name) !== "SUPERVISOR") return null;
   if (!viewer.employeeProfile?.id) return [];
   const employees = await prisma.employeeProfile.findMany({
