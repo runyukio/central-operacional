@@ -208,11 +208,8 @@ export async function importWorkstationActivity(input: unknown) {
   `);
 
   const retentionDays = boundedInteger(process.env.REALTIME_HOURS_ACTIVITY_RETENTION_DAYS, 7, 1, 90);
-  const retentionCutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1_000);
-  await prisma.$executeRaw(Prisma.sql`
-    DELETE FROM "agent_activity"."WorkstationActivitySegment"
-    WHERE "endedAt" < ${retentionCutoff}
-  `).catch(() => undefined);
+  // Retention runs in bounded background batches. An upload must not rescan
+  // the full retention range (or wait for unrelated deletions) on every POST.
 
   return {
     success: true,

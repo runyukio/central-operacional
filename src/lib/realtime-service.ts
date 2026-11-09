@@ -24,6 +24,7 @@ import { buildRealtimePresenceFallbackRows } from "@/lib/realtime-presence-fallb
 import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import { groupRealtimeCycles, selectRealtimeCycle, type RealtimeCycleGrouping } from "@/lib/realtime-hourly-cycles";
+import { refreshRealtimeCycleHeads } from "@/lib/realtime-cycle-heads";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
@@ -428,12 +429,15 @@ async function pruneRealtimeHistory(currentBatchId?: string) {
       const staleIds = staleBatches.map((batch) => batch.id);
       if (!staleIds.length) return;
 
-      await prisma.$transaction([
-        prisma.realTimeAgentCycleSummary.deleteMany({ where: { batchId: { in: staleIds } } }),
-        prisma.realTimeQueueCycleSummary.deleteMany({ where: { batchId: { in: staleIds } } }),
-        prisma.realTimeRecord.deleteMany({ where: { batchId: { in: staleIds } } }),
-        prisma.realTimeImportBatch.deleteMany({ where: { id: { in: staleIds } } })
-      ]);
+      await prisma.$transaction(async tx => {
+        await tx.realTimeAgentCycleSummary.deleteMany({ where: { batchId: { in: staleIds } } });
+        await tx.realTimeQueueCycleSummary.deleteMany({ where: { batchId: { in: staleIds } } });
+        await tx.realTimeRecord.deleteMany({ where: { batchId: { in: staleIds } } });
+        await tx.realTimeImportBatch.deleteMany({ where: { id: { in: staleIds } } });
+        // Publish the post-retention heads atomically. If this fails, retention
+        // rolls back too, so the monitor cannot keep a deleted feed checkpoint.
+        await refreshRealtimeCycleHeads(tx);
+      }, { timeout: 30_000 });
     }
   } catch (error) {
     console.warn("[realtime] Não foi possível limpar histórico antigo.", error);
@@ -512,6 +516,7 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
       });
     }
 
+    await refreshRealtimeCycleHeads(tx);
     return created;
   });
 
@@ -619,6 +624,7 @@ export async function backfillRealtimeCycleSummaries(options: RealtimeSummaryBac
       });
       result.insertedQueueSummaries += chunk.length;
     }
+    await refreshRealtimeCycleHeads(tx);
   });
 
   return result;

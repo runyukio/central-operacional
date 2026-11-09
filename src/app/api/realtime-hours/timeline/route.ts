@@ -15,7 +15,9 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const result = await getRealtimeHoursTimeline({
     date: url.searchParams.get("date"),
-    search: url.searchParams.get("search")
+    search: url.searchParams.get("search"),
+    lob: url.searchParams.get("lob"),
+    supervisor: url.searchParams.get("supervisor")
   });
   return NextResponse.json(result);
 }

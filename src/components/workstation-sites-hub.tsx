@@ -6,6 +6,7 @@ import { EmptyState, Panel } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import { siteClassifications, siteClassificationLabels, type SiteClassification } from "@/lib/workstation-site-classification";
 import type { SiteUsage } from "@/lib/workstation-sites-service";
+import { activityWindowIncludesToday } from "@/lib/activity-refresh";
 
 type HubData = {
   sites: SiteUsage[];
@@ -40,6 +41,12 @@ export function WorkstationSitesHub({ date, lob, shift, agentKey, refresh, onCla
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setStartDate(date); setEndDate(date); }, [date]);
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 300); return () => window.clearTimeout(timer); }, [search]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden && activityWindowIncludesToday(startDate, endDate)) setRevision((value) => value + 1);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [startDate, endDate]);
   const params = useMemo(() => {
     const value = new URLSearchParams({ startDate, endDate, lob, shift, search: debouncedSearch, classification });
     if (agentKey) value.set("agentKey", agentKey);

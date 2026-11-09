@@ -17,6 +17,7 @@ import {
   buildRealtimeHoursSlotAssignmentWindows,
   matchRealtimeHoursPlannedShift,
   realtimeHoursArchiveThroughDate,
+  matchesRealtimeHoursRosterFilters,
   saoPauloDateKey,
   startOfSaoPauloDate,
   type RealtimeHoursPlannedShift,
@@ -117,6 +118,11 @@ type RealtimeHoursTimelineOptions = {
   /** Internal import scope; regular capture screens remain unfiltered. */
   eligibleEmployeeIds?: string[];
   eligibleWbLogins?: string[];
+  lob?: string | null;
+  supervisor?: string | null;
+  /** Candidate scope only: identity resolution still uses the original rules. */
+  candidateEmployeeIds?: string[];
+  candidateWbLogins?: string[];
 };
 
 export type RealtimeHoursTimelineRow = ReturnType<typeof buildRealtimeHoursTimelineRow>;
@@ -731,7 +737,7 @@ async function archiveRealtimeHoursBeforeCutoff(cutoff: Date) {
 }
 
 export async function archiveRealtimeHoursDate(dateKey: string) {
-  const source = (await loadRealtimeHoursArchiveFingerprints([dateKey])).get(dateKey);
+  const source = (await loadRealtimeHoursArchiveFingerprints([dateKey], true)).get(dateKey);
   const before = source?.fingerprint;
   if (!before) return false;
   const existing = await prisma.realTimeHoursArchiveDay.findUnique({ where: { dateKey } });
@@ -748,7 +754,7 @@ export async function archiveRealtimeHoursDate(dateKey: string) {
   }
   // Always rebuild from ALL retained raw events, never from an old/filtered archive.
   const timeline = await getRealtimeHoursTimelineFromRaw({ date: dateKey });
-  const after = (await loadRealtimeHoursArchiveFingerprints([dateKey])).get(dateKey)?.fingerprint;
+  const after = (await loadRealtimeHoursArchiveFingerprints([dateKey], true)).get(dateKey)?.fingerprint;
   if (before !== after) return false;
   const generatedAt = new Date();
 
@@ -795,7 +801,18 @@ export async function archiveRealtimeHoursDate(dateKey: string) {
  * reference content hashes also detect historic mapping, roster and shift edits.
  * Only tiny fingerprints cross the DB boundary, not the historical raw payloads.
  */
-async function loadRealtimeHoursArchiveFingerprints(dates: string[]) {
+type ArchiveFingerprint = { fingerprint: string; sourceRecords: number; preservedSourceRecords: number };
+// Share only in-flight validation. No TTL is added: a completed read must not
+// hide a late event or a roster correction from the next archive validation.
+const archiveFingerprintReads = createBoundedSnapshotCache<Map<string, ArchiveFingerprint>>(0, 16);
+async function loadRealtimeHoursArchiveFingerprints(dates: string[], fresh = false) {
+  const requested = [...new Set(dates)].sort();
+  if (!requested.length) return new Map<string, ArchiveFingerprint>();
+  return fresh ? readRealtimeHoursArchiveFingerprints(requested)
+    : archiveFingerprintReads.get(JSON.stringify(requested), () => readRealtimeHoursArchiveFingerprints(requested));
+}
+
+async function readRealtimeHoursArchiveFingerprints(dates: string[]) {
   const periods = Array.from(new Set(dates)).map((date) => resolveTimelineDate(date));
   if (!periods.length) return new Map<string, { fingerprint: string; sourceRecords: number; preservedSourceRecords: number }>();
   const requested = periods.map((period) => Prisma.sql`(
@@ -1073,8 +1090,14 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
 
 async function loadRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions): Promise<RealtimeHoursTimelineResult> {
   const startedAt = Date.now();
+  // Archives contain the roster as captured when they were generated. Applying
+  // today's roster to their SQL scope could remove a historically matching row.
   const archived = await getArchivedRealtimeHoursTimeline(options);
-  const result = await applyConfirmedTimelineEntries(archived ?? await getRealtimeHoursTimelineFromRaw(options));
+  let result = await applyConfirmedTimelineEntries(archived ?? await getRealtimeHoursTimelineFromRaw(await realtimeHoursRosterReadScope(options)));
+  if (options.lob || options.supervisor) {
+    const rows = result.rows.filter((row) => matchesRealtimeHoursRosterFilters(row, options));
+    result = { ...result, ...buildRealtimeHoursTimelineResult({ ...result, rows }), archiveWarning: result.archiveWarning };
+  }
   logPerformanceMetric("realtime-hours.timeline", startedAt, {
     date: result.date,
     records: result.sourceRecords ?? 0,
@@ -1082,6 +1105,20 @@ async function loadRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions):
     archived: Boolean(result.archived)
   });
   return result;
+}
+
+async function realtimeHoursRosterReadScope(options: RealtimeHoursTimelineOptions): Promise<RealtimeHoursTimelineOptions> {
+  // Unlinked captures can match Sem LOB/Sem supervisor. Keep the full read in
+  // that case rather than silently dropping those stations.
+  if (options.employeeId || options.wbLogin || options.eligibleEmployeeIds
+    || (!options.lob && !options.supervisor) || matchesRealtimeHoursRosterFilters({ lob: "", supervisor: "Sem supervisor" }, options)) return options;
+  const employees = await prisma.employeeProfile.findMany({ select: {
+    id: true, wbLogin: true, lob: { select: { name: true } }, supervisor: { select: { fullName: true } }
+  } });
+  const matching = employees.filter((employee) => matchesRealtimeHoursRosterFilters({
+    lob: employee.lob?.name, supervisor: employee.supervisor?.fullName
+  }, options));
+  return { ...options, candidateEmployeeIds: matching.map((employee) => employee.id), candidateWbLogins: matching.map((employee) => employee.wbLogin) };
 }
 
 async function applyConfirmedTimelineEntries(timeline: RealtimeHoursTimelineResult) {
@@ -1189,10 +1226,12 @@ export async function getRealtimeHoursTimelineRange(options: {
     timelines.forEach((timeline) => results.set(timeline.date, timeline));
   }
 
-  return Promise.all(dates
+  const timelines = dates
     .map((date) => results.get(date))
-    .filter((timeline): timeline is RealtimeHoursTimelineResult => Boolean(timeline))
-    .map(applyConfirmedTimelineEntries));
+    .filter((timeline): timeline is RealtimeHoursTimelineResult => Boolean(timeline));
+  const corrections = timelines.some((timeline) => timeline.rows.length)
+    ? await loadConfirmedEntryCorrections(timelines.map((timeline) => timeline.date)) : [];
+  return timelines.map((timeline) => applyRealtimeHoursEntryCorrections(timeline, corrections));
 }
 
 async function getArchivedRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions) {
@@ -1287,8 +1326,10 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
   const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
   const eligibleIds = options.eligibleEmployeeIds ? new Set(options.eligibleEmployeeIds) : null;
   const eligibleLogins = new Set((options.eligibleWbLogins ?? []).map(normalizeLogin));
-  const mappedEmployeeIds = eligibleIds ? [...eligibleIds] : employeeId ? [employeeId] : [];
-  const mappedWbLogins = eligibleIds ? [...eligibleLogins] : wbLogin ? [wbLogin] : [];
+  const readIds = eligibleIds ? [...eligibleIds] : options.candidateEmployeeIds;
+  const readLogins = eligibleIds ? [...eligibleLogins] : (options.candidateWbLogins ?? []).map(normalizeLogin);
+  const mappedEmployeeIds = readIds ?? (employeeId ? [employeeId] : []);
+  const mappedWbLogins = readIds ? readLogins : wbLogin ? [wbLogin] : [];
   const eligibleMappings = mappedEmployeeIds.length || mappedWbLogins.length ? await prisma.realTimeHoursIdentityMapping.findMany({
     where: { OR: [{ employeeId: { in: mappedEmployeeIds } }, { wbLogin: { in: mappedWbLogins, mode: "insensitive" } }] },
     select: { hostname: true, windowsUser: true }
@@ -1299,10 +1340,10 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
         gte: period.queryStart,
         lt: period.end
       },
-      ...(eligibleIds ? {
+      ...(readIds ? {
         OR: [
-          { employeeId: { in: [...eligibleIds] } },
-          { wbLogin: { in: [...eligibleLogins], mode: "insensitive" as const } },
+          { employeeId: { in: readIds } },
+          { wbLogin: { in: readLogins, mode: "insensitive" as const } },
           ...eligibleMappings.map(({ hostname, windowsUser }) => ({ hostname, windowsUser }))
         ]
       } : employeeId || wbLogin ? {

@@ -123,17 +123,14 @@ export function filterRealtimeHoursTimelineRows<T extends RealtimeHoursTimelineF
   filters: RealtimeHoursTimelineFilters
 ) {
   const search = normalizeFilterText(filters.search);
-  const lob = normalizeFilterKey(filters.lob);
   const presence = normalizeFilterKey(filters.presence);
-  const supervisor = normalizeFilterText(filters.supervisor);
   const shift = normalizeFilterKey(filters.shift);
   const schedule = normalizeFilterKey(filters.schedule);
 
   return rows.filter((row) => {
     if (row.data !== filters.date) return false;
-    if (lob && lob !== "ALL_LOBS" && normalizeLob(row.lob) !== lob) return false;
+    if (!matchesRealtimeHoursRosterFilters(row, filters)) return false;
     if (presence && presence !== "ALL" && normalizeFilterKey(row.currentStatus) !== presence) return false;
-    if (supervisor && supervisor !== "all" && normalizeFilterText(row.supervisor || "Sem supervisor") !== supervisor) return false;
     if (shift && shift !== "ALL" && normalizeFilterKey(shiftCategoryName(row.shift)) !== shift) return false;
     if (schedule === "SCHEDULED" && !isRealtimeHoursRowScheduled(row, filters.date)) return false;
 
@@ -153,6 +150,17 @@ export function filterRealtimeHoursTimelineRows<T extends RealtimeHoursTimelineF
       row.ipAddress
     ].join(" ")).includes(search);
   });
+}
+
+/** Shared by the final row filter and the conservative pre-read candidate scope. */
+export function matchesRealtimeHoursRosterFilters(
+  row: { lob?: string | null; supervisor?: string | null },
+  filters: { lob?: string | null; supervisor?: string | null }
+) {
+  const lob = normalizeFilterKey(filters.lob);
+  const supervisor = normalizeFilterText(filters.supervisor);
+  return (!lob || lob === "ALL_LOBS" || normalizeLob(row.lob) === lob)
+    && (!supervisor || supervisor === "all" || normalizeFilterText(row.supervisor || "Sem supervisor") === supervisor);
 }
 
 export function isRealtimeHoursRowScheduled(
