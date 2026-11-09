@@ -13,5 +13,5 @@ export async function getDefaultBillingReferenceMonth() {
 
 export async function resolveBillingReferenceMonth(input?: string | null) {
   // An explicitly selected historical period always takes precedence.
-  return normalizeReferenceMonth(input) || await getDefaultBillingReferenceMonth();
+  return input?.trim() ? normalizeReferenceMonth(input) : await getDefaultBillingReferenceMonth();
 }

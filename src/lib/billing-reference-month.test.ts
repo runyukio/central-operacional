@@ -70,6 +70,9 @@ test("an admin can persist a new default with an audit; invoice and profile use 
 test("historical selections take priority without consulting the default", async (t) => {
   const f = fixture(t, "2026-11");
   t.mock.method(prisma.systemConfig, "findUnique", async () => { throw new Error("default should not be read"); });
+  for (const value of ["invalid", "2026-13", "2026-00"]) {
+    assert.equal(await resolveBillingReferenceMonth(value), "");
+  }
   for (const month of ["2026-06", "2026-10"]) {
     assert.equal(await resolveBillingReferenceMonth(month), month);
     await assert.rejects(getEmployeeBillingPreview("employee", month), /stop before invoice calculation/);
