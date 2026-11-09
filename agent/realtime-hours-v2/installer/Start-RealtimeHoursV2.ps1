@@ -44,10 +44,15 @@ try {
   $logFile = Join-Path $logDir ('install-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
   Start-Transcript -LiteralPath $logFile -Force | Out-Null
   Write-Host 'Instalando captura de dominios e envio para a Central...'
+  $checkpointInterval = 240
+  if ($null -ne $release.PSObject.Properties['activityUploadPolicy']) {
+    $checkpointInterval = [int]$release.activityUploadPolicy.openCheckpointUploadIntervalSeconds
+  }
   & (Join-Path $PSScriptRoot 'Install-RealtimeHoursV2.ps1') `
     -AgentExe (Join-Path $PSScriptRoot 'RealtimeHoursAgentV2.exe') `
     -ExtensionId ([string]$release.extensionId) -ExtensionUpdateUrl ([string]$release.extensionUpdateUrl) `
-    -EnrollmentFile $enrollment -BaseUrl ([string]$release.baseUrl)
+    -EnrollmentFile $enrollment -BaseUrl ([string]$release.baseUrl) `
+    -OpenCheckpointUploadIntervalSeconds $checkpointInterval
   try {
     & (Join-Path $PSScriptRoot 'Collect-RealtimeHoursV2Diagnostics.ps1') -OutputPath (Join-Path $env:PUBLIC 'Desktop\RealtimeHoursV2-Diagnostico.json')
   } catch { Write-Warning "Diagnostico nao exportado: $($_.Exception.Message)" }

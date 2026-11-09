@@ -1,5 +1,10 @@
 name: Realtime Hours V2
 
+# Push and PR events for the same branch share a run; superseded builds stop.
+concurrency:
+  group: realtime-hours-v2-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 on:
   pull_request:
     paths:
@@ -70,13 +75,13 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Contract tests
-        run: npx tsx --test src/lib/realtime-hours-v2/auth.test.ts src/lib/realtime-hours-v2/contract.test.ts src/lib/realtime-hours-v2/request.test.ts src/lib/realtime-hours-v2/enrollment.test.ts src/lib/realtime-hours-v2/central-activity-bridge.test.ts src/lib/realtime-hours-v2/central-presence-bridge.test.ts
+        run: npx tsx --test src/lib/realtime-hours-v2/auth.test.ts src/lib/realtime-hours-v2/contract.test.ts src/lib/realtime-hours-v2/request.test.ts src/lib/realtime-hours-v2/enrollment.test.ts src/lib/realtime-hours-v2/central-activity-bridge.test.ts src/lib/realtime-hours-v2/central-presence-bridge.test.ts src/lib/realtime-hours-v2/maintenance.test.ts
       - name: Typecheck
         run: npm run typecheck
       - name: Lint V2 files
         run: npx eslint src/lib/realtime-hours-v2 src/app/api/realtime-hours/v2 src/app/api/cron/realtime-hours-v2-maintenance scripts/create-realtime-hours-v2-enrollment.ts scripts/create-realtime-hours-v2-deployment.ts
       - name: Installer package tests
-        run: python3 -B agent/realtime-hours-v2/tests/test_package_one_click.py
+        run: python3 -B -m unittest discover -s agent/realtime-hours-v2/tests -p 'test_*.py'
       - name: Production build
         run: npm run build
 
@@ -108,6 +113,7 @@ jobs:
             "agent/realtime-hours-v2/installer/Install-RealtimeHoursV2.ps1",
             "agent/realtime-hours-v2/installer/Uninstall-RealtimeHoursV2.ps1",
             "agent/realtime-hours-v2/installer/Start-RealtimeHoursV2.ps1",
+            "agent/realtime-hours-v2/installer/Update-RealtimeHoursV2.ps1",
             "agent/realtime-hours-v2/installer/Collect-RealtimeHoursV2Diagnostics.ps1",
             "agent/realtime-hours-v2/installer/Windows-CredentialProtection.ps1",
             "agent/realtime-hours-v2/installer/Enrollment-RealtimeHoursV2.ps1",

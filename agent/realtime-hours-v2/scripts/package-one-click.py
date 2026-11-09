@@ -62,6 +62,9 @@ def make_package(root, enrollment_file, output, commit):
     release = {'schemaVersion': 1, 'environment': 'homologation', 'baseUrl': base_url,
                'extensionId': extension['extensionId'], 'extensionUpdateUrl': update_url,
                'commit': commit, 'pilot': True, 'installationMode': 'per-user', 'installerExpiresAt': enrollment['expiresAt'], 'enrollmentMode': 'fleet' if fleet else 'single-use',
+               'activityUploadPolicy': {'sampleIntervalSeconds': 2, 'heartbeatIntervalSeconds': 60,
+                                        'uploadIntervalSeconds': 30, 'openCheckpointUploadIntervalSeconds': 240,
+                                        'batchMaxRecords': 500, 'batchMaxBytes': 512 * 1024},
                'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     files['release.json'] = (json.dumps(release, indent=2) + '\n').encode()
     files['enrollment.json'] = (json.dumps(enrollment, indent=2) + '\n').encode()
@@ -79,6 +82,12 @@ Internet necessaria na primeira instalacao. O agente mantem fila local durante f
 Destino: servidor V2 de homologacao com envio autorizado para a Central Operacional.
 Maquinas ja instaladas continuam funcionando apos o vencimento deste ZIP.
 Para instalar em outra maquina, extraia novamente o ZIP original nessa maquina.
+
+Esta versao agrupa registros no mesmo envio. A observacao local continua a cada 2 segundos.
+Presenca: 60 segundos. Despacho normal de atividades encerradas: 30 segundos.
+O intervalo ainda aberto e enviado em ate 4 minutos, com atualizacao da tela em ate 1 minuto.
+Falhas de rede podem atrasar a tela; a fila local preserva os registros para reenvio.
+O executavel nao se atualiza sozinho. Execute o pacote aprovado para atualizar cada computador.
 
 A coleta inclui dominio da aba ativa e presenca. Nao coleta caminho da URL, conteudo ou senha.
 O agente inicia para qualquer usuario ao entrar, reconectar ou desbloquear a sessao Windows.

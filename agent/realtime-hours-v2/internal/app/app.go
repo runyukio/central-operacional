@@ -22,24 +22,28 @@ import (
 	"github.com/runyukio/central-operacional/agent/realtime-hours-v2/internal/transport"
 )
 
-const Version = "1.0.0-alpha.2"
+const Version = "1.0.0-alpha.3"
 
 type Runtime struct {
-	Config                  config.Config
-	ConfigPath              string
-	DeviceKey               []byte
-	Logger                  *log.Logger
-	Queue                   queue.Queue
-	Client                  transport.Client
-	Hostname                string
-	User                    string
-	Tracker                 *segment.Tracker
-	mu                      sync.Mutex
-	queueMu                 sync.Mutex
-	statusMu                sync.Mutex
-	SessionManaged          bool
-	startedAt               time.Time
-	heartbeatAcknowledgedAt time.Time
+	Config                       config.Config
+	ConfigPath                   string
+	DeviceKey                    []byte
+	Logger                       *log.Logger
+	Queue                        queue.Queue
+	Client                       transport.Client
+	Hostname                     string
+	User                         string
+	Tracker                      *segment.Tracker
+	mu                           sync.Mutex
+	queueMu                      sync.Mutex
+	statusMu                     sync.Mutex
+	SessionManaged               bool
+	startedAt                    time.Time
+	heartbeatAcknowledgedAt      time.Time
+	uploadRetry                  map[string]uploadRetry
+	uploadNow                    func() time.Time
+	openCheckpointAcknowledgedAt time.Time
+	openCheckpointUpdates        chan struct{}
 }
 
 type HeartbeatPayload struct {
@@ -141,6 +145,35 @@ func (r *Runtime) RunDaemon(ctx context.Context) error {
 	defer sampleTicker.Stop()
 	defer heartbeatTicker.Stop()
 	defer uploadTicker.Stop()
+	// A separate deadline avoids adding another ordinary upload tick to an
+	// explicitly chosen open-checkpoint visibility budget.
+	var checkpointTimer *time.Timer
+	var checkpointDeadline <-chan time.Time
+	if r.Config.OpenCheckpointUploadIntervalSeconds > 0 {
+		first := time.Duration(r.Config.OpenCheckpointUploadIntervalSeconds) * time.Second
+		if upload := time.Duration(r.Config.UploadIntervalSeconds) * time.Second; upload > 0 && upload < first {
+			first = upload
+		}
+		checkpointTimer = time.NewTimer(first)
+		checkpointDeadline = checkpointTimer.C
+		r.openCheckpointUpdates = make(chan struct{}, 1)
+		defer checkpointTimer.Stop()
+	}
+	resetCheckpointDeadline := func(delay time.Duration) {
+		if checkpointTimer == nil {
+			return
+		}
+		if !checkpointTimer.Stop() {
+			select {
+			case <-checkpointTimer.C:
+			default:
+			}
+		}
+		if delay < time.Millisecond {
+			delay = time.Millisecond
+		}
+		checkpointTimer.Reset(delay)
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	pending := make(chan struct{}, 1)
 	workerDone := make(chan struct{})
@@ -189,7 +222,11 @@ func (r *Runtime) RunDaemon(ctx context.Context) error {
 			return
 		}
 		records := observedSegments(r.Tracker, current, lastObservation, now, time.Duration(r.Config.SampleIntervalSeconds)*3*time.Second)
-		if err := r.enqueueActivity(records); err != nil {
+		openEventID := ""
+		if open := r.Tracker.Snapshot(now); open != nil {
+			openEventID = open.EventID
+		}
+		if err := r.enqueueObservedActivity(records, openEventID); err != nil {
 			r.Logger.Printf("checkpoint error: %v", err)
 		}
 		lastContext, lastObservation = current, now
@@ -216,6 +253,13 @@ func (r *Runtime) RunDaemon(ctx context.Context) error {
 			requestUpload()
 		case <-uploadTicker.C:
 			requestUpload()
+		case <-checkpointDeadline:
+			requestUpload()
+			// A successful acknowledgement resets this to its exact deadline.
+			// Until then, preserve the retry cadence without a busy timer loop.
+			resetCheckpointDeadline(30 * time.Second)
+		case <-r.openCheckpointUpdates:
+			resetCheckpointDeadline(r.openCheckpointDelay())
 		}
 	}
 }
@@ -247,19 +291,32 @@ func (r *Runtime) writeStatus(observed time.Time) {
 	acknowledged := r.heartbeatAcknowledgedAt
 	r.statusMu.Unlock()
 	value := struct {
-		AgentVersion       string    `json:"agentVersion"`
-		WindowsUser        string    `json:"windowsUser"`
-		DeviceID           string    `json:"deviceId"`
-		PID                int       `json:"pid"`
-		SessionID          uint32    `json:"sessionId"`
-		StartedAt          time.Time `json:"startedAt"`
-		LastSampleAt       time.Time `json:"lastSampleAt"`
-		LastHeartbeatAckAt time.Time `json:"lastHeartbeatAckAt"`
-		EnrolledAt         string    `json:"enrolledAt"`
-		ConfigPath         string    `json:"configPath"`
-		StateDir           string    `json:"stateDir"`
-		CredentialOK       bool      `json:"credentialOk"`
-	}{Version, r.User, r.Config.DeviceID, os.Getpid(), platform.SessionID(), r.startedAt, observed, acknowledged, r.Config.EnrolledAt, r.ConfigPath, r.Config.StateDir, len(r.DeviceKey) >= 32}
+		AgentVersion                        string    `json:"agentVersion"`
+		WindowsUser                         string    `json:"windowsUser"`
+		DeviceID                            string    `json:"deviceId"`
+		PID                                 int       `json:"pid"`
+		SessionID                           uint32    `json:"sessionId"`
+		StartedAt                           time.Time `json:"startedAt"`
+		LastSampleAt                        time.Time `json:"lastSampleAt"`
+		LastHeartbeatAckAt                  time.Time `json:"lastHeartbeatAckAt"`
+		EnrolledAt                          string    `json:"enrolledAt"`
+		ConfigPath                          string    `json:"configPath"`
+		StateDir                            string    `json:"stateDir"`
+		CredentialOK                        bool      `json:"credentialOk"`
+		SampleIntervalSeconds               int       `json:"sampleIntervalSeconds"`
+		HeartbeatIntervalSeconds            int       `json:"heartbeatIntervalSeconds"`
+		UploadIntervalSeconds               int       `json:"uploadIntervalSeconds"`
+		OpenCheckpointUploadIntervalSeconds int       `json:"openCheckpointUploadIntervalSeconds"`
+	}{
+		AgentVersion: Version, WindowsUser: r.User, DeviceID: r.Config.DeviceID,
+		PID: os.Getpid(), SessionID: platform.SessionID(), StartedAt: r.startedAt,
+		LastSampleAt: observed, LastHeartbeatAckAt: acknowledged, EnrolledAt: r.Config.EnrolledAt,
+		ConfigPath: r.ConfigPath, StateDir: r.Config.StateDir, CredentialOK: len(r.DeviceKey) >= 32,
+		SampleIntervalSeconds:               r.Config.SampleIntervalSeconds,
+		HeartbeatIntervalSeconds:            r.Config.HeartbeatIntervalSeconds,
+		UploadIntervalSeconds:               r.Config.UploadIntervalSeconds,
+		OpenCheckpointUploadIntervalSeconds: r.Config.OpenCheckpointUploadIntervalSeconds,
+	}
 	data, err := json.Marshal(value)
 	if err == nil {
 		tmp := r.Config.StatusFile + ".tmp"
@@ -414,6 +471,10 @@ func (r *Runtime) enqueueHeartbeat(current segment.Context, now time.Time) error
 }
 
 func (r *Runtime) enqueueActivity(records []segment.Segment) error {
+	return r.enqueueObservedActivity(records, "")
+}
+
+func (r *Runtime) enqueueObservedActivity(records []segment.Segment, openEventID string) error {
 	r.queueMu.Lock()
 	defer r.queueMu.Unlock()
 	for _, record := range records {
@@ -426,64 +487,13 @@ func (r *Runtime) enqueueActivity(records []segment.Segment) error {
 			WBLogin:       r.User,
 			Records:       []segment.Segment{record},
 		}
-		if _, err := r.Queue.Upsert("activity", record.EventID, payload); err != nil {
+		path, err := r.Queue.Upsert("activity", record.EventID, payload)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func (r *Runtime) flush(ctx context.Context, kind string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.queueMu.Lock()
-	items, err := r.Queue.List(kind, 100)
-	r.queueMu.Unlock()
-	if err != nil {
-		return err
-	}
-	path := "/api/realtime-hours/v2/heartbeat"
-	if kind == "activity" {
-		path = "/api/realtime-hours/v2/activity"
-	}
-	for _, item := range items {
-		var payload any
-		if err := json.Unmarshal(item.Data, &payload); err != nil {
-			_ = r.finishItem(kind, item, true)
-			continue
+		if err := markOpenCheckpoint(path, record.EventID == openEventID && r.Config.OpenCheckpointUploadIntervalSeconds > 0); err != nil {
+			return err
 		}
-		status, body, postErr := r.Client.PostJSON(ctx, path, payload)
-		if postErr != nil {
-			return postErr
-		}
-		if status >= 200 && status < 300 {
-			var acknowledgement struct {
-				Success bool `json:"success"`
-			}
-			if err := json.Unmarshal(body, &acknowledgement); err != nil || !acknowledgement.Success {
-				return fmt.Errorf("%s upload did not receive a success acknowledgement", kind)
-			}
-			if kind == "heartbeat" {
-				r.statusMu.Lock()
-				r.heartbeatAcknowledgedAt = time.Now().UTC()
-				r.statusMu.Unlock()
-			}
-			if err := r.finishItem(kind, item, false); err != nil {
-				return err
-			}
-			continue
-		}
-		if status == 401 || status == 403 {
-			return fmt.Errorf("%s credential authorization requires attention: status=%d", kind, status)
-		}
-		if status >= 400 && status < 500 && status != 408 && status != 429 {
-			r.Logger.Printf("permanent %s rejection status=%d body=%s", kind, status, strings.TrimSpace(string(body)))
-			if err := r.finishItem(kind, item, true); err != nil {
-				return err
-			}
-			return fmt.Errorf("%s upload rejected: status=%d", kind, status)
-		}
-		return fmt.Errorf("temporary %s upload failure: status=%d body=%s", kind, status, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
@@ -504,7 +514,15 @@ func (r *Runtime) finishItem(kind string, item queue.Item, quarantine bool) erro
 		return nil
 	}
 	if quarantine {
-		return r.Queue.Quarantine(kind, item.Path)
+		if err := r.Queue.Quarantine(kind, item.Path); err != nil {
+			return err
+		}
+		removeOpenCheckpoint(item.Path)
+		return nil
 	}
-	return r.Queue.Remove(item.Path)
+	if err := r.Queue.Remove(item.Path); err != nil {
+		return err
+	}
+	removeOpenCheckpoint(item.Path)
+	return nil
 }

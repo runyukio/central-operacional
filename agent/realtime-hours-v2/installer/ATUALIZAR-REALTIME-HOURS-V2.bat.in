@@ -1,0 +1,7 @@
+@echo off
+setlocal
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Update-RealtimeHoursV2.ps1"
+set "REALTIME_UPDATE_EXIT=%ERRORLEVEL%"
+if not "%REALTIME_UPDATE_EXIT%"=="0" echo A atualizacao nao foi concluida. Leia a mensagem acima antes de tentar novamente.
+pause
+exit /b %REALTIME_UPDATE_EXIT%

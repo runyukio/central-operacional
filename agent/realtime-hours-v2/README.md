@@ -11,7 +11,8 @@ Reescrita do agente Windows com foco em confiabilidade, segurança, observabilid
 - nenhuma URL completa é persistida ou enviada, apenas hostname;
 - fila local transacional baseada em arquivos e escrita atômica;
 - autenticação HMAC por dispositivo, sem token global dentro do instalador;
-- heartbeat e atividade enviados em lote a cada cinco minutos;
+- amostragem local preservada em dois segundos; o instalador atual configura presença a cada 60 segundos e despacho de atividade a cada 30 segundos;
+- atividades compatíveis agrupadas em pedidos de até 500 registros e 512 KiB, com confirmação do lote completo;
 - uma linha de estado atual por dispositivo no backend e histórico apenas por mudança de contexto;
 - instalação idempotente e remoção explícita do legado.
 
@@ -55,3 +56,13 @@ Program files and the DPAPI machine-protected enrollment authorization remain in
 Sampling persists observed checkpoints independently of network upload. A successful acknowledgement removes only the exact queued version it accepted, preserving a newer checkpoint written during the request. Resume gaps are closed at the last observation and start a fresh interval; suspended or powered-off time is not charged as website activity. Automatic task re-registration and credential rollback run in the same interactive session on installation failure.
 
 CI validates the actual Windows Task Scheduler group, triggers and single-instance policy, both DPAPI scopes and profile isolation. A physical reboot, fast user switch and browser capture acceptance run still requires the user's Windows pilot.
+
+## Upload batching (agent 1.0.0-alpha.3)
+
+The uploader groups compatible persisted activity items without mixing Windows users, device envelopes or agent versions. It preserves event IDs and every record field. A successful response must acknowledge the exact number of records sent; incomplete acknowledgements, transport failures, authorization failures and throttling keep the queue for an idempotent retry. A permanent payload rejection is split to isolate a bad persisted item instead of quarantining healthy siblings. Heartbeats take priority between activity requests.
+
+Retries back off from 30 seconds to five minutes and respect a later server Retry-After deadline. Normal sampling, presence and dispatch intervals are unchanged. New observations continue to be persisted while network requests are in flight; acknowledging an older version cannot delete the updated checkpoint.
+
+The optional machine-config field `openCheckpointUploadIntervalSeconds` controls only remote uploads of the still-open activity segment. Omitted or zero preserves the existing dispatch cadence for older configurations. The alpha.3 installer now writes the approved value of 240 seconds: four minutes for an open checkpoint plus the page's one-minute refresh budget. A dedicated deadline wakes the uploader without waiting for another ordinary 30-second dispatch tick. Closed segments remain eligible at the ordinary dispatch interval; local two-second checkpoints and 60-second presence continue. Network errors can extend visibility delay while the queue remains durable. Deploying backend code or replacing the binary alone does not silently edit old configurations. Local version-bound `.open` sidecars keep queue JSON compatible with the older agent during rollback.
+
+There is no executable auto-update mechanism. Updating the signed browser extension does not update the Go agent. The local `scripts/package-update.py` kit updates existing per-user V2 installations without enrollment authorization, preserving credentials and queues. It requires a trusted package, administrative elevation and an active Windows session; no executable is downloaded remotely. See [cost-client-rollout.md](../../docs/realtime-hours-v2/cost-client-rollout.md) for packaging, Windows acceptance and rollback requirements.

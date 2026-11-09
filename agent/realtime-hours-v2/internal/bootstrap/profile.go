@@ -48,6 +48,7 @@ func Ensure(ctx context.Context, machine config.Config, options Options) (Result
 		existing.StateDir = filepath.Join(options.Root, "browser-state", fmt.Sprint(options.SessionID))
 		existing.HeartbeatIntervalSeconds = machine.HeartbeatIntervalSeconds
 		existing.UploadIntervalSeconds = machine.UploadIntervalSeconds
+		existing.OpenCheckpointUploadIntervalSeconds = machine.OpenCheckpointUploadIntervalSeconds
 		existing.StatusFile = filepath.Join(options.Root, "agent-status.json")
 		return Result{Config: existing, Path: profilePath}, nil
 	} else if _, statErr := os.Stat(profilePath); !os.IsNotExist(statErr) {

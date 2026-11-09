@@ -50,6 +50,10 @@ class PackageTest(unittest.TestCase):
         with zipfile.ZipFile(result['output']) as archive:
             self.assertEqual(sum(name.endswith('.bat') for name in archive.namelist()), 1)
             self.assertEqual(json.loads(archive.read('enrollment.json'))['mode'], 'fleet')
+            self.assertEqual(json.loads(archive.read('release.json'))['activityUploadPolicy'], {
+                'sampleIntervalSeconds': 2, 'heartbeatIntervalSeconds': 60,
+                'uploadIntervalSeconds': 30, 'openCheckpointUploadIntervalSeconds': 240,
+                'batchMaxRecords': 500, 'batchMaxBytes': 512 * 1024})
             self.assertIn('sem limite de quantidade', archive.read('LEIA-ME.txt').decode())
             self.assertNotIn('ainda nao aparecem', archive.read('LEIA-ME.txt').decode())
             for line in archive.read('SHA256SUMS.txt').decode().splitlines():
