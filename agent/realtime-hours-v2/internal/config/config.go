@@ -16,20 +16,42 @@ import (
 const SchemaVersion = 1
 
 type Config struct {
-	SchemaVersion             int    `json:"schemaVersion"`
-	BaseURL                   string `json:"baseUrl"`
-	DeviceID                  string `json:"deviceId"`
-	SecretFile                string `json:"secretFile"`
-	StateDir                  string `json:"stateDir"`
-	QueueDir                  string `json:"queueDir"`
-	FailedDir                 string `json:"failedDir"`
-	LogDir                    string `json:"logDir"`
-	SampleIntervalSeconds     int    `json:"sampleIntervalSeconds"`
-	HeartbeatIntervalSeconds  int    `json:"heartbeatIntervalSeconds"`
-	UploadIntervalSeconds     int    `json:"uploadIntervalSeconds"`
-	IdleThresholdSeconds      int    `json:"idleThresholdSeconds"`
-	MaxSegmentSeconds         int    `json:"maxSegmentSeconds"`
-	BrowserStateMaxAgeSeconds int    `json:"browserStateMaxAgeSeconds"`
+	SchemaVersion                       int    `json:"schemaVersion"`
+	BaseURL                             string `json:"baseUrl"`
+	DeviceID                            string `json:"deviceId"`
+	WindowsUser                         string `json:"windowsUser,omitempty"`
+	SecretFile                          string `json:"secretFile"`
+	StateDir                            string `json:"stateDir"`
+	QueueDir                            string `json:"queueDir"`
+	FailedDir                           string `json:"failedDir"`
+	LogDir                              string `json:"logDir"`
+	SampleIntervalSeconds               int    `json:"sampleIntervalSeconds"`
+	HeartbeatIntervalSeconds            int    `json:"heartbeatIntervalSeconds"`
+	UploadIntervalSeconds               int    `json:"uploadIntervalSeconds"`
+	OpenCheckpointUploadIntervalSeconds int    `json:"openCheckpointUploadIntervalSeconds,omitempty"`
+	IdleThresholdSeconds                int    `json:"idleThresholdSeconds"`
+	MaxSegmentSeconds                   int    `json:"maxSegmentSeconds"`
+	BrowserStateMaxAgeSeconds           int    `json:"browserStateMaxAgeSeconds"`
+	PerUserProfiles                     bool   `json:"perUserProfiles,omitempty"`
+	BootstrapFile                       string `json:"bootstrapFile,omitempty"`
+	StatusFile                          string `json:"statusFile,omitempty"`
+	EnrolledAt                          string `json:"enrolledAt,omitempty"`
+}
+
+func UserRoot() (string, error) {
+	root, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "CentralOperacional", "RealtimeHoursV2"), nil
+}
+
+func UserStateDir(sessionID uint32) (string, error) {
+	root, err := UserRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "browser-state", fmt.Sprint(sessionID)), nil
 }
 
 func DefaultRoot() string {
@@ -100,6 +122,9 @@ func Save(path string, cfg Config) error {
 }
 
 func (c Config) Validate() error {
+	if c.PerUserProfiles && strings.TrimSpace(c.BootstrapFile) == "" {
+		return errors.New("bootstrapFile is required for per-user installation")
+	}
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported config schema version %d", c.SchemaVersion)
 	}
@@ -114,6 +139,9 @@ func (c Config) Validate() error {
 	}
 	if c.UploadIntervalSeconds < 30 || c.UploadIntervalSeconds > 1800 {
 		return errors.New("uploadIntervalSeconds must be between 30 and 1800")
+	}
+	if c.OpenCheckpointUploadIntervalSeconds != 0 && (c.OpenCheckpointUploadIntervalSeconds < 30 || c.OpenCheckpointUploadIntervalSeconds > 1800) {
+		return errors.New("openCheckpointUploadIntervalSeconds must be zero or between 30 and 1800")
 	}
 	if c.IdleThresholdSeconds < 60 || c.IdleThresholdSeconds > 3600 {
 		return errors.New("idleThresholdSeconds must be between 60 and 3600")

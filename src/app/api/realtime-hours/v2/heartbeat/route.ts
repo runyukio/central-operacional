@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { heartbeatPayloadSchema, normalizeDomain } from "@/lib/realtime-hours-v2/contract";
+import { publishPresenceToCentral } from "@/lib/realtime-hours-v2/central-presence-bridge";
 import { authenticateDeviceRequest } from "@/lib/realtime-hours-v2/device-auth";
 import { dateWithinWindow, parseJsonText, readRequestTextWithLimit } from "@/lib/realtime-hours-v2/request";
 
@@ -35,22 +36,24 @@ export async function POST(request: Request) {
     if (auth.device.status === "PENDING") {
       await tx.$executeRaw(Prisma.sql`
         UPDATE "WorkstationDeviceV2"
-        SET "status" = 'DISABLED', "revokedAt" = COALESCE("revokedAt", CURRENT_TIMESTAMP), "updatedAt" = CURRENT_TIMESTAMP
+        SET "status" = 'DISABLED', "revokedAt" = COALESCE("revokedAt", CURRENT_TIMESTAMP),
+            "replacedByDeviceId" = ${auth.device.id}, "updatedAt" = CURRENT_TIMESTAMP
         WHERE LOWER("hostname") = LOWER(${auth.device.hostname})
           AND LOWER("windowsUser") = LOWER(${auth.device.windowsUser})
           AND "status" = 'ACTIVE'
           AND "id" <> ${auth.device.id}
       `);
     }
-    await tx.$executeRaw(Prisma.sql`
+    const updated = await tx.$executeRaw(Prisma.sql`
       UPDATE "WorkstationDeviceV2"
       SET "hostname" = ${value.hostname}, "windowsUser" = ${value.windowsUser},
           "wbLogin" = COALESCE(${resolvedWbLogin}, "wbLogin"), "agentVersion" = ${value.agentVersion},
           "status" = 'ACTIVE', "revokedAt" = NULL,
           "lastSeenAt" = GREATEST(COALESCE("lastSeenAt", ${capturedAt}), ${capturedAt}),
           "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${auth.device.id}
+      WHERE "id" = ${auth.device.id} AND "revokedAt" IS NULL AND "status" IN ('ACTIVE','PENDING')
     `);
+    if (updated !== 1) throw new Error("Device revoked during heartbeat");
     await tx.$executeRaw(Prisma.sql`
       INSERT INTO "WorkstationCurrentStateV2" (
         "deviceId", "capturedAt", "sessionState", "idleSeconds", "activeProcessName",
@@ -74,5 +77,10 @@ export async function POST(request: Request) {
     `);
   });
 
+  try {
+    await publishPresenceToCentral({ device: auth.device, snapshot: value });
+  } catch {
+    return NextResponse.json({ success: false, error: "Central presence delivery is temporarily unavailable." }, { status: 503 });
+  }
   return NextResponse.json({ success: true, acceptedAt: new Date().toISOString() });
 }

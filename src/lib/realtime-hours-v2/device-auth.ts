@@ -13,6 +13,7 @@ type DeviceAuthRow = {
   revokedAt: Date | null;
   employeeId: string | null;
   wbLogin: string | null;
+  centralDeliveryAllowed: boolean;
 };
 
 type DeviceAuthOptions = {
@@ -31,9 +32,12 @@ export async function authenticateDeviceRequest(request: Request, body: string, 
   }
 
   const [device] = await prisma.$queryRaw<DeviceAuthRow[]>(Prisma.sql`
-    SELECT "id", "hostname", "windowsUser", "status", "secretVersion", "revokedAt", "employeeId", "wbLogin"
-    FROM "WorkstationDeviceV2"
-    WHERE "id" = ${deviceId}
+    SELECT device."id", device."hostname", device."windowsUser", device."status", device."secretVersion",
+      device."revokedAt", device."employeeId", device."wbLogin",
+      COALESCE(deployment."centralDeliveryAllowed", FALSE) AS "centralDeliveryAllowed"
+    FROM "WorkstationDeviceV2" device
+    LEFT JOIN "WorkstationDeploymentGrantV2" deployment ON deployment."id" = device."deploymentGrantId"
+    WHERE device."id" = ${deviceId}
     LIMIT 1
   `);
   const statusAllowed = device?.status === "ACTIVE" || (options.allowPending && device?.status === "PENDING");
