@@ -2,15 +2,13 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { kimAcceptedMessageKey, validateAdsAlertWebhook } from "@/lib/ads-productivity-alert-core";
 import { evaluateCycle, monitorMessage, transitionCycles, type MonitorState } from "./realtime-cycle-monitor-core";
+import { readRealtimeCycleHeads, type CycleHeadsReadDb } from "./realtime-cycle-heads";
 const stateKey = "realtime-cycle-monitor:v1:state";
 const receiptKey = (id: string) => `realtime-cycle-monitor:v1:delivery:${id}`;
 
-export async function readCycleHealth(now = new Date(), db: Pick<Prisma.TransactionClient, "realTimeQueueCycleSummary" | "realTimeAgentCycleSummary"> = prisma) {
-  const [q, a] = await Promise.all([
-    db.realTimeQueueCycleSummary.findFirst({ where: { batch: { status: "SUCCESS" } }, orderBy: [{ batch: { importedAt: "desc" } }, { cycleDownload: "desc" }, { createdAt: "desc" }], select: { cycleDownload: true, batch: { select: { importedAt: true } } } }),
-    db.realTimeAgentCycleSummary.findFirst({ where: { batch: { status: "SUCCESS" } }, orderBy: [{ batch: { importedAt: "desc" } }, { cycleDownload: "desc" }, { createdAt: "desc" }], select: { cycleDownload: true, batch: { select: { importedAt: true } } } })
-  ]);
-  return [evaluateCycle({ feed: "queues", cycle: q?.cycleDownload ?? null, importedAt: q?.batch.importedAt.toISOString() ?? null }, now), evaluateCycle({ feed: "agents", cycle: a?.cycleDownload ?? null, importedAt: a?.batch.importedAt.toISOString() ?? null }, now)];
+export async function readCycleHealth(now = new Date(), db: CycleHeadsReadDb = prisma) {
+  const { queues, agents } = await readRealtimeCycleHeads(db);
+  return [evaluateCycle({ feed: "queues", cycle: queues?.cycleDownload ?? null, importedAt: queues?.importedAt ?? null }, now), evaluateCycle({ feed: "agents", cycle: agents?.cycleDownload ?? null, importedAt: agents?.importedAt ?? null }, now)];
 }
 
 // Claims are committed BEFORE sending. KIM has no documented idempotency

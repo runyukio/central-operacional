@@ -73,7 +73,9 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const date = validDate(url.searchParams.get("date")) ?? todayInSaoPaulo();
-    const timeline = await getRealtimeHoursTimeline({ date });
+    const timeline = await getRealtimeHoursTimeline({
+      date, lob: url.searchParams.get("lob"), supervisor: url.searchParams.get("supervisor")
+    });
     const filteredRows = filterRealtimeHoursTimelineRows(timeline.rows, {
       date,
       search: url.searchParams.get("search"),

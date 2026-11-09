@@ -30,6 +30,8 @@ export async function GET(request: Request) {
       domain: url.searchParams.get("domain"),
       employeeId: url.searchParams.get("employeeId"),
       limit: url.searchParams.get("limit"),
+      pageSize: url.searchParams.get("pageSize"),
+      cursor: url.searchParams.get("cursor"),
       timeline: url.searchParams.get("timeline")
     });
 

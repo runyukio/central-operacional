@@ -19,7 +19,7 @@ import {
   Wifi,
   type LucideIcon
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
 import { buildRealtimeHoursExportRows } from "@/lib/realtime-hours-export";
@@ -237,6 +237,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const [scheduleFilter, setScheduleFilter] = useState<RealtimeHoursScheduleFilter>("ALL");
   const [mappingMatchFilter, setMappingMatchFilter] = useState<MappingMatchFilter>("ALL");
   const [timelineDate, setTimelineDate] = useState(todayInputDate());
+  const [appliedTimelineScope, setAppliedTimelineScope] = useState({ lob: ALL_LOBS_FILTER, supervisor: "ALL" });
+  const [timelineFacetRows, setTimelineFacetRows] = useState<Array<Pick<RealtimeHoursTimelineRow, "lob" | "supervisor">>>([]);
+  const timelineRequestGeneration = useRef(0);
   const [expandedTimelineKey, setExpandedTimelineKey] = useState<string | null>(null);
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, string>>({});
   const [savingMappingKey, setSavingMappingKey] = useState<string | null>(null);
@@ -260,23 +263,31 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     setStatusPayload(body);
   }, []);
 
-  const loadTimeline = useCallback(async () => {
-    const response = await fetch(`/api/realtime-hours/timeline?date=${encodeURIComponent(timelineDate)}`, { cache: "no-store" });
+  const loadTimeline = useCallback(async (fullScope = false) => {
+    const generation = ++timelineRequestGeneration.current;
+    const params = new URLSearchParams({ date: timelineDate });
+    if (!fullScope && appliedTimelineScope.lob !== ALL_LOBS_FILTER) params.set("lob", appliedTimelineScope.lob);
+    if (!fullScope && appliedTimelineScope.supervisor !== "ALL") params.set("supervisor", appliedTimelineScope.supervisor);
+    const response = await fetch(`/api/realtime-hours/timeline?${params}`, { cache: "no-store" });
     const body = await response.json() as RealtimeHoursTimelinePayload;
     if (!response.ok || body.success === false) {
       throw new Error(body.message || body.error || "Não foi possível carregar a linha do tempo.");
     }
+    if (generation !== timelineRequestGeneration.current) return;
     setTimelinePayload(body);
-  }, [timelineDate]);
+    if (fullScope || (appliedTimelineScope.lob === ALL_LOBS_FILTER && appliedTimelineScope.supervisor === "ALL")) {
+      setTimelineFacetRows(body.rows.map(({ lob, supervisor }) => ({ lob, supervisor })));
+    }
+  }, [timelineDate, appliedTimelineScope]);
 
-  const loadData = useCallback(async (showRefreshing = false) => {
+  const loadData = useCallback(async (showRefreshing = false, fullScope = false) => {
     if (showRefreshing) setRefreshing(true);
     if (!showRefreshing) setLoading(true);
     setError("");
     setSuccessMessage("");
 
     try {
-      const results = await Promise.allSettled([loadStatus(), loadTimeline()]);
+      const results = await Promise.allSettled([loadStatus(), loadTimeline(fullScope)]);
       const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
       if (rejected) throw rejected.reason;
     } catch (loadError) {
@@ -320,7 +331,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   }, [activeTab, canManageMappings, loadMappings, mappingsPayload]);
 
   const refreshVisibleData = useCallback(async () => {
-    const requests: Promise<unknown>[] = [loadData(true)];
+    const requests: Promise<unknown>[] = [loadData(true, true)];
     if (canManageMappings && activeTab === "MAPPINGS") requests.push(loadMappings());
     const results = await Promise.allSettled(requests);
     const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -331,8 +342,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
 
   const summary = statusPayload?.summary ?? emptySummary;
   const batch = statusPayload?.batch ?? null;
-  const lobOptions = useMemo(() => buildLobOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
-  const supervisorOptions = useMemo(() => buildSupervisorOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
+  const lobOptions = useMemo(() => buildLobOptions(timelineFacetRows), [timelineFacetRows]);
+  const supervisorOptions = useMemo(() => buildSupervisorOptions(timelineFacetRows), [timelineFacetRows]);
+  const timelineScopePending = lobFilter !== appliedTimelineScope.lob || supervisorFilter !== appliedTimelineScope.supervisor;
   const timelineRows = useMemo(() => {
     return filterRealtimeHoursTimelineRows(timelinePayload?.rows ?? [], {
       date: timelineDate,
@@ -408,7 +420,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         delete next[key];
         return next;
       });
-      await Promise.all([loadData(true), loadMappings()]);
+      await Promise.all([loadData(true, true), loadMappings()]);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar o vínculo.");
     } finally {
@@ -451,10 +463,14 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         icon={MonitorCog}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {activeTab === "TIMELINE" && timelineScopePending ? <button
+              type="button" onClick={() => { setLoading(true); setAppliedTimelineScope({ lob: lobFilter, supervisor: supervisorFilter }); }}
+              disabled={loading || refreshing} className="premium-button inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold disabled:opacity-50"
+            >Aplicar filtros</button> : null}
             <button
               type="button"
               onClick={exportTimeline}
-              disabled={exporting || loading || !timelineRows.length}
+              disabled={exporting || loading || timelineScopePending || !timelineRows.length}
               className="premium-control inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold text-navy-950 disabled:cursor-wait disabled:opacity-50"
               title="Exportar registros filtrados"
             >
@@ -475,6 +491,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         }
       />
 
+      {activeTab === "TIMELINE" && timelineScopePending ? <p role="status" className="text-sm text-muted">Filtros alterados. Use Aplicar filtros para carregar todos os resultados da seleção.</p> : null}
       {error ? (
         <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 text-sm font-bold text-red-700">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -547,7 +564,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         <TimelinePanel
           loading={loading}
           date={timelineDate}
-          onDateChange={setTimelineDate}
+          onDateChange={(value) => { setTimelineDate(value); setAppliedTimelineScope({ lob: ALL_LOBS_FILTER, supervisor: "ALL" }); setTimelineFacetRows([]); }}
           search={search}
           onSearchChange={setSearch}
           payload={timelinePayload}
@@ -1390,7 +1407,7 @@ function normalizedLob(value?: string | null) {
   return normalized || "SEM_LOB";
 }
 
-function buildLobOptions(rows: RealtimeHoursTimelineRow[]) {
+function buildLobOptions(rows: Array<Pick<RealtimeHoursTimelineRow, "lob">>) {
   const counts = new Map<string, number>();
   for (const row of rows) {
     const lob = normalizedLob(row.lob);
@@ -1416,7 +1433,7 @@ function buildLobOptions(rows: RealtimeHoursTimelineRow[]) {
     });
 }
 
-function buildSupervisorOptions(rows: RealtimeHoursTimelineRow[]) {
+function buildSupervisorOptions(rows: Array<Pick<RealtimeHoursTimelineRow, "supervisor">>) {
   return Array.from(new Set(rows.map((row) => row.supervisor.trim() || "Sem supervisor")))
     .sort((left, right) => {
       if (left === "Sem supervisor") return 1;

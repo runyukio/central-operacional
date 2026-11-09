@@ -7,6 +7,7 @@ import { GET, POST } from "../app/api/cron/realtime-cycle-monitor/route";
 
 test("reads the latest successful import separately for queues and agents", async t => {
   const queries: unknown[] = [];
+  mockPrismaDelegate(t, "systemConfig", { findUnique: async () => null });
   mockPrismaDelegate(t, "realTimeQueueCycleSummary", { findFirst: async (query: unknown) => {
     queries.push(query);
     return { cycleDownload: "2026-10-15 18:00", batch: { importedAt: new Date("2026-10-15T20:58:00Z") } };

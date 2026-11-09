@@ -5,6 +5,7 @@ import type { Actor } from "@/lib/mock-db";
 import { prisma } from "@/lib/prisma";
 import { canAccessRealtimeHoursActivity } from "@/lib/realtime-hours-permissions";
 import { shiftCategoryName } from "@/lib/shift-display";
+import { activityTimelineCursorScope, activityTimelinePageSql, decodeActivityTimelineCursor, encodeActivityTimelineCursor } from "@/lib/workstation-activity-pagination";
 import {
   addDateKeyDays,
   saoPauloDateKey,
@@ -77,6 +78,8 @@ export type WorkstationActivityQuery = {
   timeline?: string | boolean | null;
   lob?: string | null;
   shift?: string | null;
+  pageSize?: string | number | null;
+  cursor?: string | null;
 };
 
 const agentKeySql = Prisma.sql`CASE WHEN activity."employeeId" IS NOT NULL
@@ -96,8 +99,11 @@ type ActivityQueryResult = {
   agents: Array<Omit<AgentAggregate, "lastActivityAt"> & { lastActivityAt: string }>;
   rankings: RankingAggregate[];
   filterOptions?: Array<{ lob: string | null; shift: string | null }>;
+  timelineGroups?: number;
   rows: Array<Omit<ActivityRawRow, "capturedAt" | "startedAt" | "endedAt"> & {
     capturedAt: string; startedAt: string; endedAt: string;
+    sourceStartedAt?: string;
+    mergedSourceRecords?: number;
   }>;
 };
 
@@ -173,6 +179,12 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
     filters.push(names.length ? Prisma.sql`COALESCE("shift", 'Sem turno') IN (${Prisma.join(names)})` : Prisma.sql`FALSE`);
   }
   const includeTimeline = !overview && query.timeline !== false && query.timeline !== "false";
+  const paged = includeTimeline && query.view === "agent" && query.pageSize != null;
+  const pageSize = boundedInteger(query.pageSize, 50, 1, 200);
+  const cursorScope = activityTimelineCursorScope({ dateKey, selectedAgent, sourceType, domain, search, lobFilter, shiftFilter, viewer: viewer.email });
+  let cursor;
+  try { cursor = decodeActivityTimelineCursor(paged ? query.cursor : null, cursorScope); }
+  catch { return { success: false, status: 400, error: "Página inválida. Atualize a consulta." } as const; }
   const where = Prisma.join(conditions, " AND ");
   const baseActivityQuery = Prisma.sql`
     SELECT
@@ -248,7 +260,7 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
     ), ranking_results AS (
       SELECT "rankKind", "label", "seconds" FROM ranked WHERE "rankPosition" <= 100
   )` : Prisma.empty;
-  const timelineQuery = includeTimeline ? Prisma.sql`, timeline AS (
+  const timelineQuery = paged ? activityTimelinePageSql(pageSize, cursor) : includeTimeline ? Prisma.sql`, timeline AS (
       SELECT * FROM filtered_activity
       ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC LIMIT ${limit}
   )` : Prisma.empty;
@@ -262,12 +274,21 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
       ${overview ? Prisma.sql`(SELECT COALESCE(jsonb_agg(options), '[]'::jsonb) FROM (SELECT DISTINCT "lob", "shift" FROM clipped_activity) options)` : Prisma.sql`'[]'::jsonb`} AS "filterOptions",
       ${overview ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(agent_totals) ORDER BY "totalSeconds" DESC, "employeeName" ASC), '[]'::jsonb) FROM agent_totals)` : Prisma.sql`'[]'::jsonb`} AS "agents",
       ${query.view === "agent" ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(ranking_results) ORDER BY "rankKind", "seconds" DESC, "label" ASC), '[]'::jsonb) FROM ranking_results)` : Prisma.sql`'[]'::jsonb`} AS "rankings",
-      ${includeTimeline ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(timeline) - 'sourceStartedAt' ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC), '[]'::jsonb) FROM timeline)` : Prisma.sql`'[]'::jsonb`} AS "rows"
+      ${paged ? Prisma.sql`(SELECT COUNT(*)::int FROM timeline_merged)` : Prisma.sql`NULL::int`} AS "timelineGroups",
+      ${paged ? Prisma.sql`(SELECT COALESCE(jsonb_agg(payload ORDER BY "sourceStartedAt", "hostname", "id"), '[]'::jsonb) FROM timeline)` : includeTimeline ? Prisma.sql`(SELECT COALESCE(jsonb_agg(to_jsonb(timeline) - 'sourceStartedAt' ORDER BY "sourceStartedAt" ASC, "hostname" ASC, "id" ASC), '[]'::jsonb) FROM timeline)` : Prisma.sql`'[]'::jsonb`} AS "rows"
   `);
   const summary = result?.summary ?? emptySummary();
   const agentRows = (result?.agents ?? []).map((row) => ({ ...row, lastActivityAt: activityTimestamp(row.lastActivityAt) }));
   const rankings = result?.rankings ?? [];
-  const rawRows: ActivityRawRow[] = (result?.rows ?? []).map((row) => ({
+  const returnedRows = result?.rows ?? [];
+  const hasMore = paged && returnedRows.length > pageSize;
+  const pageRows = paged ? returnedRows.slice(0, pageSize) : returnedRows;
+  const lastRow = pageRows.at(-1);
+  const nextCursor = hasMore && lastRow?.sourceStartedAt ? encodeActivityTimelineCursor({
+    at: activityTimestamp(lastRow.sourceStartedAt).toISOString(), hostname: lastRow.hostname, id: lastRow.id, scope: cursorScope
+  }) : null;
+  const sourceRecordsReturned = pageRows.reduce((sum, row) => sum + (paged ? row.mergedSourceRecords ?? 1 : 1), 0);
+  const rawRows: ActivityRawRow[] = pageRows.map(({ sourceStartedAt: _cursorAt, mergedSourceRecords: _mergedCount, ...row }) => ({
     ...row, capturedAt: activityTimestamp(row.capturedAt),
     startedAt: activityTimestamp(row.startedAt), endedAt: activityTimestamp(row.endedAt)
   }));
@@ -290,9 +311,10 @@ export async function getWorkstationActivityQuery(actor: Actor, query: Workstati
     agentsTruncated: (agentRows[0]?.agentsFound ?? 0) > agentRows.length,
     topDomains: rankings.filter((item) => item.rankKind === "WEB").map(({ label, seconds }) => ({ label, seconds })),
     topApplications: rankings.filter((item) => item.rankKind === "APP").map(({ label, seconds }) => ({ label, seconds })),
-    rows: mergedRows, recordsReturned: mergedRows.length, sourceRecordsReturned: rawRows.length, limit,
+    rows: mergedRows, recordsReturned: mergedRows.length, sourceRecordsReturned, limit,
     timelineIncluded: includeTimeline,
-    truncated: includeTimeline && summary.rowCount > rawRows.length,
+    ...(paged ? { pagination: { cursor: query.cursor ?? null, nextCursor, hasMore, pageSize, totalGroups: result?.timelineGroups ?? 0 } } : {}),
+    truncated: paged ? hasMore : includeTimeline && summary.rowCount > rawRows.length,
     privacy: "Somente domínio, aplicativo e intervalo são coletados."
   };
 }

@@ -7,13 +7,14 @@ import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import { SiteClassificationBadge, WorkstationSitesHub } from "@/components/workstation-sites-hub";
 import type { SiteClassification } from "@/lib/workstation-site-classification";
+import { activityWindowIncludesToday } from "@/lib/activity-refresh";
 
 type SourceType = "WEB" | "APP" | "IDLE" | "LOCKED" | "PRIVATE" | "UNKNOWN";
 type Summary = { rowCount: number; employees: number; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; privateSeconds: number; unknownSeconds: number; uniqueDomains: number };
 type Agent = { agentKey: string; employeeId: string | null; employeeName: string; wbLogin: string | null; windowsUser: string | null; lob: string; supervisor: string; hostnames: string[]; totalSeconds: number; webSeconds: number; appSeconds: number; idleSeconds: number; lockedSeconds: number; uniqueDomains: number; lastActivityAt: string };
 type Row = { id: string; eventId: string; sourceType: SourceType; applicationName: string | null; domain: string | null; startedAt: string; endedAt: string; durationSeconds: number; hostname: string };
 type Ranking = { label: string; seconds: number };
-type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; timelineIncluded: boolean; limit: number; truncated: boolean; filters?: { lob: string; shift: string }; filterOptions?: { lobs: string[]; shifts: string[] }; error?: string; message?: string };
+type Payload = { success: boolean; date: string; agentKey: string | null; summary: Summary; agents: Agent[]; agentsFound: number; agentsTruncated: boolean; topDomains: Ranking[]; topApplications: Ranking[]; rows: Row[]; timelineIncluded: boolean; limit: number; truncated: boolean; pagination?: { cursor: string | null; nextCursor: string | null; hasMore: boolean; pageSize: number; totalGroups: number }; filters?: { lob: string; shift: string }; filterOptions?: { lobs: string[]; shifts: string[] }; error?: string; message?: string };
 type DetailTab = "WEB" | "APP" | "TIMELINE";
 const emptySummary: Summary = { rowCount: 0, employees: 0, totalSeconds: 0, webSeconds: 0, appSeconds: 0, idleSeconds: 0, lockedSeconds: 0, privateSeconds: 0, unknownSeconds: 0, uniqueDomains: 0 };
 
@@ -37,8 +38,11 @@ export function WorkstationActivityPage() {
   const [refresh, setRefresh] = useState(0);
   const [tab, setTab] = useState<DetailTab>("WEB");
   const [page, setPage] = useState(0);
+  const [timelineCursors, setTimelineCursors] = useState<Array<string | null>>([null]);
   const selectedKey = selected?.agentKey ?? null;
   const needsTimeline = tab === "TIMELINE";
+  const timelineCursor = timelineCursors[page] ?? null;
+  function resetTimelinePage() { setPage(0); setTimelineCursors([null]); }
 
   useEffect(() => {
     const timer = window.setTimeout(() => setAgentSearch(search), 300);
@@ -65,21 +69,29 @@ export function WorkstationActivityPage() {
     if (!selectedKey || mode === "hub") return;
     const controller = new AbortController();
     setDetailLoading(true); setDetailError("");
-    const params = new URLSearchParams({ date, view: "agent", agentKey: selectedKey, limit: "5000", timeline: String(needsTimeline) });
+    const params = new URLSearchParams({ date, view: "agent", agentKey: selectedKey, timeline: String(needsTimeline) });
+    if (needsTimeline) {
+      params.set("pageSize", "50");
+      if (timelineCursor) params.set("cursor", timelineCursor);
+    }
     void fetchActivity(params, controller.signal).then((body) => {
       if (!controller.signal.aborted) setDetail(body);
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setDetailError(reason instanceof Error ? reason.message : "Não foi possível carregar o agente.");
     }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     return () => controller.abort();
-  }, [date, selectedKey, needsTimeline, refresh, mode]);
+  }, [date, selectedKey, needsTimeline, timelineCursor, refresh, mode]);
 
   useEffect(() => {
-    const refreshVisible = () => { if (!document.hidden) setRefresh((value) => value + 1); };
-    const interval = window.setInterval(refreshVisible, 60_000);
+    const refreshVisible = () => {
+      if (!document.hidden) { setPage(0); setTimelineCursors([null]); setRefresh((value) => value + 1); }
+    };
+    const interval = window.setInterval(() => {
+      if (!document.hidden && mode === "team" && activityWindowIncludesToday(date)) setRefresh((value) => value + 1);
+    }, 60_000);
     document.addEventListener("visibilitychange", refreshVisible);
     return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", refreshVisible); };
-  }, []);
+  }, [date, mode]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -93,16 +105,17 @@ export function WorkstationActivityPage() {
   }, [refresh, mode]);
 
   const overviewMatchesFilters = overview?.date === date && (overview.filters?.lob ?? "") === lob && (overview.filters?.shift ?? "") === shift;
-  const data = selected ? detail?.date === date && detail.agentKey === selectedKey ? detail : null : overviewMatchesFilters ? overview : null;
+  const detailMatchesPage = !needsTimeline || detail?.pagination?.cursor === timelineCursor;
+  const data = selected ? detail?.date === date && detail.agentKey === selectedKey && detailMatchesPage ? detail : null : overviewMatchesFilters ? overview : null;
   const summary = data?.summary ?? emptySummary;
   const busy = selected ? detailLoading : loading;
   const currentError = selected ? detailError : error;
-  const pages = Math.max(1, Math.ceil((data?.rows.length ?? 0) / 50));
-  const currentPage = Math.min(page, pages - 1);
-  const pageRows = useMemo(() => data?.rows.slice(currentPage * 50, (currentPage + 1) * 50) ?? [], [data?.rows, currentPage]);
+  const pages = Math.max(1, Math.ceil((data?.pagination?.totalGroups ?? data?.rows.length ?? 0) / 50));
+  const currentPage = data?.pagination ? page : Math.min(page, pages - 1);
+  const pageRows = useMemo(() => data?.pagination ? data.rows : data?.rows.slice(currentPage * 50, (currentPage + 1) * 50) ?? [], [data, currentPage]);
 
   function openAgent(agent: Agent) {
-    setSelected(agent); setDetail(null); setTab("WEB"); setPage(0); setDetailError("");
+    setSelected(agent); setDetail(null); setTab("WEB"); resetTimelinePage(); setDetailError("");
   }
 
   return (
@@ -110,9 +123,9 @@ export function WorkstationActivityPage() {
       <PageHeader title="Atividades" description="Consulte as atividades da equipe, classifique os sites e extraia relatórios." icon={Activity}
         actions={<div className="flex flex-wrap items-center gap-2">
           <label className="relative"><span className="sr-only">Data das atividades</span><CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
-            <input type="date" aria-label="Data das atividades" value={date} onChange={(event) => { setDate(event.target.value || todayInSaoPaulo()); setPage(0); }} className="premium-control h-10 pl-9 pr-3 text-sm font-bold text-navy-950" />
+            <input type="date" aria-label="Data das atividades" value={date} onChange={(event) => { setDate(event.target.value || todayInSaoPaulo()); resetTimelinePage(); }} className="premium-control h-10 pl-9 pr-3 text-sm font-bold text-navy-950" />
           </label>
-          <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={mode === "team" && busy} className="premium-button inline-flex h-10 items-center gap-2 px-3 text-sm font-bold disabled:opacity-60"><RefreshCw className={cn("h-4 w-4", mode === "team" && busy && "animate-spin")} />Atualizar</button>
+          <button type="button" onClick={() => { resetTimelinePage(); setRefresh((value) => value + 1); }} disabled={mode === "team" && busy} className="premium-button inline-flex h-10 items-center gap-2 px-3 text-sm font-bold disabled:opacity-60"><RefreshCw className={cn("h-4 w-4", mode === "team" && busy && "animate-spin")} />Atualizar</button>
         </div>} />
 
       <div role="group" aria-label="Visão das atividades" className="flex w-fit gap-1 rounded-xl border border-border bg-white p-1">
@@ -122,12 +135,12 @@ export function WorkstationActivityPage() {
       {mode === "team" && currentError ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{currentError}</div> : null}
 
       {selected ? <div className="space-y-4">
-        <button type="button" onClick={() => { setSelected(null); setPage(0); }} className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-800"><ArrowLeft className="h-4 w-4" />Voltar à visão geral</button>
+        <button type="button" onClick={() => { setSelected(null); resetTimelinePage(); }} className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-800"><ArrowLeft className="h-4 w-4" />Voltar à visão geral</button>
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border bg-white p-5">
           <div className="flex min-w-0 items-center gap-3"><Avatar /><div className="min-w-0"><h2 className="break-words text-xl font-extrabold tracking-tight text-navy-950">{selected.employeeName}</h2><p className="mt-1 text-sm text-muted">{selected.employeeId ? `${selected.wbLogin || selected.windowsUser || ""} · ${selected.lob}` : "Estação sem vínculo com um agente"}</p><p className="mt-1 text-xs text-muted">{selected.hostnames.join(" · ")}{selected.supervisor !== "Sem supervisor" ? ` · ${selected.supervisor}` : ""}</p></div></div>
           <span className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">Visão individual</span>
         </div>
-      </div> : <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-navy-950">Visão geral da equipe</h2><p className="mt-0.5 text-sm text-muted">Resumo dos agentes disponíveis para o seu perfil, conforme os filtros selecionados.</p></div><span className="hidden rounded-full border border-border bg-white px-3 py-1.5 text-xs font-semibold text-muted sm:block">Atualização a cada minuto</span></div>}
+      </div> : <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-extrabold text-navy-950">Visão geral da equipe</h2><p className="mt-0.5 text-sm text-muted">Resumo dos agentes disponíveis para o seu perfil, conforme os filtros selecionados.</p></div><span className="hidden rounded-full border border-border bg-white px-3 py-1.5 text-xs font-semibold text-muted sm:block">{activityWindowIncludesToday(date) ? "Atualização a cada minuto" : "Histórico · use Atualizar para conferir alterações"}</span></div>}
 
       {!selected ? <div className="space-y-4 rounded-2xl border border-border bg-white p-4 sm:p-5">
         <div className="flex items-center justify-between gap-3"><p className="text-sm font-bold text-navy-950">Filtrar equipe</p>{lob || shift ? <button type="button" onClick={() => { setLob(""); setShift(""); }} className="text-sm font-bold text-blue-600 hover:text-blue-800">Limpar filtros</button> : null}</div>
@@ -156,14 +169,14 @@ export function WorkstationActivityPage() {
         </Panel>
       </> : <>
         <div role="group" aria-label="Detalhamento do agente" className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl border border-border bg-white p-1">
-          {([{ key: "WEB", label: "Sites", icon: Globe2 }, { key: "APP", label: "Aplicativos", icon: AppWindow }, { key: "TIMELINE", label: "Linha do tempo", icon: Clock }] as const).map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-pressed={tab === key} aria-controls="activity-detail-content" onClick={() => { setTab(key); setPage(0); }} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors", tab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-slate-50 hover:text-navy-950")}><Icon className="h-4 w-4" />{label}</button>)}
+          {([{ key: "WEB", label: "Sites", icon: Globe2 }, { key: "APP", label: "Aplicativos", icon: AppWindow }, { key: "TIMELINE", label: "Linha do tempo", icon: Clock }] as const).map(({ key, label, icon: Icon }) => <button key={key} type="button" aria-pressed={tab === key} aria-controls="activity-detail-content" onClick={() => { setTab(key); resetTimelinePage(); }} className={cn("inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors", tab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-slate-50 hover:text-navy-950")}><Icon className="h-4 w-4" />{label}</button>)}
         </div>
         <div id="activity-detail-content" role="region" aria-label={tab === "WEB" ? "Sites do agente" : tab === "APP" ? "Aplicativos do agente" : "Histórico do agente"}>
           {detailLoading && (!data || (needsTimeline && !data.timelineIncluded)) ? <Loading label="Carregando atividade do agente..." /> : tab !== "TIMELINE" ? <RankingPanel title={tab === "WEB" ? "Sites utilizados" : "Aplicativos utilizados"} items={tab === "WEB" ? data?.topDomains ?? [] : data?.topApplications ?? []} total={tab === "WEB" ? summary.webSeconds : summary.appSeconds} applications={tab === "APP"} count={tab === "WEB" ? summary.uniqueDomains : undefined} classifications={classifications} /> : <Panel title="Linha do tempo">
             {!data?.rows.length ? <EmptyState title="Sem atividade para este agente" description="Escolha outra data para consultar o histórico." /> : <>
               <div className="overflow-x-auto rounded-xl border border-border"><table className="w-full min-w-[650px] text-left"><thead><tr className="border-b border-border bg-slate-50 text-xs font-bold text-muted"><th className="px-4 py-3">Intervalo</th><th className="px-4 py-3">Atividade</th><th className="px-4 py-3">Duração</th><th className="px-4 py-3">Estação</th></tr></thead><tbody className="divide-y divide-border">{pageRows.map((row) => <tr key={`${row.eventId}-${row.startedAt}`}><td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-muted">{formatTime(row.startedAt, true)} – {formatTime(row.endedAt, true)}</td><td className="px-4 py-3"><span className="block text-sm font-bold text-navy-950">{row.sourceType === "WEB" ? row.domain || "Domínio não identificado" : row.sourceType === "APP" ? formatApplication(row.applicationName) : sourceLabel(row.sourceType)}</span><span className="mt-0.5 block text-xs text-muted">{sourceLabel(row.sourceType)}</span>{row.sourceType === "WEB" && row.domain ? <SiteClassificationBadge classification={classifications[row.domain]} /> : null}</td><td className="px-4 py-3 text-sm font-semibold text-navy-950">{formatDuration(row.durationSeconds)}</td><td className="px-4 py-3 text-xs text-muted">{row.hostname}</td></tr>)}</tbody></table></div>
-              <div className="mt-4 flex items-center justify-between gap-3 text-xs text-muted"><span>Página {currentPage + 1} de {pages}</span><div className="flex gap-2"><button type="button" aria-label="Página anterior" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Próxima página" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>
-              {data.truncated ? <p className="mt-3 text-xs text-amber-700">O histórico exibe até {data.limit.toLocaleString("pt-BR")} registros. Os totais e rankings consideram o dia completo.</p> : null}
+              <div className="mt-4 flex items-center justify-between gap-3 text-xs text-muted"><span>Página {currentPage + 1} de {pages}</span><div className="flex gap-2"><button type="button" aria-label="Página anterior" disabled={currentPage === 0 || busy} onClick={() => setPage(currentPage - 1)} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><button type="button" aria-label="Próxima página" disabled={busy || (data?.pagination ? !data.pagination.hasMore : currentPage === pages - 1)} onClick={() => { if (data?.pagination?.nextCursor) setTimelineCursors((values) => [...values.slice(0, currentPage + 1), data.pagination!.nextCursor]); setPage(currentPage + 1); }} className="rounded-lg border border-border p-2 disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>
+              {data.truncated && !data.pagination ? <p className="mt-3 text-xs text-amber-700">O histórico exibe até {data.limit.toLocaleString("pt-BR")} registros. Os totais e rankings consideram o dia completo.</p> : null}
             </>}
           </Panel>}
         </div>
