@@ -8,6 +8,7 @@ import { Prisma } from "@prisma/client";
 import { QUALITY_CATEGORY_QUEUE_IDS, normalizeQualityQueueId, readPerformanceQualityParams } from "./performance-quality";
 import { buildPerformanceQualityExportPayload } from "./performance-quality-export";
 import { buildXlsxResponse } from "./xlsx-export";
+import { serializeQualityIndicators } from "./performance-quality-metrics";
 
 const localRequire = createRequire(import.meta.url);
 const compiled = ts.transpileModule(readFileSync(new URL("./performance-service.ts", import.meta.url), "utf8"), {
@@ -18,7 +19,7 @@ const at = new Date("2026-11-01T00:00:00Z");
 
 function harness(role = "ADMIN") {
   const queries: Prisma.Sql[] = [];
-  const writes: Array<{ queueId: string | null }> = [];
+  const writes: Array<{ queueId: string | null; negativeSign?: string | null; allowAmount?: number | null; labeledAmount?: number | null }> = [];
   const db = {
     user: { findUnique: async () => ({ id: "admin", name: "QA", email: actor.email, status: "ACTIVE", role: { name: role } }) },
     employeeProfile: { findMany: async () => [{ id: "agent", fullName: "Ana", wbLogin: "wb_ana", lobId: "video", lob: { name: "VIDEO" } }] },
@@ -98,6 +99,17 @@ test("quality snapshot imports retain the audited queue, including numeric Excel
   assert.equal(normalizeQualityQueueId("5486 or 1=1"), null);
 });
 
+test("the supplied KAP layout imports decision flags and skips its summary row", async () => {
+  const { service, writes } = harness();
+  const rows = [{ "audit_time(年月日)": "汇总", "通过量_Allow_Amount": 200 },
+    { "audit_time(年月日)": "2026-11-08", audit_name: "wb_ana", final_result: "Correct", "质检case_order_id": "qa", audit_case_order_id: "audit",
+      audit_queue_id: 9553, "通过量_Allow_Amount": 0, "打标量_Labeled_Amount": 1, "正确率_Accuracy_Rate": 0 }];
+  const result = await service.importQualitySnapshotChunk(actor, rows, "quality.xlsx", "batch", 0, "TNS");
+  assert.equal(result.imported.importedRows, 1); assert.equal(result.preview.errorRows, 0);
+  assert.equal(writes[0].allowAmount, 0); assert.equal(writes[0].labeledAmount, 1);
+  assert.equal(writes[0].negativeSign, null); assert.equal(writes[0].queueId, "9553");
+});
+
 test("quality Excel round trip includes summary, trend and all matching agents, with numeric percentages", async () => {
   const { service } = harness();
   const dashboard = await service.getPerformanceQualityDashboard(actor, { lob: "TNS", category: "PUSH" });
@@ -123,4 +135,21 @@ test("quality export enforces access before reading metrics and rejects inverted
   await assert.rejects(allowed.service.getPerformanceQualityDashboard(actor, { lob: "TNS", startDate: "2026-11-07", endDate: "2026-11-01" }), (error: any) => error.status === 400);
   const payload = await allowed.service.exportPerformanceQualityXlsxData(actor, { lob: "TNS", category: "USER" });
   assert.match(payload.fileName, /qualidade_tns_user/);
+});
+
+test("Excel exports the exact rates as numeric percentages and leaves zero denominators blank", async () => {
+  const indicators = serializeQualityIndicators({ total: 10, correct: 8, allow: 6, labeled: 4, leakage: 1, falsePositive: 1, mislabeled: 1, casesWithDecision: 10 });
+  const row = { correct: 8, total: 10, errors: 2, quality: 80, indicators };
+  const payload = buildPerformanceQualityExportPayload({ selectedLob: "TNS", selectedCategory: null, granularity: "daily", unclassifiedTotal: 0,
+    period: { startDate: "2026-11-01", endDate: "2026-11-01" }, summary: row, agents: [], trend: [{ key: "2026-11-01", label: "01/11", ...row }] });
+  const book = XLSX.read(await buildXlsxResponse(payload).arrayBuffer(), { type: "array" });
+  const cells = XLSX.utils.sheet_to_json<any[]>(book.Sheets.Resumo, { header: 1 });
+  const byHeader = (name: string) => cells[1][cells[0].indexOf(name)];
+  assert.equal(byHeader("Accuracy"), 0.8); assert.equal(byHeader("Allow Amount"), 6);
+  assert.ok(Math.abs(byHeader("Leakage Rate") - 1 / 6) < 1e-12);
+  assert.equal(byHeader("False Positive Rate"), 0.25); assert.equal(byHeader("Mislabeled Rate"), 0.1);
+  row.indicators = serializeQualityIndicators({ total: 10, correct: 8, allow: 0, labeled: 10, casesWithDecision: 10 });
+  const noAllow = buildPerformanceQualityExportPayload({ selectedLob: "TNS", selectedCategory: null, granularity: "daily", unclassifiedTotal: 0,
+    period: { startDate: "2026-11-01", endDate: "2026-11-01" }, summary: row, agents: [], trend: [] });
+  assert.equal(noAllow.rows[0][noAllow.headers.indexOf("Leakage Rate")], null);
 });

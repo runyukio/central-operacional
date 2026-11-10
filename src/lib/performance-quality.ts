@@ -3,6 +3,45 @@ export type QualityLob = typeof QUALITY_LOBS[number];
 
 export const QUALITY_CATEGORIES = ["PUSH", "USER", "COMMENTS", "VIDEO"] as const;
 export type QualityCategory = typeof QUALITY_CATEGORIES[number];
+export type QualityIndicators = {
+  accuracy: number | null;
+  allow: number | null;
+  labeled: number | null;
+  leakage: number;
+  falsePositive: number;
+  mislabeled: number;
+  leakageRate: number | null;
+  falsePositiveRate: number | null;
+  mislabeledRate: number | null;
+  casesWithDecision: number;
+};
+export const QUALITY_EXTRA_INDICATORS = [
+  { key: "allow", label: "Allow Amount", percent: false },
+  { key: "labeled", label: "Labeled Amount", percent: false },
+  { key: "leakage", label: "Leakage Amount", percent: false },
+  { key: "falsePositive", label: "False Positive Amount", percent: false },
+  { key: "mislabeled", label: "Error Labeling", percent: false },
+  { key: "leakageRate", label: "Leakage Rate", percent: true },
+  { key: "falsePositiveRate", label: "False Positive Rate", percent: true },
+  { key: "mislabeledRate", label: "Mislabeled Rate", percent: true }
+] as const;
+
+export function readQualityDecisionFields(row: Record<string, unknown>) {
+  const source = Object.fromEntries(Object.entries(row).map(([key, value]) => [key.trim().toLowerCase(), value]));
+  const read = (headers: string[]) => headers.map((header) => source[header.toLowerCase()])
+    .find((value) => value !== null && value !== undefined && String(value).trim() !== "");
+  const amount = (value: unknown) => {
+    if (value === null || value === undefined || String(value).trim() === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const sign = read(["负向标签_negative_sign", "negative_sign", "negative sign"]);
+  return {
+    negativeSign: sign === undefined ? null : String(sign).trim(),
+    allowAmount: amount(read(["通过量_Allow_Amount", "Allow_Amount", "Allow Amount"])),
+    labeledAmount: amount(read(["打标量_Labeled_Amount", "Labeled_Amount", "Labeled Amount"]))
+  };
+}
 export const QUALITY_CATEGORY_LABELS: Record<QualityCategory, string> = {
   PUSH: "Push", USER: "User", COMMENTS: "Comments", VIDEO: "Video"
 };

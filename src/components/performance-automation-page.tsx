@@ -58,7 +58,8 @@ import { PageHeader, StatCard } from "@/components/ui/primitives";
 import { cn, formatNumber } from "@/lib/utils";
 import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
 import { performanceManualBases, type PerformanceManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
-import { QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_LABELS, filterQualityAgents, isTnsQualityLob, type QualityLob, type QualityCategory } from "@/lib/performance-quality";
+import { QualityIndicatorsPanel, QualityIndicatorCells, formatQualityIndicator } from "@/components/performance-quality-indicators";
+import { QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_LABELS, QUALITY_EXTRA_INDICATORS, filterQualityAgents, isTnsQualityLob, type QualityLob, type QualityCategory, type QualityIndicators } from "@/lib/performance-quality";
 
 const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
@@ -122,6 +123,7 @@ type QualitySummary = {
   total: number;
   errors: number;
   quality: number;
+  indicators?: QualityIndicators;
 };
 
 type QualityTrendRow = QualitySummary & {
@@ -918,12 +920,12 @@ function QualityView({
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {selectedLob !== "CEC" ? <QualityIndicatorsPanel indicators={payload.summary.indicators} total={payload.summary.total} correct={payload.summary.correct} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
               <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "aprovações" : "distinct Correct"} icon={CheckCircle2} tone="green" />
               <StatCard title={selectedLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "Pass + Fail" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
               <StatCard title={selectedLob === "CEC" ? "Fail Quantity" : "Divergências"} value={formatNumber(payload.summary.errors)} helper={selectedLob === "CEC" ? "falhas" : "auditados - corretos"} icon={Target} tone="orange" />
-            </div>
+            </div>}
 
             <div className="rounded-xl border border-border bg-white p-4">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -953,7 +955,7 @@ function QualityView({
                 </label>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] text-left text-sm">
+                <table className={cn("w-full text-left text-sm", selectedLob === "CEC" ? "min-w-[980px]" : "min-w-[1900px]")}>
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                     <tr>
                       <th className="px-3 py-3">Agente</th>
@@ -966,12 +968,13 @@ function QualityView({
                           className="ml-auto inline-flex items-center gap-1.5 hover:text-blue-600"
                           aria-label={`Ordenar qualidade do ${sortDirection === "desc" ? "menor para o maior" : "maior para o menor"}`}
                         >
-                          Qualidade {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                          {selectedLob === "CEC" ? "Qualidade" : "Accuracy"} {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                         </button>
                       </th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass Quantity" : "Corretos"}</th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Total auditado" : "Auditados"}</th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Fail Quantity" : "Divergências"}</th>
+                      {selectedLob !== "CEC" ? QUALITY_EXTRA_INDICATORS.map((metric) => <th key={metric.key} className="whitespace-nowrap px-3 py-3 text-right">{metric.label}</th>) : null}
                       <th className="px-3 py-3 text-right">Última auditoria</th>
                     </tr>
                   </thead>
@@ -984,14 +987,15 @@ function QualityView({
                         </td>
                         <td className="px-3 py-2"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-2 font-bold text-muted">{agent.supervisor}</td>
-                        <td className="px-3 py-2 text-right"><QualityScore value={agent.quality} /></td>
+                        <td className="px-3 py-2 text-right"><QualityScore value={agent.indicators?.accuracy ?? agent.quality} /></td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.correct)}</td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.total)}</td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.errors)}</td>
+                        {selectedLob !== "CEC" ? <QualityIndicatorCells indicators={agent.indicators} /> : null}
                         <td className="px-3 py-2 text-right text-xs font-bold text-muted">{formatQualityAuditDate(agent.lastAuditAt)}</td>
                       </tr>
                     ))}
-                    {!agents.length ? <tr><td colSpan={8} className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente encontrado.</td></tr> : null}
+                    {!agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 8 : 16} className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente encontrado.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -1004,21 +1008,31 @@ function QualityView({
 }
 
 function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[]; cec?: boolean }) {
+  const [metric, setMetric] = useState<"accuracy" | "leakageRate" | "falsePositiveRate" | "mislabeledRate">("accuracy");
+  const label = { accuracy: "Accuracy", leakageRate: "Leakage Rate", falsePositiveRate: "False Positive Rate", mislabeledRate: "Mislabeled Rate" }[metric];
+  const chartRows = rows.map((row) => ({ ...row, plottedRate: cec ? row.quality : row.indicators?.[metric] ?? null }));
   if (!rows.length) return <EmptyBox label="Sem histórico diário para exibir." />;
   return (
-    <div className="h-[360px] w-full">
+    <div className="space-y-3">
+      {!cec ? <label className="flex flex-wrap items-center gap-2 text-xs font-bold text-muted">Indicador do gráfico
+        <select aria-label="Indicador do gráfico" value={metric} onChange={(event) => setMetric(event.target.value as typeof metric)} className="h-9 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">
+          <option value="accuracy">Accuracy</option><option value="leakageRate">Leakage Rate</option><option value="falsePositiveRate">False Positive Rate</option><option value="mislabeledRate">Mislabeled Rate</option>
+        </select>
+      </label> : null}
+      <div className="h-[360px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={rows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+        <ComposedChart data={chartRows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
           <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
           <YAxis yAxisId="cases" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
-          <YAxis yAxisId="quality" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
+          <YAxis yAxisId="quality" orientation="right" domain={cec || metric === "accuracy" ? [0, 100] : [0, "auto"]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
           <RechartsTooltip content={<QualityDashboardTooltip cec={cec} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
           <Bar yAxisId="cases" dataKey="total" name={cec ? "Total auditado" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
-          <Line yAxisId="quality" type="monotone" dataKey="quality" name="Qualidade" stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
+          <Line yAxisId="quality" type="monotone" dataKey="plottedRate" name={cec ? "Qualidade" : label} stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }
@@ -1031,10 +1045,11 @@ function QualityDashboardTooltip({ active, payload, cec = false }: { active?: bo
     <div className="rounded-xl border border-border bg-white p-3 text-xs font-bold text-navy-950 shadow-lg">
       <p className="mb-2 text-sm font-black">{row.label}</p>
       <div className="space-y-1">
-        <div className="flex justify-between gap-5"><span>Qualidade</span><span>{formatQualityPercent(row.quality)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Qualidade" : "Accuracy"}</span><span>{formatQualityIndicator(cec ? row.quality : row.indicators?.accuracy, true)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Pass Quantity" : "Corretos"}</span><span>{formatNumber(row.correct)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Total auditado" : "Auditados"}</span><span>{formatNumber(row.total)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Fail Quantity" : "Divergências"}</span><span>{formatNumber(row.errors)}</span></div>
+        {!cec ? QUALITY_EXTRA_INDICATORS.filter((metric) => metric.percent).map((metric) => <div key={metric.key} className="flex justify-between gap-5"><span>{metric.label}</span><span>{formatQualityIndicator(row.indicators?.[metric.key], true)}</span></div>) : null}
       </div>
     </div>
   );
@@ -1978,7 +1993,7 @@ function QualityImportModal({
             label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : qualityScope === "CEC" ? "Qualidade CEC" : "Qualidade VIDEO / COMMENTS"}
             helper={qualityScope === "CEC"
               ? "Base com Monitor day, Employee Name, Pass Quantity e Fail Quantity. Linhas repetidas do mesmo agente e dia são somadas."
-              : "Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."}
+              : "Base com audit_name, final_result, IDs dos casos e audit_queue_id. Allow Amount e Labeled Amount alimentam as taxas; negative_sign também é aceito. Até 1.000.000 de linhas e 250 MB."}
             file={qualityFile}
             onChange={setQualityFile}
           />

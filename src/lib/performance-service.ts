@@ -29,9 +29,10 @@ import { getPerformanceAgentShiftProduction } from "@/lib/performance-moderation
 import { formatModerationDuration, normalizeModerationLogin } from "@/lib/performance-moderation-duration";
 import { addDateKeyDays } from "@/lib/realtime-hours-timeline";
 import { buildPerformanceQualityExportPayload } from "@/lib/performance-quality-export";
+import { qualityIndicatorCountsSql, serializeQualityIndicators, type QualityIndicatorCounts } from "@/lib/performance-quality-metrics";
 import {
   QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_QUEUE_IDS,
-  isTnsQualityLob, readQualityLob, readQualityCategory, normalizeQualityQueueId,
+  isTnsQualityLob, readQualityLob, readQualityCategory, normalizeQualityQueueId, readQualityDecisionFields,
   type QualityLob, type QualityCategory
 } from "@/lib/performance-quality";
 import { needsRealtimeHourlyInputFallback, realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
@@ -782,23 +783,25 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
   `;
 
   const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
-    prisma.$queryRaw<Array<{ total: number; correct: number; unclassifiedTotal: number }>>(Prisma.sql`
+    prisma.$queryRaw<Array<QualityIndicatorCounts & { unclassifiedTotal: number }>>(Prisma.sql`
       SELECT
         COUNT(DISTINCT q."concatKey")::integer AS "total",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
-        COUNT(DISTINCT CASE WHEN q."queueId" IS NULL OR q."queueId" NOT IN (${Prisma.join(knownQueueIds)}) THEN q."concatKey" END)::integer AS "unclassifiedTotal"
+        COUNT(DISTINCT CASE WHEN q."queueId" IS NULL OR q."queueId" NOT IN (${Prisma.join(knownQueueIds)}) THEN q."concatKey" END)::integer AS "unclassifiedTotal",
+        ${qualityIndicatorCountsSql}
       ${scopedSql}
     `),
-    prisma.$queryRaw<Array<{ periodStart: Date; total: number; correct: number }>>(Prisma.sql`
+    prisma.$queryRaw<Array<QualityIndicatorCounts & { periodStart: Date }>>(Prisma.sql`
       SELECT
         ${bucketSql} AS "periodStart",
         COUNT(DISTINCT q."concatKey")::integer AS "total",
-        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct"
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        ${qualityIndicatorCountsSql}
       ${scopedSql}
       GROUP BY ${bucketSql}
       ORDER BY ${bucketSql} ASC
     `),
-    prisma.$queryRaw<Array<{
+    prisma.$queryRaw<Array<QualityIndicatorCounts & {
       employeeId: string;
       employeeName: string;
       wbLogin: string;
@@ -816,7 +819,8 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
         COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
         COUNT(DISTINCT q."concatKey")::integer AS "total",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
-        MAX(q."auditTime") AS "lastAuditAt"
+        MAX(q."auditTime") AS "lastAuditAt",
+        ${qualityIndicatorCountsSql}
       ${scopedSql}
       AND q."employeeId" IS NOT NULL
       GROUP BY q."employeeId", e."fullName", q."wbLogin", s."fullName"
@@ -850,11 +854,12 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     selectedCategory: selectedCategory ?? null,
     unclassifiedTotal: summary.unclassifiedTotal ?? 0,
     filters: { lobs: [...QUALITY_LOBS], categories: isTnsQualityLob(selectedLob) ? [...QUALITY_CATEGORIES] : [] },
-    summary: serializeQualityAggregate(summary.correct, summary.total),
+    summary: { ...serializeQualityAggregate(summary.correct, summary.total), indicators: serializeQualityIndicators(summary) },
     trend: trendRows.map((row) => ({
       key: formatDateKey(row.periodStart),
       label: qualityBucketLabel(row.periodStart, view),
-      ...serializeQualityAggregate(row.correct, row.total)
+      ...serializeQualityAggregate(row.correct, row.total),
+      indicators: serializeQualityIndicators(row)
     })),
     agents: agentRows.map((row) => ({
       employeeId: row.employeeId,
@@ -863,7 +868,8 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
       lob: selectedLob,
       supervisor: row.supervisor,
       lastAuditAt: row.lastAuditAt.toISOString(),
-      ...serializeQualityAggregate(row.correct, row.total)
+      ...serializeQualityAggregate(row.correct, row.total),
+      indicators: serializeQualityIndicators(row)
     })),
     lastImport: latestImport ? {
       ...latestImport,
@@ -2753,7 +2759,12 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
   const employees = await findEmployeesByWbLogins(wbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
 
-  const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
+  const previewRows: PerformancePreviewRow[] = normalizedRows.flatMap((row, index) => {
+    // KAP includes an aggregate row after the header; it is not an audited case.
+    const sourceDate = text(rowValue(row, ["audit_time", "audit_time(年月日)", "audit time", "data"]));
+    if (/^(汇总|总计|合计|total|grand total|resumo)$/i.test(sourceDate)
+      && !text(rowValue(row, ["质检case_order_id", "case_order_id", "case order id"]))
+      && !text(rowValue(row, ["audit_case_order_id", "audit case order id"]))) return [];
     const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
@@ -2766,6 +2777,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const rawLob = text(rowValue(row, ["lob"]));
     const rawQueueId = rowValue(row, ["audit_queue_id", "audit queue id", "queue_id", "queue id", "id-queue_id", "id_queue_id", "队列id-queue_id"]);
     const queueId = normalizeQualityQueueId(rawQueueId);
+    const decisionFields = readQualityDecisionFields(row);
     const concatKey = buildQualityTaskKey(caseOrderId, auditCaseOrderId);
     const qualityRule = getQualityRuleByEmployee(employee);
     const expectedRule: QualityRule = options.qualityScope === "TNS" ? "TNS_QUALITY" : "ADS_QUALITY";
@@ -2804,6 +2816,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
         auditCaseOrderId,
         concatKey,
         queueId,
+        ...decisionFields,
         rawLob,
         qualityRule
       }
@@ -3189,6 +3202,7 @@ async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePrevi
         auditCaseOrderId: String(row.payload.auditCaseOrderId),
         concatKey: String(row.payload.concatKey),
         queueId: normalizeQualityQueueId(row.payload.queueId),
+        ...readQualityDecisionFields({ negative_sign: row.payload.negativeSign, Allow_Amount: row.payload.allowAmount, Labeled_Amount: row.payload.labeledAmount }),
         lobId: row.lobId ?? null,
         rawLob: String(row.payload.rawLob ?? "") || null,
         importBatchId: batch.id
@@ -3790,7 +3804,7 @@ export function performanceTemplate(type: "quality" | "tns-quality" | "cec-quali
     return {
       fileName: "template_performance_qualidade.xlsx",
       sheetName: "qualidade",
-      headers: ["audit_time", "audit_name", "final_result", "质检case_order_id", "audit_case_order_id", "audit_queue_id", "LOB", "Concat"],
+      headers: ["audit_time", "audit_name", "final_result", "质检case_order_id", "audit_case_order_id", "audit_queue_id", "通过量_Allow_Amount", "打标量_Labeled_Amount", "负向标签_negative_sign", "LOB", "Concat"],
       rows: []
     };
   }

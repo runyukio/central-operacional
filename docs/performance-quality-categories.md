@@ -14,12 +14,24 @@ O Excel usa o mesmo período, LOB, categoria, visão e ordenação da consulta d
 
 Os snapshots anteriores não guardavam o ID da fila. A migração não consegue reconstruí-lo: casos antigos continuam em Todas, com aviso de casos sem categoria, até a reimportação. Filas com ID desconhecido também entram em Todas e ficam fora das quatro categorias.
 
-A publicação desta alteração mantém o snapshot já carregado. A classificação do histórico depende de uma futura importação com ID da fila; não é inferida pelo cadastro do agente.
+A importação continua substituindo somente o escopo escolhido (ADS/PROJECT, VIDEO/COMMENTS ou CEC). A base KAP fornecida em 10/11/2026 contém ID da fila e marcações Allow/Labeled por caso. A linha de resumo do arquivo é ignorada. A classificação não é inferida pelo cadastro do agente.
 
 ## Validação
 
-- 52 testes passaram, incluindo importação com IDs numéricos e ausentes, filtros de TNS/ADS/CEC, permissões e leitura do Excel gerado com 601 agentes.
+- 60 testes passaram, incluindo importação com IDs numéricos e ausentes, filtros de TNS/ADS/CEC, permissões e leitura do Excel gerado com 601 agentes.
 - TypeScript, lint dos arquivos alterados e compilação de produção passaram.
 - A interface real foi conferida em navegador com respostas simuladas: troca das quatro categorias, remoção dos filtros em ADS e download com categoria, período e busca corretos.
 - Em 390 px de largura a página não apresenta rolagem horizontal; a tabela de agentes mantém sua própria rolagem.
 - A migração foi conferida no banco de produção: campo, índice e registro no histórico Prisma. O snapshot existente é preservado.
+
+## Indicadores e fórmulas
+
+- Accuracy: casos distintos com final_result Correct / total de CONCAT(QA ID, Audit ID).
+- Error Labeling: casos distintos com final_result Mislabeled. Mislabeled Rate = Error Labeling / total auditado.
+- Leakage Amount: casos distintos com final_result Leakage. Leakage Rate = Leakage / Allow.
+- False Positive Amount: casos distintos com final_result False_Positive, usando CONCAT(Audit ID, QA ID), na ordem fornecida pelo usuário. False Positive Rate = esse numerador / Labeled.
+- Os denominadores Allow e Labeled contam casos distintos marcados nas respectivas colunas, conforme confirmado pelo usuário para a nova base, que não contém negative_sign. Se negative_sign estiver presente em outra importação, <> 1 determina Allow e = 1 determina Labeled.
+- Percentuais já calculados na planilha são ignorados. Cada filtro e período recalcula os numeradores e denominadores; não há média simples de percentuais nem soma da linha de resumo.
+- Sem denominador, a taxa é nula (traço na tela e célula vazia no Excel). Caso um escopo misture registros com e sem classificação, Allow/Labeled e suas taxas ficam indisponíveis até a cobertura completa, com aviso.
+- Os nove indicadores aparecem no resumo, e as três taxas podem ser escolhidas no gráfico. A tabela por agente e as três abas do Excel incluem os indicadores. CEC preserva sua fórmula Pass/Fail.
+- A migração aditiva 202611101800_quality_decision_flags guarda negativeSign, allowAmount e labeledAmount como opcionais e foi aplicada antes da publicação.

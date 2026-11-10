@@ -1478,6 +1478,9 @@ model QualityRecord {
   auditCaseOrderId String
   concatKey        String
   queueId          String?
+  negativeSign     String?
+  allowAmount      Float?
+  labeledAmount    Float?
   lobId            String?
   lob              Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
   rawLob           String?
