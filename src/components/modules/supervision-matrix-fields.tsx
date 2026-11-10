@@ -12,10 +12,37 @@ export function SupervisionMatrixFields({ settings, saving, onSave }: {
   onSave: (body: Record<string, unknown>, success: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(emptyDraft);
+  const [initialRows, setInitialRows] = useState<unknown[]>([]);
+  const [fileError, setFileError] = useState("");
   const inputClass = "h-10 w-full rounded-lg border border-border px-3 text-sm";
   return <section className="mt-6 border-t border-border pt-5" aria-labelledby="supervision-matrix-title">
     <h3 id="supervision-matrix-title" className="font-bold">Responsabilidade por LOB, turno e vigência</h3>
     <p className="mb-4 text-sm text-slate-600">As datas inicial e final são inclusivas. Cada combinação deve ter uma única responsabilidade ativa na data da troca. Encerre o período anterior antes de cadastrar o próximo.</p>
+    {settings && !settings.supervisionAssignments?.length ? (
+      <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-border p-3">
+        <label className="text-sm">Arquivo da matriz inicial
+          <input type="file" accept=".json,application/json" className="mt-1 block max-w-full text-sm" onChange={async (event) => {
+            const file = event.currentTarget.files?.[0];
+            setInitialRows([]);
+            setFileError("");
+            if (!file) return;
+            try {
+              if (file.size > 100_000) throw new Error();
+              const rows: unknown = JSON.parse(await file.text());
+              if (!Array.isArray(rows) || !rows.length || rows.length > 100) throw new Error();
+              setInitialRows(rows);
+            } catch {
+              setFileError("Selecione um arquivo de matriz válido, com 1 a 100 responsabilidades.");
+            }
+          }} />
+        </label>
+        <button type="button" disabled={saving || !initialRows.length} className="rounded-lg border border-border px-4 py-2 text-sm font-bold disabled:opacity-60"
+          onClick={() => void onSave({ type: "importSupervisionMatrix", assignments: initialRows }, "Matriz inicial de supervisão importada.")}>
+          {initialRows.length ? `Importar ${initialRows.length} responsabilidades` : "Importar matriz inicial"}
+        </button>
+        {fileError ? <p role="alert" className="text-sm text-red-700">{fileError}</p> : null}
+      </div>
+    ) : null}
     <form className="grid gap-3 md:grid-cols-3" onSubmit={(event) => {
       event.preventDefault();
       void onSave({ type: "supervisionAssignment", ...draft, endsOn: draft.endsOn || null }, "Responsabilidade de supervisão salva.");

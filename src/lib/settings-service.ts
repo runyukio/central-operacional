@@ -1,4 +1,4 @@
-import { readSupervisionMatrix, saveSupervisionAssignment, SupervisionError } from "./supervision-matrix";
+import { importInitialSupervisionMatrix, readSupervisionMatrix, saveSupervisionAssignment, SupervisionError } from "./supervision-matrix";
 import { randomUUID } from "crypto";
 import { BILLING_REFERENCE_MONTH_CONFIG_KEY, DEFAULT_BILLING_REFERENCE_MONTH, isValidBillingReferenceMonth } from "@/lib/billing-reference-month";
 import { getDefaultBillingReferenceMonth } from "@/lib/billing-reference-month-service";
@@ -185,7 +185,8 @@ export async function getSystemSettings(actor: Actor) {
       approvalRules,
       coverageRules,
       tokenRules,
-      generalSettings
+      generalSettings,
+      supervisionAssignments
     ] = await Promise.all([
       prisma.user.findMany({ where: { deletedAt: null }, select: settingsUserSelect, orderBy: { name: "asc" }, take: 300 }),
       prisma.lob.findMany({ orderBy: { name: "asc" } }),
@@ -211,7 +212,8 @@ export async function getSystemSettings(actor: Actor) {
       readRuleList(configKeys.approvalRules),
       readRuleList(configKeys.coverageRules),
       readRuleList(configKeys.tokenRules),
-      readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings())
+      readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings()),
+      readSupervisionMatrix()
     ]);
 
     const superviseeCounts = countSuperviseesBySupervisor(employees);
@@ -274,7 +276,7 @@ export async function getSystemSettings(actor: Actor) {
         coverageRules,
         tokenRules,
         generalSettings,
-        supervisionAssignments: await readSupervisionMatrix()
+        supervisionAssignments
       }
     };
   } catch (error) {
@@ -368,6 +370,8 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
           return saveTeam(tx, admin.id, action);
         case "supervisionAssignment":
           return saveSupervisionAssignment(tx, admin.id, action);
+        case "importSupervisionMatrix":
+          return importInitialSupervisionMatrix(tx, admin.id, action.assignments);
         case "supervisor":
           return saveSupervisorLink(tx, admin.id, action);
         case "shift":

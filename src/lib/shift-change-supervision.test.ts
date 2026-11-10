@@ -3,9 +3,10 @@ import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
 import { mockPrismaDelegate } from "./prisma-test-delegate";
 import { updateOperationalRequestStatus } from "./request-service";
-import { resolveShiftSupervisor, saveSupervisionAssignment, type SupervisionAssignment } from "./supervision-matrix";
+import { importInitialSupervisionMatrix, resolveShiftSupervisor, saveSupervisionAssignment, type SupervisionAssignment } from "./supervision-matrix";
 import { historicalSlotSupervisor } from "./schedule-supervision-history";
 import { applyDueFixedShiftChanges } from "./shift-change-effective-service";
+import { baseTimesForShift } from "./shift-base-times";
 
 const date = (day: string) => new Date(`${day}T00:00:00Z`);
 const actor = { email: "wfm@example.test", name: "WFM", role: "WFM" as const };
@@ -20,6 +21,8 @@ const assignment = (lobId = "ADS", shift: SupervisionAssignment["shift"] = "Tard
 function setup(t: TestContext, options: { lob?: string; shift?: SupervisionAssignment["shift"]; future?: boolean; temporary?: boolean; failure?: string; matrix?: SupervisionAssignment[]; status?: string } = {}) {
   const lob = options.lob ?? "ADS";
   const shift = options.shift ?? "Tarde";
+  const previousShift = shift === "Manhã" ? "Noite" : shift === "Noite" ? "Tarde" : "Manhã";
+  const previousTimes = baseTimesForShift(previousShift)!;
   const effectiveDay = options.future ? "2099-11-15" : "2026-01-15";
   const matrix = options.matrix ?? [assignment(lob, shift, { endsOn: options.future ? null : "2026-01-31" }),
     assignment(lob, shift, { id: "later", startsOn: options.future ? "2100-01-01" : "2026-02-01", supervisorId: "later-supervisor", active: !options.future }),
@@ -33,11 +36,11 @@ function setup(t: TestContext, options: { lob?: string; shift?: SupervisionAssig
       payload: { shiftChange: true, shiftChangeType: options.temporary ? "Temporária" : "Fixa", desiredShift: shift,
         shiftChangeStartDate: effectiveDay, ...(options.temporary ? { shiftChangeEndDate: "2026-01-16" } : {}) },
       history: [], comments: [], createdAt: date("2026-01-01"), updatedAt: date("2026-01-01") },
-    employee: { id: "agent", lobId: lob, lob: { name: lob }, supervisorId: "old", shiftId: "old-shift", shift: { name: "Manhã" },
-      workStartTime: "08:00", workEndTime: "16:00", deletedAt: null, contractType: "CLT", roleTitle: "Agente", operationalStatus: "Ativo" },
+    employee: { id: "agent", lobId: lob, lob: { name: lob }, supervisorId: "old", shiftId: "old-shift", shift: { name: previousShift },
+      workStartTime: previousTimes.startsAt, workEndTime: previousTimes.endsAt, deletedAt: null, contractType: "CLT", roleTitle: "Agente", operationalStatus: "Ativo" },
     schedules: ["2026-01-14", effectiveDay, options.future ? "2099-11-16" : "2026-01-16", options.future ? "2099-12-01" : "2026-02-01"].map((day, index) => ({
-      id: `slot-${index}`, employeeId: "agent", date: date(day), deletedAt: null, shiftId: "old-shift", shift: { name: "Manhã" },
-      supervisorId: index ? "old" : null, startsAt: "08:00", endsAt: "16:00", status: ["PRESENTE", "FOLGA", "FALTA", "ATRASO"][index],
+      id: `slot-${index}`, employeeId: "agent", date: date(day), deletedAt: null, shiftId: "old-shift", shift: { name: previousShift },
+      supervisorId: index ? "old" : null, startsAt: previousTimes.startsAt, endsAt: previousTimes.endsAt, status: ["PRESENTE", "FOLGA", "FALTA", "ATRASO"][index],
       observation: "Original note", operationalHours: 7.5
     })), audits: [], changes: [], notifications: []
   };
@@ -106,9 +109,9 @@ function setup(t: TestContext, options: { lob?: string; shift?: SupervisionAssig
   return { before, matrix, user, effectiveDay, get state() { return state; }, get writes() { return writes; } };
 }
 
-for (const lob of ["ADS", "VIDEO", "COMMENTS", "CEC"]) {
+for (const lob of ["ADS", "VIDEO", "COMMENTS", "TNS", "CEC"]) {
   for (const shift of ["Manhã", "Tarde", "Noite"] as const) {
-    test(`${lob} → ${shift}: dated matrix, directory, future schedules, audit, preserved history/status/hours`, async (t) => {
+    test(`${lob} ${shift === "Manhã" ? "Noite" : shift === "Noite" ? "Tarde" : "Manhã"} → ${shift}: dated matrix, directory, future schedules, audit, preserved history/status/hours`, async (t) => {
       const fixture = setup(t, { lob, shift });
       const result = await updateOperationalRequestStatus(actor, "REQ-9000", "Aprovado");
       assert.ok(result && typeof result === "object" && "data" in result, JSON.stringify(result));
@@ -253,3 +256,49 @@ test("a malformed matrix blocks approval with LOB and shift context", async (t) 
   assert.match(result.error ?? "", /LOB ADS, novo turno Tarde.*Matriz de supervisão inválida/);
   assert.deepEqual(fixture.state, fixture.before);
 });
+
+function initialMatrixFixture(t: TestContext, existing: SupervisionAssignment[] = []) {
+  let config = existing;
+  const audits = t.mock.fn(async () => ({ count: config.length }));
+  const upsert = t.mock.fn(async ({ create }: { create: { value: SupervisionAssignment[] } }) => { config = create.value; });
+  return {
+    tx: {
+      $queryRaw: async () => [],
+      systemConfig: { findUnique: async () => ({ value: config }), upsert },
+      lob: { findMany: async () => ["ADS", "CEC", "TNS", "VIDEO", "COMMENTS"].map((name) => ({ id: name, name })) },
+      employeeProfile: { findMany: async ({ where }: { where: { id: { in: string[] } } }) => where.id.in
+        .filter((id) => id !== "unknown").map((id) => ({ id, deletedAt: null, user: { status: "ACTIVE", role: { name: "SUPERVISOR" } } })) },
+      auditLog: { createMany: audits }
+    } as unknown as Parameters<typeof importInitialSupervisionMatrix>[0],
+    upsert, audits
+  };
+}
+
+test("initial matrix imports every dated LOB and shift together and cannot be imported twice", async (t) => {
+  const fixture = initialMatrixFixture(t);
+  const rows = ["ADS", "CEC", "TNS", "VIDEO", "COMMENTS"].flatMap((lob) => ["Manhã", "Tarde", "Noite"].map((shift) =>
+    assignment(lob, shift as SupervisionAssignment["shift"], { startsOn: "2026-11-10" })));
+  assert.deepEqual(await importInitialSupervisionMatrix(fixture.tx, "admin", rows), { count: 15 });
+  assert.deepEqual(fixture.upsert.mock.calls[0].arguments[0].create.value, rows);
+  assert.equal(fixture.audits.mock.callCount(), 1);
+  const repeated = await importInitialSupervisionMatrix(fixture.tx, "admin", rows);
+  assert.ok("error" in repeated);
+  assert.match(repeated.error ?? "", /já tem responsabilidades/);
+  assert.equal(fixture.upsert.mock.callCount(), 1);
+});
+
+for (const [label, extra, expected] of [
+  ["overlap", { id: "other" }, /períodos ativos sobrepostos/],
+  ["unknown supervisor", { id: "other", supervisorId: "unknown" }, /supervisor não encontrado/],
+  ["duplicate identifier", {}, /identificadores duplicados/],
+  ["invalid date", { id: "other", startsOn: "2026-11-31" }, /Arquivo de matriz inválido/]
+] as const) {
+  test(`initial matrix with ${label} does not write any row`, async (t) => {
+    const fixture = initialMatrixFixture(t);
+    const result = await importInitialSupervisionMatrix(fixture.tx, "admin", [assignment(), assignment("ADS", "Tarde", extra)]);
+    assert.ok("error" in result);
+    assert.match(result.error ?? "", expected);
+    assert.equal(fixture.upsert.mock.callCount(), 0);
+    assert.equal(fixture.audits.mock.callCount(), 0);
+  });
+}

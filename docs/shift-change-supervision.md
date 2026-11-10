@@ -4,7 +4,7 @@ A aprovação final de uma Troca de Turno resolve um único responsável por **L
 
 ## Configuração
 
-Em **Configurações → Supervisores → Responsabilidade por LOB, turno e vigência**, o Admin mantém os responsáveis. A matriz fica no armazenamento central existente `SystemConfig`, chave `settings.supervisionAssignments`; não requer alteração de schema ou migração.
+Em **Configurações → Supervisores → Responsabilidade por LOB, turno e vigência**, o Admin mantém os responsáveis. Enquanto a matriz estiver vazia, use **Arquivo da matriz inicial** para carregar todas as responsabilidades de uma vez. A importação valida todas as linhas antes de gravar e usa uma única transação com auditoria. A matriz fica no armazenamento central existente `SystemConfig`, chave `settings.supervisionAssignments`; não requer alteração de schema ou migração.
 
 Cada responsabilidade tem `id`, `lobId`, `shift` (Manhã, Tarde ou Noite), `supervisorId`, `startsOn`, `endsOn` opcional e `active`. As datas são inclusivas. O fim do responsável anterior deve ser anterior ao início do seguinte. O salvamento impede sobreposição de períodos ativos para a mesma LOB e turno e audita a alteração. A aprovação também verifica sobreposições, inclusive se a configuração tiver sido alterada fora dessa tela.
 
@@ -24,7 +24,7 @@ Cada responsabilidade tem `id`, `lobId`, `shift` (Manhã, Tarde ou Noite), `supe
 
 ## Verificação
 
-`npm run test:shift-supervision` cobre as 12 combinações de ADS/VIDEO/COMMENTS/CEC com Manhã/Tarde/Noite, escolha da responsabilidade histórica, ausência/ambiguidade/inatividade da matriz, manutenção explicitamente autorizada do supervisor antigo, turno noturno, vigência futura, aplicação agendada, slots futuros, recusa/cancelamento/pendência, falhas no Mapa/Cronograma/auditoria, repetição e duplo clique. Os testes usam a fronteira Prisma simulada, com isolamento e reversão do estado da transação, sem escrever na operação real.
+`npm run test:shift-supervision` cobre as 15 combinações de ADS/VIDEO/COMMENTS/TNS/CEC com Manhã/Tarde/Noite, escolha da responsabilidade histórica, ausência/ambiguidade/inatividade da matriz, manutenção explicitamente autorizada do supervisor antigo, turno noturno, vigência futura, aplicação agendada, slots futuros, recusa/cancelamento/pendência, falhas no Mapa/Cronograma/auditoria, repetição e duplo clique. Os testes usam a fronteira Prisma simulada, com isolamento e reversão do estado da transação, sem escrever na operação real.
 
 Também foram executados os testes do editor de Cronograma, LOB por slot, leitura/exportação histórica e fluxos de folga/troca casada. TypeScript e compilação de produção passaram. A função de bloqueio compartilhado com retorno convertido para texto foi verificada diretamente no PostgreSQL por consulta sem alteração de registros.
 

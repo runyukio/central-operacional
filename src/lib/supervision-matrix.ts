@@ -20,6 +20,17 @@ export const supervisionAssignmentSchema = z.object({
 }).refine((value) => !value.endsOn || value.endsOn >= value.startsOn, "Fim da responsabilidade anterior ao início.");
 export type SupervisionAssignment = z.infer<typeof supervisionAssignmentSchema>;
 export class SupervisionError extends Error {}
+const supervisorRoles = ["SUPERVISOR", "GESTOR", "ADMIN", "WFM", "MANAGEMENT"];
+const matrixDescription = "Supervisão por LOB, turno e vigência (datas inclusivas)";
+
+function periodsOverlap(a: SupervisionAssignment, b: SupervisionAssignment) {
+  return a.active && b.active && a.lobId === b.lobId && a.shift === b.shift
+    && a.startsOn <= (b.endsOn ?? "9999-12-31") && b.startsOn <= (a.endsOn ?? "9999-12-31");
+}
+
+function eligibleSupervisor(supervisor: { deletedAt: Date | null; user: { status: string; role: { name: string } } | null } | null) {
+  return Boolean(supervisor && !supervisor.deletedAt && supervisor.user?.status === "ACTIVE" && supervisorRoles.includes(supervisor.user.role.name));
+}
 
 // Use the existing central configuration store. No guessed historical backfill:
 // current employee/team bindings cannot establish past responsibility dates.
@@ -70,18 +81,15 @@ export async function saveSupervisionAssignment(tx: Prisma.TransactionClient, ac
     tx.employeeProfile.findUnique({ where: { id: row.supervisorId }, include: { user: { include: { role: true } } } })
   ]);
   if (!lob || lob.name === "ALL") return { error: "Selecione uma LOB operacional válida." };
-  if (!supervisor || supervisor.deletedAt || !supervisor.user || supervisor.user.status !== "ACTIVE"
-    || !["SUPERVISOR", "GESTOR", "ADMIN", "WFM", "MANAGEMENT"].includes(supervisor.user.role.name)) {
+  if (!eligibleSupervisor(supervisor)) {
     return { error: "Selecione um supervisor ativo e elegível." };
   }
-  const overlap = matrix.find((entry) => entry.id !== row.id && entry.active && row.active
-    && entry.lobId === row.lobId && entry.shift === row.shift
-    && entry.startsOn <= (row.endsOn ?? "9999-12-31") && row.startsOn <= (entry.endsOn ?? "9999-12-31"));
+  const overlap = matrix.find((entry) => entry.id !== row.id && periodsOverlap(entry, row));
   if (overlap) return { error: `LOB ${lob.name}, turno ${row.shift}: já há supervisão no período informado. Encerre ou corrija a responsabilidade existente.` };
   const next = matrix.some((entry) => entry.id === row.id) ? matrix.map((entry) => entry.id === row.id ? row : entry) : [...matrix, row];
   await tx.systemConfig.upsert({
     where: { key: SUPERVISION_MATRIX_KEY },
-    create: { key: SUPERVISION_MATRIX_KEY, value: next, description: "Supervisão por LOB, turno e vigência (datas inclusivas)" },
+    create: { key: SUPERVISION_MATRIX_KEY, value: next, description: matrixDescription },
     update: { value: next }
   });
   await tx.auditLog.create({ data: {
@@ -90,4 +98,38 @@ export async function saveSupervisionAssignment(tx: Prisma.TransactionClient, ac
     previousValue: matrix.find((entry) => entry.id === row.id) ?? Prisma.JsonNull, newValue: row
   } });
   return { id: row.id };
+}
+
+export async function importInitialSupervisionMatrix(tx: Prisma.TransactionClient, actorId: string, input: unknown) {
+  const parsed = z.array(supervisionAssignmentSchema).min(1).max(100).safeParse(input);
+  if (!parsed.success) return { error: "Arquivo de matriz inválido. Confira a LOB, o turno, o supervisor e as datas de cada linha." };
+  const rows = parsed.data;
+  if (new Set(rows.map((row) => row.id)).size !== rows.length) return { error: "A matriz contém identificadores duplicados." };
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(726393, 1)::text`;
+  if ((await readSupervisionMatrix(tx)).length) return { error: "A matriz já tem responsabilidades cadastradas. Edite os períodos existentes na tela de Supervisores." };
+
+  const [lobs, supervisors] = await Promise.all([
+    tx.lob.findMany({ where: { id: { in: [...new Set(rows.map((row) => row.lobId))] }, name: { not: "ALL" } }, select: { id: true, name: true } }),
+    tx.employeeProfile.findMany({ where: { id: { in: [...new Set(rows.map((row) => row.supervisorId))] } }, select: {
+      id: true, deletedAt: true, user: { select: { status: true, role: { select: { name: true } } } }
+    } })
+  ]);
+  const lobById = new Map(lobs.map((lob) => [lob.id, lob.name]));
+  const supervisorById = new Map(supervisors.map((supervisor) => [supervisor.id, supervisor]));
+  for (const [index, row] of rows.entries()) {
+    const lob = lobById.get(row.lobId);
+    if (!lob) return { error: `Linha ${index + 1}: LOB operacional não encontrada.` };
+    if (!eligibleSupervisor(supervisorById.get(row.supervisorId) ?? null)) return { error: `LOB ${lob}, turno ${row.shift}: supervisor não encontrado ou inelegível.` };
+    if (rows.slice(0, index).some((other) => periodsOverlap(other, row))) return { error: `LOB ${lob}, turno ${row.shift}: períodos ativos sobrepostos.` };
+  }
+  await tx.systemConfig.upsert({
+    where: { key: SUPERVISION_MATRIX_KEY },
+    create: { key: SUPERVISION_MATRIX_KEY, value: rows, description: matrixDescription },
+    update: { value: rows }
+  });
+  await tx.auditLog.createMany({ data: rows.map((row) => ({
+    actorId, action: "CRIACAO", entity: "SupervisionAssignment", entityId: row.id,
+    reason: "Importação inicial da matriz de supervisão", newValue: row
+  })) });
+  return { count: rows.length };
 }
