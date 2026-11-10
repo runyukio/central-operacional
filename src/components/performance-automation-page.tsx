@@ -58,6 +58,7 @@ import { PageHeader, StatCard } from "@/components/ui/primitives";
 import { cn, formatNumber } from "@/lib/utils";
 import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
 import { performanceManualBases, type PerformanceManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
+import { QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_LABELS, filterQualityAgents, isTnsQualityLob, type QualityLob, type QualityCategory } from "@/lib/performance-quality";
 
 const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
@@ -65,7 +66,6 @@ type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
 type QualityGranularity = "monthly" | "weekly" | "daily";
 type QualitySortDirection = "asc" | "desc";
-type QualityLob = "ADS" | "VIDEO" | "COMMENTS" | "CEC";
 type QualityImportScope = "ADS" | "TNS" | "CEC";
 type SupervisorView = QualityGranularity;
 type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality";
@@ -141,11 +141,14 @@ type QualityAgentRow = QualitySummary & {
 type PerformanceQualityResponse = {
   mode: "quality";
   canImport: boolean;
+  canExport: boolean;
   granularity: QualityGranularity;
   period: { startDate: string; endDate: string };
   dataRange: { startDate: string; endDate: string } | null;
   selectedLob: string;
-  filters: { lobs: string[] };
+  selectedCategory: QualityCategory | null;
+  unclassifiedTotal: number;
+  filters: { lobs: string[]; categories: QualityCategory[] };
   summary: QualitySummary;
   trend: QualityTrendRow[];
   agents: QualityAgentRow[];
@@ -308,6 +311,8 @@ export function PerformanceAutomationPage() {
   const forecastRequest = useRef<AbortController | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
   const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
+  const [qualityCategory, setQualityCategory] = useState<QualityCategory | "">("");
+  const qualityRequest = useRef<AbortController | null>(null);
   const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("monthly");
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
@@ -409,7 +414,11 @@ export function PerformanceAutomationPage() {
   }, [forecastLob, forecastHorizon]);
 
   const loadQuality = useCallback(async (lobOverride?: QualityLob) => {
+    qualityRequest.current?.abort();
+    const controller = new AbortController();
+    qualityRequest.current = controller;
     setLoadingQuality(true);
+    setQualityPayload(null);
     const effectiveLob = lobOverride ?? qualityLob;
     const params = new URLSearchParams({
       view: qualityGranularity,
@@ -418,18 +427,21 @@ export function PerformanceAutomationPage() {
     });
     if (qualityStartDate) params.set("startDate", qualityStartDate);
     if (qualityEndDate) params.set("endDate", qualityEndDate);
+    if (isTnsQualityLob(effectiveLob) && qualityCategory) params.set("category", qualityCategory);
     try {
-      const response = await fetch(`/api/performance/quality?${params.toString()}`, { cache: "no-store" });
+      const response = await fetch(`/api/performance/quality?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const body = await response.json().catch(() => null) as (PerformanceQualityResponse & { error?: string; message?: string }) | null;
       if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar Qualidade.");
+      if (controller.signal.aborted) return;
       setQualityPayload(body);
       setMessage("");
     } catch (error) {
+      if (controller.signal.aborted) return;
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar Qualidade.");
     } finally {
-      setLoadingQuality(false);
+      if (!controller.signal.aborted) setLoadingQuality(false);
     }
-  }, [qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
+  }, [qualityCategory, qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
 
   const loadAgents = useCallback(async () => {
     const request = agentRequestGate.begin();
@@ -507,6 +519,7 @@ export function PerformanceAutomationPage() {
 
   useEffect(() => {
     if (activeTab === "quality") void loadQuality();
+    return () => qualityRequest.current?.abort();
   }, [activeTab, loadQuality]);
 
   useEffect(() => {
@@ -684,6 +697,8 @@ export function PerformanceAutomationPage() {
           loading={loadingQuality}
           payload={qualityPayload}
           selectedLob={qualityLob}
+          selectedCategory={qualityCategory}
+          onCategoryChange={setQualityCategory}
           granularity={qualityGranularity}
           sortDirection={qualitySortDirection}
           startDate={qualityStartDate}
@@ -694,6 +709,7 @@ export function PerformanceAutomationPage() {
           onEndDateChange={setQualityEndDate}
           onLobChange={(value) => {
             setQualityLob(value);
+            setQualityCategory("");
             setQualityStartDate("");
             setQualityEndDate("");
           }}
@@ -716,7 +732,7 @@ export function PerformanceAutomationPage() {
           initialScope={qualityLob === "ADS" ? "ADS" : qualityLob === "CEC" ? "CEC" : "TNS"}
           onClose={() => setQualityUploadOpen(false)}
           onImported={async (scope) => {
-            const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "VIDEO";
+            const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "TNS";
             setQualityLob(nextLob);
             setQualityPayload(null);
             await loadQuality(nextLob);
@@ -748,6 +764,8 @@ function QualityView({
   loading,
   payload,
   selectedLob,
+  selectedCategory,
+  onCategoryChange,
   granularity,
   sortDirection,
   startDate,
@@ -763,6 +781,8 @@ function QualityView({
   loading: boolean;
   payload: PerformanceQualityResponse | null;
   selectedLob: QualityLob;
+  selectedCategory: QualityCategory | "";
+  onCategoryChange: (value: QualityCategory | "") => void;
   granularity: QualityGranularity;
   sortDirection: QualitySortDirection;
   startDate: string;
@@ -776,15 +796,42 @@ function QualityView({
   onUpload?: () => void;
 }) {
   const [search, setSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const payloadMatchesFilters = payload?.selectedLob === selectedLob
+    && payload.selectedCategory === (selectedCategory || null)
+    && payload.granularity === granularity
+    && (!startDate || payload.period.startDate === startDate)
+    && (!endDate || payload.period.endDate === endDate);
+  async function exportQuality() {
+    if (!payload || !payloadMatchesFilters || loading || exporting) return;
+    setExporting(true);
+    setExportError("");
+    const params = new URLSearchParams({ lob: payload.selectedLob, view: payload.granularity,
+      startDate: payload.period.startDate, endDate: payload.period.endDate, sortDirection, search });
+    if (payload.selectedCategory) params.set("category", payload.selectedCategory);
+    try {
+      const response = await fetch(`/api/performance/quality/export?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.error || "Não foi possível exportar os dados de qualidade.");
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "qualidade.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Não foi possível exportar os dados de qualidade.");
+    } finally {
+      setExporting(false);
+    }
+  }
   const agents = useMemo(() => {
-    const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR");
-    const filtered = normalizedSearch
-      ? (payload?.agents ?? []).filter((agent) => (
-        agent.employeeName.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-        || agent.wbLogin.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-        || agent.supervisor.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-      ))
-      : (payload?.agents ?? []);
+    const filtered = filterQualityAgents(payload?.agents ?? [], search);
     const direction = sortDirection === "desc" ? -1 : 1;
     return [...filtered].sort((left, right) => (
       (left.quality - right.quality) * direction
@@ -805,6 +852,11 @@ function QualityView({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {payload?.canExport ? (
+            <button type="button" onClick={() => void exportQuality()} disabled={loading || exporting || !payloadMatchesFilters || !payload.summary.total} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45">
+              <Download className="h-4 w-4" /> {exporting ? "Exportando..." : "Exportar XLSX"}
+            </button>
+          ) : null}
           {onUpload ? (
             <button type="button" onClick={onUpload} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-700">
               <UploadCloud className="h-4 w-4" /> Subir qualidade
@@ -817,8 +869,9 @@ function QualityView({
       </div>
 
       <div className="space-y-4 p-4">
+        {exportError ? <p role="alert" className="text-sm font-bold text-red-700">{exportError}</p> : null}
         <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+          <div className="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-end">
             <DateRangeFilter
               startDate={startDate}
               endDate={endDate}
@@ -828,10 +881,18 @@ function QualityView({
               onEndDateChange={onEndDateChange}
             />
             <SlicerGroup label="LOB">
-              {(["ADS", "VIDEO", "COMMENTS", "CEC"] as QualityLob[]).map((lob) => (
+              {QUALITY_LOBS.map((lob) => (
                 <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />
               ))}
             </SlicerGroup>
+            {isTnsQualityLob(selectedLob) ? (
+              <SlicerGroup label="Categoria">
+                <SlicerButton active={!selectedCategory} label="Todas" onClick={() => onCategoryChange("")} />
+                {QUALITY_CATEGORIES.map((category) => (
+                  <SlicerButton key={category} active={selectedCategory === category} label={QUALITY_CATEGORY_LABELS[category]} onClick={() => onCategoryChange(category)} />
+                ))}
+              </SlicerGroup>
+            ) : null}
             <SlicerGroup label="Visão">
               <SlicerButton active={granularity === "monthly"} label="Mensal" onClick={() => onGranularityChange("monthly")} tone="dark" />
               <SlicerButton active={granularity === "weekly"} label="Semanal" onClick={() => onGranularityChange("weekly")} tone="dark" />
@@ -843,12 +904,16 @@ function QualityView({
           </div>
         </div>
 
-        {loading && !payload ? <EmptyBox label="Carregando dados de qualidade..." /> : !payload?.summary.total ? (
+        {selectedLob === "TNS" ? <p className="text-xs font-bold text-muted">TNS reúne os resultados de VIDEO e COMMENTS. A categoria considera a fila auditada.</p> : null}
+        {isTnsQualityLob(selectedLob) && !!payload?.unclassifiedTotal && !selectedCategory ? (
+          <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-900">{formatNumber(payload.unclassifiedTotal)} caso(s) sem categoria. Eles entram no total de Todas. Para classificá-los, reimporte a base com audit_queue_id e confira se as filas têm categoria cadastrada.</p>
+        ) : null}
+        {loading || (payload && !payloadMatchesFilters) ? <EmptyBox label="Carregando dados de qualidade..." /> : !payload?.summary.total ? (
           <div className="grid min-h-[260px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
               <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
-              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : selectedLob === "CEC" ? "CEC" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
+              <p className="mt-2 text-sm font-semibold text-muted">{selectedCategory ? "Nenhum caso encontrado para esta categoria e período. Confira se a base importada contém audit_queue_id." : `Envie a base de QA de ${selectedLob === "ADS" ? "ADS/PROJECT" : selectedLob === "CEC" ? "CEC" : "VIDEO/COMMENTS"} para carregar este indicador.`}</p>
             </div>
           </div>
         ) : (

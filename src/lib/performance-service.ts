@@ -28,6 +28,12 @@ import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-ex
 import { getPerformanceAgentShiftProduction } from "@/lib/performance-moderation-duration-service";
 import { formatModerationDuration, normalizeModerationLogin } from "@/lib/performance-moderation-duration";
 import { addDateKeyDays } from "@/lib/realtime-hours-timeline";
+import { buildPerformanceQualityExportPayload } from "@/lib/performance-quality-export";
+import {
+  QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_QUEUE_IDS,
+  isTnsQualityLob, readQualityLob, readQualityCategory, normalizeQualityQueueId,
+  type QualityLob, type QualityCategory
+} from "@/lib/performance-quality";
 import { needsRealtimeHourlyInputFallback, realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
@@ -113,7 +119,8 @@ export type PerformanceQuery = {
 export type PerformanceQualityQuery = {
   startDate?: string;
   endDate?: string;
-  lob?: "ADS" | "VIDEO" | "COMMENTS" | "CEC";
+  lob?: QualityLob;
+  category?: QualityCategory;
   view?: "monthly" | "weekly" | "daily";
   sortDirection?: "asc" | "desc";
 };
@@ -738,9 +745,16 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
   const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
   const sortDirectionSql = sortDirection === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
   const bucketSql = qualityBucketSql(view);
-  const selectedLob = query.lob === "VIDEO" || query.lob === "COMMENTS" ? query.lob : "ADS";
+  const selectedLob = readQualityLob(query.lob);
+  const selectedCategory = isTnsQualityLob(selectedLob) ? readQualityCategory(query.category) : undefined;
+  const categorySql = selectedCategory
+    ? Prisma.sql`AND q."queueId" IN (${Prisma.join(QUALITY_CATEGORY_QUEUE_IDS[selectedCategory])})`
+    : Prisma.empty;
+  const knownQueueIds = QUALITY_CATEGORIES.flatMap((category) => [...QUALITY_CATEGORY_QUEUE_IDS[category]]);
   const baseLobSql = selectedLob === "ADS"
     ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`
+    : selectedLob === "TNS"
+    ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('VIDEO', 'COMMENTS')`
     : Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${selectedLob}`;
   const importBatchType = selectedLob === "ADS" ? "QUALITY" : "QUALITY_TNS_KAP";
   const [range] = await prisma.$queryRaw<Array<{ startDate: Date | null; endDate: Date | null }>>(Prisma.sql`
@@ -763,14 +777,16 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     WHERE q."auditDate" >= ${start}
       AND q."auditDate" <= ${end}
       ${baseLobSql}
+      ${categorySql}
       ${visibleQualityRecordSql}
   `;
 
   const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
-    prisma.$queryRaw<Array<{ total: number; correct: number }>>(Prisma.sql`
+    prisma.$queryRaw<Array<{ total: number; correct: number; unclassifiedTotal: number }>>(Prisma.sql`
       SELECT
         COUNT(DISTINCT q."concatKey")::integer AS "total",
-        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct"
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        COUNT(DISTINCT CASE WHEN q."queueId" IS NULL OR q."queueId" NOT IN (${Prisma.join(knownQueueIds)}) THEN q."concatKey" END)::integer AS "unclassifiedTotal"
       ${scopedSql}
     `),
     prisma.$queryRaw<Array<{ periodStart: Date; total: number; correct: number }>>(Prisma.sql`
@@ -808,7 +824,6 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
         (COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision
           / NULLIF(COUNT(DISTINCT q."concatKey"), 0)) ${sortDirectionSql},
         COUNT(DISTINCT q."concatKey") DESC
-      LIMIT 500
     `),
     prisma.performanceImportBatch.findFirst({
       where: { type: importBatchType, status: { not: "PROCESSING" } },
@@ -817,10 +832,11 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     })
   ]);
 
-  const summary = summaryRows[0] ?? { total: 0, correct: 0 };
+  const summary = summaryRows[0] ?? { total: 0, correct: 0, unclassifiedTotal: 0 };
   return {
     mode: "quality" as const,
     canImport: canImportPerformance(permissionUser(user)),
+    canExport: canExportPerformance(permissionUser(user)),
     period: {
       startDate: formatDateKey(start),
       endDate: formatDateKey(end)
@@ -829,9 +845,11 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
       startDate: formatDateKey(range.startDate),
       endDate: formatDateKey(range.endDate)
     } : null,
-    granularity: view,
+    granularity: view as NonNullable<PerformanceQualityQuery["view"]>,
     selectedLob,
-    filters: { lobs: ["ADS", "VIDEO", "COMMENTS", "CEC"] },
+    selectedCategory: selectedCategory ?? null,
+    unclassifiedTotal: summary.unclassifiedTotal ?? 0,
+    filters: { lobs: [...QUALITY_LOBS], categories: isTnsQualityLob(selectedLob) ? [...QUALITY_CATEGORIES] : [] },
     summary: serializeQualityAggregate(summary.correct, summary.total),
     trend: trendRows.map((row) => ({
       key: formatDateKey(row.periodStart),
@@ -918,7 +936,6 @@ async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query:
         (SUM(q."passQuantity")::double precision
           / NULLIF(SUM(q."passQuantity" + q."failQuantity"), 0)) ${sortDirectionSql},
         SUM(q."passQuantity") DESC
-      LIMIT 500
     `),
     prisma.performanceImportBatch.findFirst({
       where: { type: "CEC_QUALITY", status: { not: "PROCESSING" } },
@@ -931,6 +948,7 @@ async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query:
   return {
     mode: "quality" as const,
     canImport: canImportPerformance(permissionUser(user)),
+    canExport: canExportPerformance(permissionUser(user)),
     period: {
       startDate: formatDateKey(start),
       endDate: formatDateKey(end)
@@ -939,9 +957,11 @@ async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query:
       startDate: formatDateKey(range.startDate),
       endDate: formatDateKey(range.endDate)
     } : null,
-    granularity: view,
+    granularity: view as NonNullable<PerformanceQualityQuery["view"]>,
     selectedLob: "CEC",
-    filters: { lobs: ["ADS", "VIDEO", "COMMENTS", "CEC"] },
+    selectedCategory: null,
+    unclassifiedTotal: 0,
+    filters: { lobs: [...QUALITY_LOBS], categories: [] },
     summary: serializeCecQualityAggregate(summary.pass, summary.fail),
     trend: trendRows.map((row) => ({
       key: formatDateKey(row.periodStart),
@@ -965,6 +985,15 @@ async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query:
 }
 
 export const getPerformanceAdsQualityDashboard = getPerformanceQualityDashboard;
+
+export async function exportPerformanceQualityXlsxData(actor: Actor, query: PerformanceQualityQuery & { search?: string } = {}): Promise<XlsxExportPayload> {
+  const user = await requireActiveUser(actor);
+  if (!canExportPerformance(permissionUser(user))) {
+    throw new PerformanceError("Você não tem permissão para exportar Performance.", 403);
+  }
+  const dashboard = await getPerformanceQualityDashboard(actor, query);
+  return buildPerformanceQualityExportPayload(dashboard, query.search);
+}
 
 export async function getPerformanceAgentsDashboard(actor: Actor, query: PerformanceAgentsQuery = {}) {
   query = normalizePerformanceAgentsSlaQuery(query);
@@ -2735,6 +2764,8 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const caseOrderId = text(rowValue(row, ["质检case_order_id", "case_order_id", "case order id"]));
     const auditCaseOrderId = text(rowValue(row, ["audit_case_order_id", "audit case order id"]));
     const rawLob = text(rowValue(row, ["lob"]));
+    const rawQueueId = rowValue(row, ["audit_queue_id", "audit queue id", "queue_id", "queue id", "id-queue_id", "id_queue_id", "队列id-queue_id"]);
+    const queueId = normalizeQualityQueueId(rawQueueId);
     const concatKey = buildQualityTaskKey(caseOrderId, auditCaseOrderId);
     const qualityRule = getQualityRuleByEmployee(employee);
     const expectedRule: QualityRule = options.qualityScope === "TNS" ? "TNS_QUALITY" : "ADS_QUALITY";
@@ -2750,6 +2781,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     if (!caseOrderId) errors.push("Case Order ID é obrigatório.");
     if (!auditCaseOrderId) errors.push("Audit Case Order ID é obrigatório.");
     if (!concatKey) errors.push("Concat inválido.");
+    if (options.qualityScope === "TNS" && !queueId) warnings.push("ID da fila ausente ou inválido; o caso entrará no total, mas ficará sem categoria.");
 
     return {
       rowNumber,
@@ -2771,6 +2803,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
         caseOrderId,
         auditCaseOrderId,
         concatKey,
+        queueId,
         rawLob,
         qualityRule
       }
@@ -3155,6 +3188,7 @@ async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePrevi
         caseOrderId: String(row.payload.caseOrderId),
         auditCaseOrderId: String(row.payload.auditCaseOrderId),
         concatKey: String(row.payload.concatKey),
+        queueId: normalizeQualityQueueId(row.payload.queueId),
         lobId: row.lobId ?? null,
         rawLob: String(row.payload.rawLob ?? "") || null,
         importBatchId: batch.id
@@ -3756,7 +3790,7 @@ export function performanceTemplate(type: "quality" | "tns-quality" | "cec-quali
     return {
       fileName: "template_performance_qualidade.xlsx",
       sheetName: "qualidade",
-      headers: ["audit_time", "audit_name", "final_result", "质检case_order_id", "audit_case_order_id", "LOB", "Concat"],
+      headers: ["audit_time", "audit_name", "final_result", "质检case_order_id", "audit_case_order_id", "audit_queue_id", "LOB", "Concat"],
       rows: []
     };
   }
