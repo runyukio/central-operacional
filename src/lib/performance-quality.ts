@@ -58,6 +58,10 @@ export function isTnsQualityLob(lob: string) {
   return lob === "TNS" || lob === "VIDEO" || lob === "COMMENTS";
 }
 
+export function qualityTargetForLob(lob: string) {
+  return isTnsQualityLob(lob.trim().toUpperCase()) ? 98 : 95;
+}
+
 export function readQualityLob(value: string | null | undefined): QualityLob {
   return QUALITY_LOBS.find((lob) => lob === value) ?? "ADS";
 }

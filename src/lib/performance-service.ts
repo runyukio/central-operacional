@@ -785,17 +785,17 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
   const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
     prisma.$queryRaw<Array<QualityIndicatorCounts & { unclassifiedTotal: number }>>(Prisma.sql`
       SELECT
-        COUNT(DISTINCT q."concatKey")::integer AS "total",
-        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
-        COUNT(DISTINCT CASE WHEN q."queueId" IS NULL OR q."queueId" NOT IN (${Prisma.join(knownQueueIds)}) THEN q."concatKey" END)::integer AS "unclassifiedTotal",
+        COUNT(DISTINCT q."concatKey" COLLATE "C")::integer AS "total",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END COLLATE "C")::integer AS "correct",
+        COUNT(DISTINCT CASE WHEN q."queueId" IS NULL OR q."queueId" NOT IN (${Prisma.join(knownQueueIds)}) THEN q."concatKey" END COLLATE "C")::integer AS "unclassifiedTotal",
         ${qualityIndicatorCountsSql}
       ${scopedSql}
     `),
     prisma.$queryRaw<Array<QualityIndicatorCounts & { periodStart: Date }>>(Prisma.sql`
       SELECT
         ${bucketSql} AS "periodStart",
-        COUNT(DISTINCT q."concatKey")::integer AS "total",
-        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        COUNT(DISTINCT q."concatKey" COLLATE "C")::integer AS "total",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END COLLATE "C")::integer AS "correct",
         ${qualityIndicatorCountsSql}
       ${scopedSql}
       GROUP BY ${bucketSql}
@@ -817,17 +817,17 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
         q."wbLogin" AS "wbLogin",
         ${selectedLob} AS "lob",
         COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
-        COUNT(DISTINCT q."concatKey")::integer AS "total",
-        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        COUNT(DISTINCT q."concatKey" COLLATE "C")::integer AS "total",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END COLLATE "C")::integer AS "correct",
         MAX(q."auditTime") AS "lastAuditAt",
         ${qualityIndicatorCountsSql}
       ${scopedSql}
       AND q."employeeId" IS NOT NULL
       GROUP BY q."employeeId", e."fullName", q."wbLogin", s."fullName"
       ORDER BY
-        (COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision
-          / NULLIF(COUNT(DISTINCT q."concatKey"), 0)) ${sortDirectionSql},
-        COUNT(DISTINCT q."concatKey") DESC
+        (COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END COLLATE "C")::double precision
+          / NULLIF(COUNT(DISTINCT q."concatKey" COLLATE "C"), 0)) ${sortDirectionSql},
+        COUNT(DISTINCT q."concatKey" COLLATE "C") DESC
     `),
     prisma.performanceImportBatch.findFirst({
       where: { type: importBatchType, status: { not: "PROCESSING" } },

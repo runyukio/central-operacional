@@ -47,6 +47,7 @@ import {
   ComposedChart,
   Legend,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
   XAxis,
@@ -59,7 +60,7 @@ import { cn, formatNumber } from "@/lib/utils";
 import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
 import { performanceManualBases, type PerformanceManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
 import { QualityIndicatorsPanel, QualityIndicatorCells, formatQualityIndicator } from "@/components/performance-quality-indicators";
-import { QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_LABELS, QUALITY_EXTRA_INDICATORS, filterQualityAgents, isTnsQualityLob, type QualityLob, type QualityCategory, type QualityIndicators } from "@/lib/performance-quality";
+import { QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_LABELS, QUALITY_EXTRA_INDICATORS, filterQualityAgents, isTnsQualityLob, qualityTargetForLob, type QualityLob, type QualityCategory, type QualityIndicators } from "@/lib/performance-quality";
 
 const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
@@ -315,6 +316,7 @@ export function PerformanceAutomationPage() {
   const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
   const [qualityCategory, setQualityCategory] = useState<QualityCategory | "">("");
   const qualityRequest = useRef<AbortController | null>(null);
+  const qualityCache = useRef(new Map<string, { loadedAt: number; payload: PerformanceQualityResponse }>());
   const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("monthly");
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
@@ -415,26 +417,38 @@ export function PerformanceAutomationPage() {
     }
   }, [forecastLob, forecastHorizon]);
 
-  const loadQuality = useCallback(async (lobOverride?: QualityLob) => {
+  const loadQuality = useCallback(async (lobOverride?: QualityLob, force = false) => {
     qualityRequest.current?.abort();
     const controller = new AbortController();
     qualityRequest.current = controller;
-    setLoadingQuality(true);
-    setQualityPayload(null);
     const effectiveLob = lobOverride ?? qualityLob;
     const params = new URLSearchParams({
       view: qualityGranularity,
-      sortDirection: qualitySortDirection,
+      sortDirection: "desc",
       lob: effectiveLob
     });
     if (qualityStartDate) params.set("startDate", qualityStartDate);
     if (qualityEndDate) params.set("endDate", qualityEndDate);
     if (isTnsQualityLob(effectiveLob) && qualityCategory) params.set("category", qualityCategory);
+    const cacheKey = params.toString();
+    if (force) qualityCache.current.clear();
+    const cached = qualityCache.current.get(cacheKey);
+    if (cached && Date.now() - cached.loadedAt < 60_000) {
+      setQualityPayload(cached.payload);
+      setLoadingQuality(false);
+      setMessage("");
+      return;
+    }
+    setLoadingQuality(true);
+    setQualityPayload(null);
     try {
       const response = await fetch(`/api/performance/quality?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const body = await response.json().catch(() => null) as (PerformanceQualityResponse & { error?: string; message?: string }) | null;
       if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar Qualidade.");
       if (controller.signal.aborted) return;
+      qualityCache.current.delete(cacheKey);
+      qualityCache.current.set(cacheKey, { loadedAt: Date.now(), payload: body });
+      if (qualityCache.current.size > 20) qualityCache.current.delete(qualityCache.current.keys().next().value!);
       setQualityPayload(body);
       setMessage("");
     } catch (error) {
@@ -443,7 +457,7 @@ export function PerformanceAutomationPage() {
     } finally {
       if (!controller.signal.aborted) setLoadingQuality(false);
     }
-  }, [qualityCategory, qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
+  }, [qualityCategory, qualityEndDate, qualityGranularity, qualityLob, qualityStartDate]);
 
   const loadAgents = useCallback(async () => {
     const request = agentRequestGate.begin();
@@ -594,7 +608,7 @@ export function PerformanceAutomationPage() {
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
           <StatCard title={qualityLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(qualityPayload?.summary.total ?? 0)} helper={qualityLob === "CEC" ? "Pass + Fail" : "chaves distintas"} icon={FileSpreadsheet} tone="blue" />
-          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper={qualityLob === "CEC" ? "1 - Fail / Total" : "corretos / auditados"} icon={ShieldCheck} tone="green" />
+          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper={isTnsQualityLob(qualityLob) ? "corretos / auditados · Meta ≥ 98%" : qualityLob === "CEC" ? "1 - Fail / Total" : "corretos / auditados"} icon={ShieldCheck} tone={isTnsQualityLob(qualityLob) && qualityPayload?.summary.indicators?.accuracy != null && qualityPayload.summary.indicators.accuracy < qualityTargetForLob(qualityLob) ? "orange" : "green"} />
         </section>
       ) : (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -715,7 +729,7 @@ export function PerformanceAutomationPage() {
             setQualityStartDate("");
             setQualityEndDate("");
           }}
-          onRefresh={() => void loadQuality()}
+          onRefresh={() => void loadQuality(undefined, true)}
           onUpload={(qualityPayload?.canImport ?? basePayload?.canImport) ? () => setQualityUploadOpen(true) : undefined}
         />
       )}
@@ -737,7 +751,7 @@ export function PerformanceAutomationPage() {
             const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "TNS";
             setQualityLob(nextLob);
             setQualityPayload(null);
-            await loadQuality(nextLob);
+            await loadQuality(nextLob, true);
           }}
         />
       ) : null}
@@ -907,9 +921,6 @@ function QualityView({
         </div>
 
         {selectedLob === "TNS" ? <p className="text-xs font-bold text-muted">TNS reúne os resultados de VIDEO e COMMENTS. A categoria considera a fila auditada.</p> : null}
-        {isTnsQualityLob(selectedLob) && !!payload?.unclassifiedTotal && !selectedCategory ? (
-          <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-900">{formatNumber(payload.unclassifiedTotal)} caso(s) sem categoria. Eles entram no total de Todas. Para classificá-los, reimporte a base com audit_queue_id e confira se as filas têm categoria cadastrada.</p>
-        ) : null}
         {loading || (payload && !payloadMatchesFilters) ? <EmptyBox label="Carregando dados de qualidade..." /> : !payload?.summary.total ? (
           <div className="grid min-h-[260px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
             <div className="max-w-md">
@@ -920,7 +931,7 @@ function QualityView({
           </div>
         ) : (
           <div className="space-y-4">
-            {selectedLob !== "CEC" ? <QualityIndicatorsPanel indicators={payload.summary.indicators} total={payload.summary.total} correct={payload.summary.correct} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {selectedLob !== "CEC" ? <QualityIndicatorsPanel indicators={payload.summary.indicators} total={payload.summary.total} correct={payload.summary.correct} lob={selectedLob} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
               <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "aprovações" : "distinct Correct"} icon={CheckCircle2} tone="green" />
               <StatCard title={selectedLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "Pass + Fail" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
@@ -935,7 +946,7 @@ function QualityView({
                 </div>
                 <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} {qualityGranularityUnit(granularity)}</span>
               </div>
-              <QualityDashboardChart rows={payload.trend} cec={selectedLob === "CEC"} />
+              <QualityDashboardChart rows={payload.trend} cec={selectedLob === "CEC"} lob={selectedLob} />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-white">
@@ -987,7 +998,7 @@ function QualityView({
                         </td>
                         <td className="px-3 py-2"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-2 font-bold text-muted">{agent.supervisor}</td>
-                        <td className="px-3 py-2 text-right"><QualityScore value={agent.indicators?.accuracy ?? agent.quality} /></td>
+                        <td className="px-3 py-2 text-right"><QualityScore value={agent.indicators?.accuracy ?? agent.quality} lob={selectedLob} /></td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.correct)}</td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.total)}</td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.errors)}</td>
@@ -1007,7 +1018,7 @@ function QualityView({
   );
 }
 
-function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[]; cec?: boolean }) {
+function QualityDashboardChart({ rows, cec = false, lob }: { rows: QualityTrendRow[]; cec?: boolean; lob: QualityLob }) {
   const [metric, setMetric] = useState<"accuracy" | "leakageRate" | "falsePositiveRate" | "mislabeledRate">("accuracy");
   const label = { accuracy: "Accuracy", leakageRate: "Leakage Rate", falsePositiveRate: "False Positive Rate", mislabeledRate: "Mislabeled Rate" }[metric];
   const chartRows = rows.map((row) => ({ ...row, plottedRate: cec ? row.quality : row.indicators?.[metric] ?? null }));
@@ -1029,6 +1040,7 @@ function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[];
           <RechartsTooltip content={<QualityDashboardTooltip cec={cec} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
           <Bar yAxisId="cases" dataKey="total" name={cec ? "Total auditado" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
+          {isTnsQualityLob(lob) && metric === "accuracy" ? <ReferenceLine yAxisId="quality" y={qualityTargetForLob(lob)} stroke="#F59E0B" strokeDasharray="5 4" label={{ value: "Meta 98%", position: "insideTopRight", fill: "#92400E", fontSize: 11 }} /> : null}
           <Line yAxisId="quality" type="monotone" dataKey="plottedRate" name={cec ? "Qualidade" : label} stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
@@ -1055,13 +1067,14 @@ function QualityDashboardTooltip({ active, payload, cec = false }: { active?: bo
   );
 }
 
-function QualityScore({ value }: { value: number }) {
-  const tone = value >= 95
+function QualityScore({ value, lob }: { value: number; lob: string }) {
+  const target = qualityTargetForLob(lob);
+  const tone = value >= target
     ? "bg-emerald-50 text-emerald-700"
     : value >= 90
       ? "bg-amber-50 text-amber-700"
       : "bg-red-50 text-red-700";
-  return <span className={cn("inline-flex min-w-[72px] justify-center rounded-lg px-2 py-1 text-xs font-black", tone)}>{formatQualityPercent(value)}</span>;
+  return <span title={`Meta ≥ ${target}% · ${value >= target ? "Dentro da meta" : "Abaixo da meta"}`} className={cn("inline-flex min-w-[72px] justify-center rounded-lg px-2 py-1 text-xs font-black", tone)}>{formatQualityPercent(value)}</span>;
 }
 
 function AgentsView({
@@ -1302,7 +1315,7 @@ function AgentsView({
                         <td className="px-3 py-3 text-right">
                           {agent.qualityTotal > 0 ? (
                             <>
-                              <QualityScore value={agent.quality} />
+                              <QualityScore value={agent.qualityCorrect / agent.qualityTotal * 100} lob={agent.lob} />
                               <span className="mt-0.5 block text-[10px] font-bold text-muted">
                                 {formatNumber(agent.qualityCorrect)}/{formatNumber(agent.qualityTotal)} casos
                               </span>
