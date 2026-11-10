@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { historicalSupervisorFilter, loadSupervisionTransfers, scheduleSupervisorNames, type SupervisedSlot } from "@/lib/schedule-supervision-history";
+import { historicalSlotSupervisor, historicalSupervisorFilter, loadSupervisionTransfers, scheduleSupervisorNames, type SupervisedSlot } from "@/lib/schedule-supervision-history";
 import { ABSENCE_NOTICE_REQUIRED, absenceNoticeLabel, requiresAbsenceNotice } from "@/lib/absence-notice";
 import { scheduleDisplayLabel, scheduleImportStatusValue } from "@/lib/schedule-display-label";
 import { resolveScheduleStatusFilter, validScheduleSlotCountFilter } from "@/lib/schedule-slot-filter";
@@ -935,6 +935,9 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
       };
     }
 
+    const slotSupervisorId = historicalSlotSupervisor({
+      employeeId: employee.id, date, supervisorId: before?.supervisorId, employee
+    }, await loadSupervisionTransfers());
     const saved = await prisma.$transaction(async (tx) => {
       const schedule = await tx.schedule.upsert({
         where: { employeeId_date: { employeeId: employee.id, date } },
@@ -944,7 +947,7 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
           endsAt: needsTime(input.status) ? input.endsAt || shift?.endsAt || employee.shift.endsAt : null,
           status,
           lobId: slotLobId,
-          supervisorId: employee.supervisorId,
+          supervisorId: slotSupervisorId,
           observation: input.observation
         },
         create: {
@@ -956,7 +959,7 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
           status,
           source: "manual-edit",
           lobId: slotLobId,
-          supervisorId: employee.supervisorId,
+          supervisorId: slotSupervisorId,
           observation: input.observation
         }
       });
@@ -2715,12 +2718,13 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
   });
   const wbLogins = Array.from(new Set(normalizedRows.map((row) => row.wbLogin).filter(Boolean)));
   const dates = Array.from(new Set(normalizedRows.map((row) => row.parsedDate?.getTime()).filter((value): value is number => Boolean(value)))).map((value) => new Date(value));
-  const [employees, shifts, lobs] = await Promise.all([
+  const [employees, shifts, lobs, supervisionTransfers] = await Promise.all([
     wbLogins.length
       ? findEmployeesByWbLoginBatch(wbLogins)
       : Promise.resolve([]),
     prisma.shift.findMany(),
-    prisma.lob.findMany({ select: { id: true, name: true } })
+    prisma.lob.findMany({ select: { id: true, name: true } }),
+    loadSupervisionTransfers()
   ]);
   const employeeMap = new Map(employees.map((employee) => [normalizeWbLoginForImport(employee.wbLogin), employee]));
   const employeeIds = employees.map((employee) => employee.id);
@@ -2801,7 +2805,9 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
       employeeId: employee?.id,
       employeeName: employee?.fullName,
       employeeLobId: employee?.lobId,
-      employeeSupervisorId: employee?.supervisorId,
+      employeeSupervisorId: employee && parsedDate
+        ? historicalSlotSupervisor({ employeeId: employee.id, employee, date: parsedDate }, supervisionTransfers)
+        : employee?.supervisorId,
       employeeShiftId: employee?.shiftId,
       employeeShiftStartsAt: employee?.shift.startsAt,
       employeeShiftEndsAt: employee?.shift.endsAt,

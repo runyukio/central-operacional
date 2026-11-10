@@ -1,3 +1,4 @@
+import { resolveShiftSupervisor } from "./supervision-matrix";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -67,12 +68,14 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
                 workStartTime: true,
                 workEndTime: true,
                 supervisorId: true,
+                lobId: true,
+                lob: { select: { name: true } },
                 shift: { select: { name: true } }
               }
             }
           }
         });
-        if (!current || !isDueFixedShiftChange(current.payload, effectiveThrough)) {
+        if (!current || !["APROVADO", "CONCLUIDO"].includes(current.status) || !isDueFixedShiftChange(current.payload, effectiveThrough)) {
           return { applied: false, schedulesUpdated: 0 };
         }
         if (!current.employeeId || !current.employee) {
@@ -107,17 +110,37 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
         });
         if (guard.count !== 1) return { applied: false, schedulesUpdated: 0 };
 
+        const hasApprovedSupervisor = typeof payload.shiftChangeSupervisorId === "string" && Boolean(payload.shiftChangeSupervisorId.trim());
+        const supervisorId = hasApprovedSupervisor
+          ? String(payload.shiftChangeSupervisorId)
+          : (await resolveShiftSupervisor(tx, {
+              lobId: current.employee.lobId, lobName: current.employee.lob.name,
+              shift: desiredShift, effectiveDate: startDate, employeeId: current.employeeId
+            })).supervisorId;
+
+        if (!hasApprovedSupervisor) {
+          await tx.auditLog.create({ data: {
+            actorId: approvedById, action: "EDICAO", entity: "EmployeeSupervisionSwap", entityId: current.id,
+            reason: `Histórico de supervisão pela troca de turno agendada ${current.code}`,
+            newValue: { effectiveDate: startDate.toISOString().slice(0, 10), transfers: [{
+              employeeId: current.employeeId, from: current.employee.supervisorId, to: supervisorId
+            }] }
+          } });
+        }
+
         const beforeEmployee = serialize({
           id: current.employee.id,
           shiftId: current.employee.shiftId,
           shift: current.employee.shift.name,
           workStartTime: current.employee.workStartTime,
-          workEndTime: current.employee.workEndTime
+          workEndTime: current.employee.workEndTime,
+          supervisorId: current.employee.supervisorId
         });
         const updatedEmployee = await tx.employeeProfile.update({
           where: { id: current.employeeId },
           data: {
             shiftId: shift.id,
+            supervisorId,
             workStartTime: baseTimes.startsAt,
             workEndTime: baseTimes.endsAt
           },
@@ -128,7 +151,8 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
           shiftId: updatedEmployee.shiftId,
           shift: updatedEmployee.shift.name,
           workStartTime: updatedEmployee.workStartTime,
-          workEndTime: updatedEmployee.workEndTime
+          workEndTime: updatedEmployee.workEndTime,
+          supervisorId: updatedEmployee.supervisorId
         });
 
         const schedules = await tx.schedule.findMany({
@@ -142,15 +166,15 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
         });
         let updatedScheduleCount = 0;
         for (const schedule of schedules) {
-          if (schedule.shiftId === shift.id && schedule.startsAt === baseTimes.startsAt && schedule.endsAt === baseTimes.endsAt) continue;
+          if (schedule.shiftId === shift.id && schedule.startsAt === baseTimes.startsAt && schedule.endsAt === baseTimes.endsAt && schedule.supervisorId === supervisorId) continue;
           const before = serialize(schedule);
           const after = await tx.schedule.update({
             where: { id: schedule.id },
             data: {
               shiftId: shift.id,
+              supervisorId,
               startsAt: baseTimes.startsAt,
               endsAt: baseTimes.endsAt,
-              observation: `Troca de turno fixa vigente pela solicitação ${current.code}`
             },
             include: { shift: true }
           });
@@ -181,7 +205,8 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
               shiftChangeAppliedById: approvedById,
               shiftChangeApplicationStatus: "APPLIED",
               shiftChangeApplicationMessage: message,
-              shiftChangeScheduledFor: startDate.toISOString().slice(0, 10)
+              shiftChangeScheduledFor: startDate.toISOString().slice(0, 10),
+              shiftChangeSupervisorId: supervisorId
             },
             history: {
               create: {
