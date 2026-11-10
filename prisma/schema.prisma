@@ -1477,6 +1477,10 @@ model QualityRecord {
   caseOrderId      String
   auditCaseOrderId String
   concatKey        String
+  queueId          String?
+  negativeSign     String?
+  allowAmount      Float?
+  labeledAmount    Float?
   lobId            String?
   lob              Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
   rawLob           String?
@@ -1493,6 +1497,7 @@ model QualityRecord {
   @@index([finalResult])
   @@index([importBatchId])
   @@index([employeeId, auditDate])
+  @@index([queueId, auditDate])
 }
 
 model TnsQualityRecord {

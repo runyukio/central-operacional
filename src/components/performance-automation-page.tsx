@@ -58,6 +58,8 @@ import { PageHeader, StatCard } from "@/components/ui/primitives";
 import { cn, formatNumber } from "@/lib/utils";
 import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
 import { performanceManualBases, type PerformanceManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
+import { QualityIndicatorsPanel, QualityIndicatorCells, formatQualityIndicator } from "@/components/performance-quality-indicators";
+import { QUALITY_LOBS, QUALITY_CATEGORIES, QUALITY_CATEGORY_LABELS, QUALITY_EXTRA_INDICATORS, filterQualityAgents, isTnsQualityLob, type QualityLob, type QualityCategory, type QualityIndicators } from "@/lib/performance-quality";
 
 const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
@@ -65,7 +67,6 @@ type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
 type QualityGranularity = "monthly" | "weekly" | "daily";
 type QualitySortDirection = "asc" | "desc";
-type QualityLob = "ADS" | "VIDEO" | "COMMENTS" | "CEC";
 type QualityImportScope = "ADS" | "TNS" | "CEC";
 type SupervisorView = QualityGranularity;
 type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality";
@@ -122,6 +123,7 @@ type QualitySummary = {
   total: number;
   errors: number;
   quality: number;
+  indicators?: QualityIndicators;
 };
 
 type QualityTrendRow = QualitySummary & {
@@ -141,11 +143,14 @@ type QualityAgentRow = QualitySummary & {
 type PerformanceQualityResponse = {
   mode: "quality";
   canImport: boolean;
+  canExport: boolean;
   granularity: QualityGranularity;
   period: { startDate: string; endDate: string };
   dataRange: { startDate: string; endDate: string } | null;
   selectedLob: string;
-  filters: { lobs: string[] };
+  selectedCategory: QualityCategory | null;
+  unclassifiedTotal: number;
+  filters: { lobs: string[]; categories: QualityCategory[] };
   summary: QualitySummary;
   trend: QualityTrendRow[];
   agents: QualityAgentRow[];
@@ -308,6 +313,8 @@ export function PerformanceAutomationPage() {
   const forecastRequest = useRef<AbortController | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
   const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
+  const [qualityCategory, setQualityCategory] = useState<QualityCategory | "">("");
+  const qualityRequest = useRef<AbortController | null>(null);
   const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("monthly");
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
@@ -409,7 +416,11 @@ export function PerformanceAutomationPage() {
   }, [forecastLob, forecastHorizon]);
 
   const loadQuality = useCallback(async (lobOverride?: QualityLob) => {
+    qualityRequest.current?.abort();
+    const controller = new AbortController();
+    qualityRequest.current = controller;
     setLoadingQuality(true);
+    setQualityPayload(null);
     const effectiveLob = lobOverride ?? qualityLob;
     const params = new URLSearchParams({
       view: qualityGranularity,
@@ -418,18 +429,21 @@ export function PerformanceAutomationPage() {
     });
     if (qualityStartDate) params.set("startDate", qualityStartDate);
     if (qualityEndDate) params.set("endDate", qualityEndDate);
+    if (isTnsQualityLob(effectiveLob) && qualityCategory) params.set("category", qualityCategory);
     try {
-      const response = await fetch(`/api/performance/quality?${params.toString()}`, { cache: "no-store" });
+      const response = await fetch(`/api/performance/quality?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const body = await response.json().catch(() => null) as (PerformanceQualityResponse & { error?: string; message?: string }) | null;
       if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar Qualidade.");
+      if (controller.signal.aborted) return;
       setQualityPayload(body);
       setMessage("");
     } catch (error) {
+      if (controller.signal.aborted) return;
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar Qualidade.");
     } finally {
-      setLoadingQuality(false);
+      if (!controller.signal.aborted) setLoadingQuality(false);
     }
-  }, [qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
+  }, [qualityCategory, qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
 
   const loadAgents = useCallback(async () => {
     const request = agentRequestGate.begin();
@@ -507,6 +521,7 @@ export function PerformanceAutomationPage() {
 
   useEffect(() => {
     if (activeTab === "quality") void loadQuality();
+    return () => qualityRequest.current?.abort();
   }, [activeTab, loadQuality]);
 
   useEffect(() => {
@@ -684,6 +699,8 @@ export function PerformanceAutomationPage() {
           loading={loadingQuality}
           payload={qualityPayload}
           selectedLob={qualityLob}
+          selectedCategory={qualityCategory}
+          onCategoryChange={setQualityCategory}
           granularity={qualityGranularity}
           sortDirection={qualitySortDirection}
           startDate={qualityStartDate}
@@ -694,6 +711,7 @@ export function PerformanceAutomationPage() {
           onEndDateChange={setQualityEndDate}
           onLobChange={(value) => {
             setQualityLob(value);
+            setQualityCategory("");
             setQualityStartDate("");
             setQualityEndDate("");
           }}
@@ -716,7 +734,7 @@ export function PerformanceAutomationPage() {
           initialScope={qualityLob === "ADS" ? "ADS" : qualityLob === "CEC" ? "CEC" : "TNS"}
           onClose={() => setQualityUploadOpen(false)}
           onImported={async (scope) => {
-            const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "VIDEO";
+            const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "TNS";
             setQualityLob(nextLob);
             setQualityPayload(null);
             await loadQuality(nextLob);
@@ -748,6 +766,8 @@ function QualityView({
   loading,
   payload,
   selectedLob,
+  selectedCategory,
+  onCategoryChange,
   granularity,
   sortDirection,
   startDate,
@@ -763,6 +783,8 @@ function QualityView({
   loading: boolean;
   payload: PerformanceQualityResponse | null;
   selectedLob: QualityLob;
+  selectedCategory: QualityCategory | "";
+  onCategoryChange: (value: QualityCategory | "") => void;
   granularity: QualityGranularity;
   sortDirection: QualitySortDirection;
   startDate: string;
@@ -776,15 +798,42 @@ function QualityView({
   onUpload?: () => void;
 }) {
   const [search, setSearch] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const payloadMatchesFilters = payload?.selectedLob === selectedLob
+    && payload.selectedCategory === (selectedCategory || null)
+    && payload.granularity === granularity
+    && (!startDate || payload.period.startDate === startDate)
+    && (!endDate || payload.period.endDate === endDate);
+  async function exportQuality() {
+    if (!payload || !payloadMatchesFilters || loading || exporting) return;
+    setExporting(true);
+    setExportError("");
+    const params = new URLSearchParams({ lob: payload.selectedLob, view: payload.granularity,
+      startDate: payload.period.startDate, endDate: payload.period.endDate, sortDirection, search });
+    if (payload.selectedCategory) params.set("category", payload.selectedCategory);
+    try {
+      const response = await fetch(`/api/performance/quality/export?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.error || "Não foi possível exportar os dados de qualidade.");
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "qualidade.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Não foi possível exportar os dados de qualidade.");
+    } finally {
+      setExporting(false);
+    }
+  }
   const agents = useMemo(() => {
-    const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR");
-    const filtered = normalizedSearch
-      ? (payload?.agents ?? []).filter((agent) => (
-        agent.employeeName.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-        || agent.wbLogin.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-        || agent.supervisor.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-      ))
-      : (payload?.agents ?? []);
+    const filtered = filterQualityAgents(payload?.agents ?? [], search);
     const direction = sortDirection === "desc" ? -1 : 1;
     return [...filtered].sort((left, right) => (
       (left.quality - right.quality) * direction
@@ -805,6 +854,11 @@ function QualityView({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {payload?.canExport ? (
+            <button type="button" onClick={() => void exportQuality()} disabled={loading || exporting || !payloadMatchesFilters || !payload.summary.total} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45">
+              <Download className="h-4 w-4" /> {exporting ? "Exportando..." : "Exportar XLSX"}
+            </button>
+          ) : null}
           {onUpload ? (
             <button type="button" onClick={onUpload} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-700">
               <UploadCloud className="h-4 w-4" /> Subir qualidade
@@ -817,8 +871,9 @@ function QualityView({
       </div>
 
       <div className="space-y-4 p-4">
+        {exportError ? <p role="alert" className="text-sm font-bold text-red-700">{exportError}</p> : null}
         <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+          <div className="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-end">
             <DateRangeFilter
               startDate={startDate}
               endDate={endDate}
@@ -828,10 +883,18 @@ function QualityView({
               onEndDateChange={onEndDateChange}
             />
             <SlicerGroup label="LOB">
-              {(["ADS", "VIDEO", "COMMENTS", "CEC"] as QualityLob[]).map((lob) => (
+              {QUALITY_LOBS.map((lob) => (
                 <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />
               ))}
             </SlicerGroup>
+            {isTnsQualityLob(selectedLob) ? (
+              <SlicerGroup label="Categoria">
+                <SlicerButton active={!selectedCategory} label="Todas" onClick={() => onCategoryChange("")} />
+                {QUALITY_CATEGORIES.map((category) => (
+                  <SlicerButton key={category} active={selectedCategory === category} label={QUALITY_CATEGORY_LABELS[category]} onClick={() => onCategoryChange(category)} />
+                ))}
+              </SlicerGroup>
+            ) : null}
             <SlicerGroup label="Visão">
               <SlicerButton active={granularity === "monthly"} label="Mensal" onClick={() => onGranularityChange("monthly")} tone="dark" />
               <SlicerButton active={granularity === "weekly"} label="Semanal" onClick={() => onGranularityChange("weekly")} tone="dark" />
@@ -843,22 +906,26 @@ function QualityView({
           </div>
         </div>
 
-        {loading && !payload ? <EmptyBox label="Carregando dados de qualidade..." /> : !payload?.summary.total ? (
+        {selectedLob === "TNS" ? <p className="text-xs font-bold text-muted">TNS reúne os resultados de VIDEO e COMMENTS. A categoria considera a fila auditada.</p> : null}
+        {isTnsQualityLob(selectedLob) && !!payload?.unclassifiedTotal && !selectedCategory ? (
+          <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-900">{formatNumber(payload.unclassifiedTotal)} caso(s) sem categoria. Eles entram no total de Todas. Para classificá-los, reimporte a base com audit_queue_id e confira se as filas têm categoria cadastrada.</p>
+        ) : null}
+        {loading || (payload && !payloadMatchesFilters) ? <EmptyBox label="Carregando dados de qualidade..." /> : !payload?.summary.total ? (
           <div className="grid min-h-[260px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
               <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
-              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : selectedLob === "CEC" ? "CEC" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
+              <p className="mt-2 text-sm font-semibold text-muted">{selectedCategory ? "Nenhum caso encontrado para esta categoria e período. Confira se a base importada contém audit_queue_id." : `Envie a base de QA de ${selectedLob === "ADS" ? "ADS/PROJECT" : selectedLob === "CEC" ? "CEC" : "VIDEO/COMMENTS"} para carregar este indicador.`}</p>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {selectedLob !== "CEC" ? <QualityIndicatorsPanel indicators={payload.summary.indicators} total={payload.summary.total} correct={payload.summary.correct} /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
               <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "aprovações" : "distinct Correct"} icon={CheckCircle2} tone="green" />
               <StatCard title={selectedLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "Pass + Fail" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
               <StatCard title={selectedLob === "CEC" ? "Fail Quantity" : "Divergências"} value={formatNumber(payload.summary.errors)} helper={selectedLob === "CEC" ? "falhas" : "auditados - corretos"} icon={Target} tone="orange" />
-            </div>
+            </div>}
 
             <div className="rounded-xl border border-border bg-white p-4">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -888,7 +955,7 @@ function QualityView({
                 </label>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] text-left text-sm">
+                <table className={cn("w-full text-left text-sm", selectedLob === "CEC" ? "min-w-[980px]" : "min-w-[1900px]")}>
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                     <tr>
                       <th className="px-3 py-3">Agente</th>
@@ -901,12 +968,13 @@ function QualityView({
                           className="ml-auto inline-flex items-center gap-1.5 hover:text-blue-600"
                           aria-label={`Ordenar qualidade do ${sortDirection === "desc" ? "menor para o maior" : "maior para o menor"}`}
                         >
-                          Qualidade {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                          {selectedLob === "CEC" ? "Qualidade" : "Accuracy"} {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                         </button>
                       </th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass Quantity" : "Corretos"}</th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Total auditado" : "Auditados"}</th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Fail Quantity" : "Divergências"}</th>
+                      {selectedLob !== "CEC" ? QUALITY_EXTRA_INDICATORS.map((metric) => <th key={metric.key} className="whitespace-nowrap px-3 py-3 text-right">{metric.label}</th>) : null}
                       <th className="px-3 py-3 text-right">Última auditoria</th>
                     </tr>
                   </thead>
@@ -919,14 +987,15 @@ function QualityView({
                         </td>
                         <td className="px-3 py-2"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-2 font-bold text-muted">{agent.supervisor}</td>
-                        <td className="px-3 py-2 text-right"><QualityScore value={agent.quality} /></td>
+                        <td className="px-3 py-2 text-right"><QualityScore value={agent.indicators?.accuracy ?? agent.quality} /></td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.correct)}</td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.total)}</td>
                         <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.errors)}</td>
+                        {selectedLob !== "CEC" ? <QualityIndicatorCells indicators={agent.indicators} /> : null}
                         <td className="px-3 py-2 text-right text-xs font-bold text-muted">{formatQualityAuditDate(agent.lastAuditAt)}</td>
                       </tr>
                     ))}
-                    {!agents.length ? <tr><td colSpan={8} className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente encontrado.</td></tr> : null}
+                    {!agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 8 : 16} className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente encontrado.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -939,21 +1008,31 @@ function QualityView({
 }
 
 function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[]; cec?: boolean }) {
+  const [metric, setMetric] = useState<"accuracy" | "leakageRate" | "falsePositiveRate" | "mislabeledRate">("accuracy");
+  const label = { accuracy: "Accuracy", leakageRate: "Leakage Rate", falsePositiveRate: "False Positive Rate", mislabeledRate: "Mislabeled Rate" }[metric];
+  const chartRows = rows.map((row) => ({ ...row, plottedRate: cec ? row.quality : row.indicators?.[metric] ?? null }));
   if (!rows.length) return <EmptyBox label="Sem histórico diário para exibir." />;
   return (
-    <div className="h-[360px] w-full">
+    <div className="space-y-3">
+      {!cec ? <label className="flex flex-wrap items-center gap-2 text-xs font-bold text-muted">Indicador do gráfico
+        <select aria-label="Indicador do gráfico" value={metric} onChange={(event) => setMetric(event.target.value as typeof metric)} className="h-9 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">
+          <option value="accuracy">Accuracy</option><option value="leakageRate">Leakage Rate</option><option value="falsePositiveRate">False Positive Rate</option><option value="mislabeledRate">Mislabeled Rate</option>
+        </select>
+      </label> : null}
+      <div className="h-[360px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={rows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+        <ComposedChart data={chartRows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
           <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
           <YAxis yAxisId="cases" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
-          <YAxis yAxisId="quality" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
+          <YAxis yAxisId="quality" orientation="right" domain={cec || metric === "accuracy" ? [0, 100] : [0, "auto"]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
           <RechartsTooltip content={<QualityDashboardTooltip cec={cec} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
           <Bar yAxisId="cases" dataKey="total" name={cec ? "Total auditado" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
-          <Line yAxisId="quality" type="monotone" dataKey="quality" name="Qualidade" stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
+          <Line yAxisId="quality" type="monotone" dataKey="plottedRate" name={cec ? "Qualidade" : label} stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }
@@ -966,10 +1045,11 @@ function QualityDashboardTooltip({ active, payload, cec = false }: { active?: bo
     <div className="rounded-xl border border-border bg-white p-3 text-xs font-bold text-navy-950 shadow-lg">
       <p className="mb-2 text-sm font-black">{row.label}</p>
       <div className="space-y-1">
-        <div className="flex justify-between gap-5"><span>Qualidade</span><span>{formatQualityPercent(row.quality)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Qualidade" : "Accuracy"}</span><span>{formatQualityIndicator(cec ? row.quality : row.indicators?.accuracy, true)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Pass Quantity" : "Corretos"}</span><span>{formatNumber(row.correct)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Total auditado" : "Auditados"}</span><span>{formatNumber(row.total)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Fail Quantity" : "Divergências"}</span><span>{formatNumber(row.errors)}</span></div>
+        {!cec ? QUALITY_EXTRA_INDICATORS.filter((metric) => metric.percent).map((metric) => <div key={metric.key} className="flex justify-between gap-5"><span>{metric.label}</span><span>{formatQualityIndicator(row.indicators?.[metric.key], true)}</span></div>) : null}
       </div>
     </div>
   );
@@ -1913,7 +1993,7 @@ function QualityImportModal({
             label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : qualityScope === "CEC" ? "Qualidade CEC" : "Qualidade VIDEO / COMMENTS"}
             helper={qualityScope === "CEC"
               ? "Base com Monitor day, Employee Name, Pass Quantity e Fail Quantity. Linhas repetidas do mesmo agente e dia são somadas."
-              : "Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."}
+              : "Base com audit_name, final_result, IDs dos casos e audit_queue_id. Allow Amount e Labeled Amount alimentam as taxas; negative_sign também é aceito. Até 1.000.000 de linhas e 250 MB."}
             file={qualityFile}
             onChange={setQualityFile}
           />
