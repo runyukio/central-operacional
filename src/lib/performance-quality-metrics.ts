@@ -14,13 +14,14 @@ export type QualityIndicatorCounts = {
 
 // Reused in summary, trend and agent queries. Outcomes are counted independently,
 // and False Positive deliberately uses the reversed key in the supplied formula.
+// Case IDs use bytewise comparison to avoid the cost of natural-language sorting.
 export const qualityIndicatorCountsSql = Prisma.sql`
-  COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'mislabeled' THEN q."concatKey" END)::integer AS "mislabeled",
-  COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'leakage' THEN q."concatKey" END)::integer AS "leakage",
-  COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'false_positive' THEN CONCAT(q."auditCaseOrderId", q."caseOrderId") END)::integer AS "falsePositive",
-  COUNT(DISTINCT CASE WHEN q."negativeSign" <> '1' OR (q."negativeSign" IS NULL AND q."allowAmount" > 0) THEN q."concatKey" END)::integer AS "allow",
-  COUNT(DISTINCT CASE WHEN q."negativeSign" = '1' OR (q."negativeSign" IS NULL AND q."labeledAmount" > 0) THEN q."concatKey" END)::integer AS "labeled",
-  COUNT(DISTINCT CASE WHEN q."negativeSign" IS NOT NULL OR (q."allowAmount" IS NOT NULL AND q."labeledAmount" IS NOT NULL) THEN q."concatKey" END)::integer AS "casesWithDecision"
+  COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'mislabeled' THEN q."concatKey" END COLLATE "C")::integer AS "mislabeled",
+  COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'leakage' THEN q."concatKey" END COLLATE "C")::integer AS "leakage",
+  COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'false_positive' THEN CONCAT(q."auditCaseOrderId", q."caseOrderId") END COLLATE "C")::integer AS "falsePositive",
+  COUNT(DISTINCT CASE WHEN q."negativeSign" <> '1' OR (q."negativeSign" IS NULL AND q."allowAmount" > 0) THEN q."concatKey" END COLLATE "C")::integer AS "allow",
+  COUNT(DISTINCT CASE WHEN q."negativeSign" = '1' OR (q."negativeSign" IS NULL AND q."labeledAmount" > 0) THEN q."concatKey" END COLLATE "C")::integer AS "labeled",
+  COUNT(DISTINCT CASE WHEN q."negativeSign" IS NOT NULL OR (q."allowAmount" IS NOT NULL AND q."labeledAmount" IS NOT NULL) THEN q."concatKey" END COLLATE "C")::integer AS "casesWithDecision"
 `;
 
 export function serializeQualityIndicators(counts: QualityIndicatorCounts): QualityIndicators {
