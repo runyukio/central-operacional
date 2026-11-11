@@ -6,18 +6,26 @@ export function realtimeCycleHour(value: string) {
   return /^(\d{4}-\d{2}-\d{2})[ T_](\d{2}):\d{2}$/.exec(value)?.slice(1).join(" ") ?? value;
 }
 
-// Keep the actual cycle identity: snapshots contain cumulative counters and
-// point-in-time backlog/latency, so adding the two half-hours would double count.
+// Prefer the exact hour for comparisons. If it is missing, keep the latest
+// available snapshot and its actual timestamp.
 export function groupRealtimeCycles<T extends CycleOption>(cycles: T[], grouping?: RealtimeCycleGrouping): T[] {
   if (grouping !== "hour") return cycles;
   const hours = new Map<string, T>();
   for (const cycle of cycles) {
     const hour = realtimeCycleHour(cycle.value);
     const current = hours.get(hour);
-    if (!current || cycle.value > current.value || (cycle.value === current.value
-      && new Date(cycle.importedAt).getTime() > new Date(current.importedAt).getTime())) {
+    if (!current) {
       hours.set(hour, cycle);
+      continue;
     }
+
+    const isFullHour = cycle.value.endsWith(":00");
+    const currentIsFullHour = current.value.endsWith(":00");
+    const shouldReplace = isFullHour !== currentIsFullHour
+      ? isFullHour
+      : cycle.value > current.value || (cycle.value === current.value
+        && new Date(cycle.importedAt).getTime() > new Date(current.importedAt).getTime());
+    if (shouldReplace) hours.set(hour, cycle);
   }
   return Array.from(hours.values()).sort((a, b) => b.value.localeCompare(a.value));
 }
