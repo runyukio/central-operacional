@@ -1,3 +1,4 @@
+import { resolveShiftSupervisor, SupervisionError } from "./supervision-matrix";
 import { calculateRequestSla, requestDateBoundary, requestNextAction, selectPipeline } from "@/lib/request-pipeline";
 import { canAdminRejectRequest, isDirectWfmRequest } from "@/lib/request-routing";
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
@@ -493,7 +494,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       if ("error" in transition) throw new DomainError(transition.error);
 
       const guard = await tx.request.updateMany({
-        where: { id: current.id, status: current.status },
+        where: { id: current.id, status: current.status, updatedAt: current.updatedAt },
         data: { updatedAt: new Date() }
       });
       if (guard.count !== 1) throw new DomainError("Esta solicitação já foi processada por outra ação.");
@@ -554,7 +555,10 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                     shiftChangeAppliedById: shiftChangeResult.profileUpdated ? user.id : null,
                     shiftChangeApplicationStatus: shiftChangeResult.applicationStatus,
                     shiftChangeApplicationMessage: shiftChangeResult.message || null,
-                    shiftChangeScheduledFor: shiftChangeResult.scheduledFor
+                    shiftChangeScheduledFor: shiftChangeResult.scheduledFor,
+                    shiftChangeSupervisorId: shiftChangeResult.supervisorId ?? null,
+                    shiftChangeSupervisionAssignmentId: shiftChangeResult.supervisionAssignmentId ?? null,
+                    shiftChangeLobId: shiftChangeResult.lobId ?? null
                   } }
             : {}),
           history: {
@@ -571,7 +575,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                     ? { monthlyAdvanceUpdated: advanceResult.updated, monthlyAdvanceMessage: advanceResult.message }
                     : shouldUpdateShiftPayload
                       ? {
-                          shiftChangeUpdated: shiftChangeResult.profileUpdated,
+                          shiftChangeUpdated: Boolean(shiftChangeResult.supervisorId) || shiftChangeResult.profileUpdated,
                           shiftChangeScheduled: shiftChangeResult.applicationStatus === "SCHEDULED",
                           shiftChangeStatus: shiftChangeResult.applicationStatus,
                           shiftChangeMessage: shiftChangeResult.message
@@ -627,10 +631,13 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
             to: transition.nextStatus,
             reason: shiftChangeResult.message,
             metadata: {
-              shiftChangeUpdated: shiftChangeResult.profileUpdated,
+              shiftChangeUpdated: Boolean(shiftChangeResult.supervisorId) || shiftChangeResult.profileUpdated,
               shiftChangeScheduled: shiftChangeResult.applicationStatus === "SCHEDULED",
               shiftChangeStatus: shiftChangeResult.applicationStatus,
-              shiftChangeScheduledFor: shiftChangeResult.scheduledFor
+              shiftChangeScheduledFor: shiftChangeResult.scheduledFor,
+              shiftChangeSupervisorId: shiftChangeResult.supervisorId ?? null,
+              shiftChangeSupervisionAssignmentId: shiftChangeResult.supervisionAssignmentId ?? null,
+              shiftChangeLobId: shiftChangeResult.lobId ?? null
             }
           }
         });
@@ -662,7 +669,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean; shiftChangeUpdated?: boolean } | null;
     return { data: await mapPrismaRequestWithImpact(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated || historyMetadata?.shiftChangeUpdated), persisted: true };
   } catch (error) {
-    if (error instanceof DomainError || error instanceof PairedSwapError) {
+    if (error instanceof DomainError || error instanceof PairedSwapError || error instanceof SupervisionError) {
       return validationFailure(error.message);
     }
     recordErrorLog({
@@ -674,7 +681,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       severity: "ERROR",
       metadata: diagnostics
     });
-    if (!allowDemoDataFallback || diagnostics.pairedSwap) return mapRequestStatusError(error, diagnostics);
+    if (!allowDemoDataFallback || diagnostics.pairedSwap || /turno/i.test(String(diagnostics.type ?? ""))) return mapRequestStatusError(error, diagnostics);
     const result = updateMockRequestStatus(actor, id, status, reason, actionInput);
     if (!result || result === "FORBIDDEN") return result;
     if ("record" in result) return { data: result.record, scheduleUpdated: result.scheduleUpdated, persisted: false };
@@ -836,6 +843,9 @@ type ShiftChangeApplicationResult = {
   appliedAt: string | null;
   scheduledFor: string | null;
   profileUpdated: boolean;
+  supervisorId?: string;
+  supervisionAssignmentId?: string;
+  lobId?: string;
 };
 
 async function findActiveUser(email: string) {
@@ -2521,14 +2531,39 @@ async function applyShiftChangeRequestToSchedule(
   });
   if (!shift) throw new DomainError("Turno solicitado não encontrado.");
 
+  // The agent's LOB, never the shift alone, determines supervision.
+  await tx.$queryRaw`SELECT id FROM "EmployeeProfile" WHERE id = ${request.employeeId} FOR UPDATE`;
+  const employee = await tx.employeeProfile.findUnique({
+    where: { id: request.employeeId }, include: { shift: true, lob: true }
+  });
+  if (!employee || employee.deletedAt) throw new DomainError("Parceiro não encontrado para aplicar troca de turno.");
+  const assignment = await resolveShiftSupervisor(tx, {
+    lobId: employee.lobId, lobName: employee.lob.name, shift: desiredShift,
+    effectiveDate: startDate, employeeId: employee.id
+  });
+  const supervisorId = assignment.supervisorId;
+  const supervisorBefore = employee.supervisorId;
+  // Current directory supervision changes at approval, even for future shifts.
+  // The shift/hours themselves keep their existing effective-date behavior.
+  await tx.employeeProfile.update({ where: { id: employee.id }, data: { supervisorId } });
+  await tx.auditLog.create({ data: {
+    actorId, action: "EDICAO", entity: "EmployeeProfile", entityId: employee.id,
+    reason: `Supervisão atualizada pela troca de turno ${request.code}`,
+    previousValue: { supervisorId: supervisorBefore },
+    newValue: { supervisorId, lobId: employee.lobId, desiredShift,
+      effectiveDate: startDate.toISOString().slice(0, 10), assignmentId: assignment.id, requestId: request.id }
+  } });
+  // Existing Cronograma readers use this dated manifest to interpret legacy
+  // null supervisor snapshots without modifying any pre-effective-date rows.
+  await tx.auditLog.create({ data: {
+    actorId, action: "EDICAO", entity: "EmployeeSupervisionSwap", entityId: request.id,
+    reason: `Histórico de supervisão pela troca de turno ${request.code}`,
+    newValue: { effectiveDate: startDate.toISOString().slice(0, 10),
+      transfers: [{ employeeId: employee.id, from: supervisorBefore, to: supervisorId }] }
+  } });
+
   if (changeType === "Fixa") {
     const effectiveNow = isShiftChangeEffective(startDate);
-    const employee = await tx.employeeProfile.findUnique({
-      where: { id: request.employeeId },
-      include: { shift: true }
-    });
-    if (!employee) throw new DomainError("Parceiro não encontrado para aplicar troca de turno.");
-
     if (effectiveNow) {
       const employeeBefore = serialize({
         id: employee.id,
@@ -2541,6 +2576,7 @@ async function applyShiftChangeRequestToSchedule(
         where: { id: request.employeeId },
         data: {
           shiftId: shift.id,
+          supervisorId,
           workStartTime: baseTimes.startsAt,
           workEndTime: baseTimes.endsAt
         },
@@ -2581,9 +2617,9 @@ async function applyShiftChangeRequestToSchedule(
         where: { id: schedule.id },
         data: {
           shiftId: shift.id,
+          supervisorId,
           startsAt: baseTimes.startsAt,
           endsAt: baseTimes.endsAt,
-          observation: `Troca de turno fixa aprovada pela solicitação ${request.code}`
         },
         include: { shift: true }
       });
@@ -2615,8 +2651,10 @@ async function applyShiftChangeRequestToSchedule(
           startDate: startDate.toISOString().slice(0, 10),
           desiredShift,
           baseTimes,
+          supervisorId, supervisionAssignmentId: assignment.id,
           schedulesUpdated: schedules.length,
-          profileUpdated: effectiveNow
+          profileUpdated: effectiveNow,
+          lobId: employee.lobId
         }
       }
     });
@@ -2630,7 +2668,8 @@ async function applyShiftChangeRequestToSchedule(
       applicationStatus: effectiveNow ? "APPLIED" : "SCHEDULED",
       appliedAt,
       scheduledFor,
-      profileUpdated: effectiveNow
+      profileUpdated: effectiveNow,
+      supervisorId, supervisionAssignmentId: assignment.id, lobId: employee.lobId
     };
   }
 
@@ -2651,9 +2690,9 @@ async function applyShiftChangeRequestToSchedule(
       where: { id: schedule.id },
       data: {
         shiftId: shift.id,
+        supervisorId,
         startsAt: baseTimes.startsAt,
         endsAt: baseTimes.endsAt,
-        observation: `Troca de turno temporária aprovada pela solicitação ${request.code}`
       },
       include: { shift: true }
     });
@@ -2685,6 +2724,7 @@ async function applyShiftChangeRequestToSchedule(
         endDate: (endDate ?? startDate).toISOString().slice(0, 10),
         desiredShift,
         baseTimes,
+        supervisorId, supervisionAssignmentId: assignment.id,
         schedulesUpdated: schedules.length
       }
     }
@@ -2696,7 +2736,8 @@ async function applyShiftChangeRequestToSchedule(
     applicationStatus: "APPLIED",
     appliedAt: new Date().toISOString(),
     scheduledFor: startDate.toISOString().slice(0, 10),
-    profileUpdated: false
+    profileUpdated: false,
+    supervisorId, supervisionAssignmentId: assignment.id, lobId: employee.lobId
   };
 }
 

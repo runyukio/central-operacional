@@ -350,6 +350,7 @@ export type AttendanceItem = {
 
 
 export type SystemSettings = {
+  supervisionAssignments?: Array<{ id: string; lobId: string; shift: "Manhã" | "Tarde" | "Noite"; supervisorId: string; startsOn: string; endsOn: string | null; active: boolean }>;
   users?: Array<{ id: string; name: string; email: string; status: string; roleName: string; roleLabel?: string; employeeId?: string; employeeName?: string }>;
   lobs: Array<{ id: string; name: string; label?: string; description?: string; status: "ACTIVE" | "INACTIVE"; active?: boolean; system?: boolean; isSystem?: boolean }>;
   shifts: Array<{ id: string; name: string; startsAt: string; endsAt: string; color?: string; status: "ACTIVE" | "INACTIVE" }>;

@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
-export type SupervisionTransfer = { employeeId: string; from: string; to: string; effectiveDate: string };
+export type SupervisionTransfer = { employeeId: string; from: string | null; to: string | null; effectiveDate: string };
 export type SupervisedSlot = { id?: string; employeeId?: string; date?: Date; supervisorId?: string | null;
   employee?: { id?: string; supervisorId?: string | null; supervisor?: { fullName: string } | null } | null };
 
@@ -32,7 +32,7 @@ export function historicalSupervisorFilter(ids: string[], transfers: Supervision
   for (const employeeId of employeeIds) {
     const history = transfers.filter((transfer) => transfer.employeeId === employeeId);
     history.forEach((transfer, index) => {
-      if (ids.includes(transfer.from)) fallback.push({ employeeId, date: {
+      if (transfer.from && ids.includes(transfer.from)) fallback.push({ employeeId, date: {
         ...(index ? { gte: new Date(`${history[index - 1].effectiveDate}T00:00:00Z`) } : {}),
         lt: new Date(`${transfer.effectiveDate}T00:00:00Z`)
       } });
@@ -51,7 +51,7 @@ export async function scheduleSupervisorNames(slots: SupervisedSlot[]) {
   const supervisors = ids.length ? await prisma.employeeProfile.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } }) : [];
   const names = new Map(supervisors.map((supervisor) => [supervisor.id, supervisor.fullName]));
   resolved.forEach(({ slot, supervisorId }) => {
-    if (slot.id && supervisorId && names.has(supervisorId)) names.set(`schedule:${slot.id}`, names.get(supervisorId)!);
+    if (slot.id) names.set(`schedule:${slot.id}`, supervisorId ? names.get(supervisorId) ?? "Sem supervisor" : "Sem supervisor");
   });
   return names;
 }

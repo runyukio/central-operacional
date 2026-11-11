@@ -1,3 +1,4 @@
+import { importInitialSupervisionMatrix, readSupervisionMatrix, saveSupervisionAssignment, SupervisionError } from "./supervision-matrix";
 import { randomUUID } from "crypto";
 import { BILLING_REFERENCE_MONTH_CONFIG_KEY, DEFAULT_BILLING_REFERENCE_MONTH, isValidBillingReferenceMonth } from "@/lib/billing-reference-month";
 import { getDefaultBillingReferenceMonth } from "@/lib/billing-reference-month-service";
@@ -184,7 +185,8 @@ export async function getSystemSettings(actor: Actor) {
       approvalRules,
       coverageRules,
       tokenRules,
-      generalSettings
+      generalSettings,
+      supervisionAssignments
     ] = await Promise.all([
       prisma.user.findMany({ where: { deletedAt: null }, select: settingsUserSelect, orderBy: { name: "asc" }, take: 300 }),
       prisma.lob.findMany({ orderBy: { name: "asc" } }),
@@ -210,7 +212,8 @@ export async function getSystemSettings(actor: Actor) {
       readRuleList(configKeys.approvalRules),
       readRuleList(configKeys.coverageRules),
       readRuleList(configKeys.tokenRules),
-      readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings())
+      readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings()),
+      readSupervisionMatrix()
     ]);
 
     const superviseeCounts = countSuperviseesBySupervisor(employees);
@@ -272,7 +275,8 @@ export async function getSystemSettings(actor: Actor) {
         approvalRules,
         coverageRules,
         tokenRules,
-        generalSettings
+        generalSettings,
+        supervisionAssignments
       }
     };
   } catch (error) {
@@ -364,6 +368,10 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
           return saveLob(tx, admin.id, action);
         case "team":
           return saveTeam(tx, admin.id, action);
+        case "supervisionAssignment":
+          return saveSupervisionAssignment(tx, admin.id, action);
+        case "importSupervisionMatrix":
+          return importInitialSupervisionMatrix(tx, admin.id, action.assignments);
         case "supervisor":
           return saveSupervisorLink(tx, admin.id, action);
         case "shift":
@@ -401,6 +409,7 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
     }
     return { success: true, ...result };
   } catch (error) {
+    if (error instanceof SupervisionError) return { error: error.message };
     console.error("[settings] erro ao salvar configuração", error);
     recordErrorLog({ userEmail: actor.email, code: "SETTINGS_SAVE_ERROR", message: error instanceof Error ? error.message : "Falha ao salvar configurações", route: "/api/settings", action: "SETTINGS_SAVE", severity: "ERROR" });
     return { error: "Não foi possível salvar a configuração." };
