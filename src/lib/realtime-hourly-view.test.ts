@@ -52,35 +52,36 @@ for (const rawFallback of [false, true]) {
     const result = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour" });
     assert.ok("data" in result && result.data);
     for (const view of [result.data.queueView, result.data.agents]) {
-      assert.deepEqual(view.cycles.map((row) => row.value), ["2026-10-21 10:00", "2026-10-21 09:30", "2026-10-20 23:30"]);
+      assert.deepEqual(view.cycles.map((row) => row.value), ["2026-10-21 10:00", "2026-10-21 09:00", "2026-10-20 23:30"]);
       assert.equal(view.selectedCycle, "2026-10-21 10:00");
-      assert.equal(view.previousCycle, "2026-10-21 09:30");
+      assert.equal(view.previousCycle, "2026-10-21 09:00");
       assert.equal(view.rows.length, 1);
       assert.equal(view.rows[0].history.length, 3);
     }
     assert.equal(result.data.queueView.rows[0].current.input, 400);
-    assert.equal(result.data.queueView.rows[0].deltas.input, 100);
+    assert.equal(result.data.queueView.rows[0].deltas.input, 200);
     assert.equal(result.data.agents.rows[0].current.submit, 400);
-    assert.equal(result.data.agents.rows[0].deltas.submit, 100);
+    assert.equal(result.data.agents.rows[0].deltas.submit, 200);
+    assert.ok(result.data.agents.rows[0].history.some((row) => row.cycleDownload === "2026-10-21 09:00" && row.submit === 200));
   });
 }
 
-test("historical hourly selection follows the representative cycle and exports its hourly comparison", async () => {
+test("historical selection and export resolve a half-hour request to the full-hour cycle", async () => {
   const { service } = fixture();
-  const result = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour", cycleDownload: "2026-10-21 09:00", view: "queues" });
+  const result = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour", cycleDownload: "2026-10-21 09:30", view: "queues" });
   assert.ok("data" in result && result.data);
-  assert.equal(result.data.queueView.selectedCycle, "2026-10-21 09:30");
+  assert.equal(result.data.queueView.selectedCycle, "2026-10-21 09:00");
   assert.equal(result.data.queueView.previousCycle, "2026-10-20 23:30");
-  assert.equal(result.data.queueView.rows[0].current.input, 300);
+  assert.equal(result.data.queueView.rows[0].current.input, 200);
   assert.equal(result.data.queueView.rows[0].previous?.input, 100);
-  const exported = await service.exportRealtimeAgents(actor, { cycleGrouping: "hour", cycleDownload: "2026-10-21 09:00", view: "queues" });
+  const exported = await service.exportRealtimeAgents(actor, { cycleGrouping: "hour", cycleDownload: "2026-10-21 09:30", view: "queues" });
   assert.ok(!("error" in exported));
-  assert.equal(exported.rows[0][0], "2026-10-21 09:30");
+  assert.equal(exported.rows[0][0], "2026-10-21 09:00");
   assert.equal(exported.rows[0][1], "2026-10-20 23:30");
-  assert.equal(exported.rows[0][3], 300);
+  assert.equal(exported.rows[0][3], 200);
   const history = exported.sheets?.find((sheet) => sheet.sheetName === "Detalhe por Fila");
   assert.ok(history);
-  assert.doesNotMatch(JSON.stringify(history.rows), /2026-10-21 09:00/);
+  assert.doesNotMatch(JSON.stringify(history.rows), /2026-10-21 09:30/);
 });
 
 test("unmodified API calls keep the half-hour comparison and history", async () => {

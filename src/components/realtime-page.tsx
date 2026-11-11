@@ -1897,7 +1897,7 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <div>
               <h3 className="font-black text-navy-950">Histórico por Ciclo</h3>
-              <p className="text-xs font-bold text-muted">Evolução do agente no dia selecionado.</p>
+              <p className="text-xs font-bold text-muted">Dados acumulados do agente até o horário de cada ciclo.</p>
             </div>
             <select
               value={selectedHistoryDateKey}
