@@ -49,6 +49,19 @@ test("consulta pessoal restringe cadastro, escala, SQL e captura ao usuário aut
   assert.ok(!JSON.stringify(result).includes("someone-else"));
 });
 
+test("COMMENTS consulta produção e captura do próprio turno", async (t) => {
+  const { timeline } = fixture(t, "COMMENTS");
+  const result = await getMyRealtime(actor, now);
+  assert.ok("success" in result);
+  assert.equal(result.employee.lob, "COMMENTS");
+  assert.equal(result.kind, "moderation");
+  assert.equal(result.shift?.date, "2026-11-05");
+  assert.equal(result.productivity.metrics?.submit, 20);
+  assert.equal(result.intervals.find((row) => row.hour === "2026-11-05T11:00:00.000Z")?.metrics?.submit, 20);
+  assert.equal(result.capture.capturedMs, 7_200_000);
+  assert.deepEqual(timeline.mock.calls[0].arguments[0], { date: "2026-11-05", employeeId: profile.id, wbLogin: profile.wbLogin });
+});
+
 test("conta vinculada prevalece sobre fallback de WB, sem ampliar a identidade", async (t) => {
   const { profiles } = fixture(t);
   profiles.findMany.mock.mockImplementation(async () => [profile, { ...profile, id: "legacy-id", user: null }]);
