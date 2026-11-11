@@ -101,7 +101,7 @@ export async function getMyRealtime(actor: Actor, now = new Date()): Promise<MyR
   if (matches.length !== 1) return { error: "Não foi possível identificar seu cadastro de forma inequívoca. Peça ao supervisor para conferir seu vínculo.", status: 404 };
   const employee = matches[0];
   const lob = employee.lob.name.trim().toUpperCase();
-  if (!["ADS", "VIDEO", "VÍDEO", "TNS", "CEC"].includes(lob)) return { error: "Meu Real Time está disponível para ADS, Vídeo e CEC.", status: 403 };
+  if (!["ADS", "VIDEO", "VÍDEO", "TNS", "COMMENTS", "CEC"].includes(lob)) return { error: "Meu Real Time está disponível para ADS, Vídeo, COMMENTS e CEC.", status: 403 };
   const today = saoPauloDateKey(now);
   const schedules = await prisma.schedule.findMany({ where: { employeeId: employee.id, deletedAt: null,
     // Adjacent days also delimit overtime across midnight and prevent sharing
