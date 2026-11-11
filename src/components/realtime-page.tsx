@@ -27,6 +27,7 @@ import {
   isReportOnlineHeadcountRow
 } from "@/lib/realtime-report-headcount";
 import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
+import { realtimeClosedHourStart } from "@/lib/realtime-hourly-cycles";
 import { cn } from "@/lib/utils";
 import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
@@ -1800,12 +1801,20 @@ function RealtimeCyclePicker({
 }
 
 function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtimeRow; selectedCycle: string; onClose: () => void }) {
-  const defaultDateKey = parseRealtimeCycle(selectedCycle || row.history[0]?.cycleDownload || "", "").dateKey;
+  const historyCycle = selectedCycle || row.history[0]?.cycleDownload || "";
+  const defaultDateKey = parseRealtimeCycle(realtimeClosedHourStart(historyCycle) ?? historyCycle, "").dateKey;
   const [selectedHistoryDateKey, setSelectedHistoryDateKey] = useState(defaultDateKey);
+  const history = useMemo(() => row.history.map((item) => {
+    const start = realtimeClosedHourStart(item.cycleDownload);
+    return {
+      item,
+      reference: parseRealtimeCycle(start ?? item.cycleDownload, ""),
+      label: start ? `${start}–${item.cycleDownload.slice(-5)}` : `Leitura ${item.cycleDownload}`
+    };
+  }), [row.history]);
   const historyDates = useMemo(() => {
     const byDate = new Map<string, { dateKey: string; label: string; count: number; timestamp: number }>();
-    row.history.forEach((item) => {
-      const parsed = parseRealtimeCycle(item.cycleDownload, "");
+    history.forEach(({ reference: parsed }) => {
       const existing = byDate.get(parsed.dateKey);
       if (existing) {
         existing.count += 1;
@@ -1820,8 +1829,8 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
       }
     });
     return Array.from(byDate.values()).sort((a, b) => b.timestamp - a.timestamp);
-  }, [row.history]);
-  const filteredHistory = useMemo(() => row.history.filter((item) => parseRealtimeCycle(item.cycleDownload, "").dateKey === selectedHistoryDateKey), [row.history, selectedHistoryDateKey]);
+  }, [history]);
+  const filteredHistory = history.filter(({ reference }) => reference.dateKey === selectedHistoryDateKey);
 
   useEffect(() => {
     setSelectedHistoryDateKey(defaultDateKey);
@@ -1896,8 +1905,8 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
         <div className="premium-card mt-5 overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <div>
-              <h3 className="font-black text-navy-950">Histórico por Ciclo</h3>
-              <p className="text-xs font-bold text-muted">Dados acumulados do agente até o horário de cada ciclo.</p>
+              <h3 className="font-black text-navy-950">Histórico por faixa horária</h3>
+              <p className="text-xs font-bold text-muted">Valores acumulados até o fim da faixa ou até o horário da leitura exibida.</p>
             </div>
             <select
               value={selectedHistoryDateKey}
@@ -1913,12 +1922,12 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                <tr>{["Ciclo", "Fila ID", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+                <tr>{["Faixa horária (Brasília)", "Fila ID", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
               </thead>
               <tbody>
-                {filteredHistory.map((item) => (
+                {filteredHistory.map(({ item, label }) => (
                   <tr key={item.cycleDownload} className="border-t border-slate-100">
-                    <td className="px-3 py-3 font-extrabold">{item.cycleDownload}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-extrabold">{label}</td>
                     <td className="px-3 py-3"><HistoryQueueIdsCell queueIds={item.queueIds ?? []} /></td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.submit)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.ahtMs)}</td>
