@@ -6,6 +6,16 @@ export function realtimeCycleHour(value: string) {
   return /^(\d{4}-\d{2}-\d{2})[ T_](\d{2}):\d{2}$/.exec(value)?.slice(1).join(" ") ?? value;
 }
 
+export function realtimeClosedHourStart(cycle: string): string | null {
+  const match = /^(\d{4}-\d{2}-\d{2})[ T_]([01]\d|2[0-3]):00$/.exec(cycle);
+  if (!match) return null;
+
+  // Treat Brasília wall-clock times as UTC only for date arithmetic.
+  const end = Date.parse(`${match[1]}T${match[2]}:00:00Z`);
+  if (!Number.isFinite(end)) return null;
+  return new Date(end - 3_600_000).toISOString().slice(0, 16).replace("T", " ");
+}
+
 // Prefer the exact hour for comparisons. If it is missing, keep the latest
 // available snapshot and its actual timestamp.
 export function groupRealtimeCycles<T extends CycleOption>(cycles: T[], grouping?: RealtimeCycleGrouping): T[] {

@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupRealtimeCycles, selectRealtimeCycle } from "./realtime-hourly-cycles";
+import { groupRealtimeCycles, realtimeClosedHourStart, selectRealtimeCycle } from "./realtime-hourly-cycles";
 
 const cycle = (value: string, importedAt = `${value.replace(" ", "T")}:00-03:00`) => ({ value, importedAt, rows: 10 });
+
+test("the 15:00 reading closes the reference hour that starts at 14:00", () => {
+  assert.equal(realtimeClosedHourStart("2026-11-09 15:00"), "2026-11-09 14:00");
+  assert.equal(realtimeClosedHourStart("2026-11-09 15:30"), null);
+});
+
+test("midnight closes the last hour of the previous date", () => {
+  assert.equal(realtimeClosedHourStart("2026-11-10 00:00"), "2026-11-09 23:00");
+  assert.equal(realtimeClosedHourStart("2026-01-01 00:00"), "2025-12-31 23:00");
+});
 
 test("the full-hour snapshot wins over the half-hour and keeps its actual values", () => {
   const rows = [cycle("2026-10-21 10:00"), cycle("2026-10-21 09:00"), cycle("2026-10-21 09:30")];
