@@ -5,11 +5,11 @@ import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 
-// Run the public read/export services with an uncached Next boundary and an
+// Run the public read/export services with a per-argument cache and an
 // in-memory read-only database. Any unplanned database operation fails the test.
-function fixture(rawFallback = false) {
+function fixture(rawFallback = false, readings = ["2026-10-21 10:00", "2026-10-21 09:30", "2026-10-21 09:00", "2026-10-20 23:30"]) {
   const nativeRequire = createRequire(import.meta.url);
-  const batches = ["2026-10-21 10:00", "2026-10-21 09:30", "2026-10-21 09:00", "2026-10-20 23:30"].map((value, index) => ({
+  const batches = readings.map((value, index) => ({
     id: `batch-${index}`, fileName: "fixture.xlsx", importedAt: new Date(`${value.replace(" ", "T")}:00-03:00`),
     cycleDownload: value, cycleDownloads: [value], agentSummaries: [], queueSummaries: [], status: "SUCCESS", queueRows: 1, agentRows: 1, rowsTotal: 2
   }));
@@ -35,7 +35,16 @@ function fixture(rawFallback = false) {
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText;
   const loadedModule = { exports: {} };
   const requireMock = (name: string) => {
-    if (name === "next/cache") return { unstable_cache: (callback: unknown) => callback };
+    if (name === "next/cache") return {
+      unstable_cache: (callback: (...args: unknown[]) => unknown) => {
+        const entries = new Map<string, unknown>();
+        return (...args: unknown[]) => {
+          const key = JSON.stringify(args);
+          if (!entries.has(key)) entries.set(key, callback(...args));
+          return entries.get(key);
+        };
+      }
+    };
     if (name === "@/lib/prisma") return { prisma: database };
     if (name === "@/lib/realtime-hours-service") return { getRealtimeHoursOperationalPresence: async () => ({ rows: [] }) };
     return nativeRequire(name.startsWith("@/") ? `../${name.slice(2)}` : name);
@@ -46,7 +55,40 @@ function fixture(rawFallback = false) {
 
 const actor = { role: "ADMIN" as const, email: "admin@example.invalid", name: "Admin" };
 
+test("Executive refreshes the latest import even when its cycle label has not changed", async () => {
+  const { service, batches } = fixture(false, ["2026-10-21 09:30", "2026-10-21 09:30", "2026-10-21 08:00"]);
+  const nextReading = batches.shift()!;
+  nextReading.importedAt = new Date("2026-10-21T09:35:00-03:00");
+  const first = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour-live" });
+  assert.ok("data" in first && first.data);
+  assert.equal(first.data.queueView.rows[0].current.input, 300);
+  assert.equal(first.data.agents.rows[0].current.submit, 300);
+
+  batches.unshift(nextReading);
+  const latest = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour-live" });
+  assert.ok("data" in latest && latest.data);
+  assert.equal(latest.data.queueView.selectedCycle, first.data.queueView.selectedCycle);
+  assert.equal(latest.data.queueView.cycles[0].importedAt, nextReading.importedAt.toISOString());
+  assert.equal(latest.data.queueView.rows[0].current.input, 400);
+  assert.equal(latest.data.agents.rows[0].current.submit, 400);
+});
+
 for (const rawFallback of [false, true]) {
+  test(`Executive follows the latest reading in the current hour and keeps full-hour history (${rawFallback ? "raw fallback" : "summaries"})`, async () => {
+    const { service } = fixture(rawFallback, ["2026-10-21 09:30", "2026-10-21 09:00", "2026-10-21 08:30", "2026-10-21 08:00"]);
+    const result = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour-live" });
+    assert.ok("data" in result && result.data);
+    for (const view of [result.data.queueView, result.data.agents]) {
+      assert.deepEqual(view.cycles.map((row) => row.value), ["2026-10-21 09:30", "2026-10-21 08:00"]);
+      assert.equal(view.selectedCycle, "2026-10-21 09:30");
+      assert.equal(view.previousCycle, "2026-10-21 08:00");
+    }
+    assert.equal(result.data.queueView.rows[0].current.input, 400);
+    assert.equal(result.data.queueView.rows[0].deltas.input, 300);
+    assert.equal(result.data.agents.rows[0].current.submit, 400);
+    assert.equal(result.data.agents.rows[0].deltas.submit, 300);
+  });
+
   test(`hourly agents and queues use the previous hour and one history point per hour (${rawFallback ? "raw fallback" : "summaries"})`, async () => {
     const { service } = fixture(rawFallback);
     const result = await service.getRealtimeSnapshot(actor, { cycleGrouping: "hour" });
