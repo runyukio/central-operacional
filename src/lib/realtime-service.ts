@@ -25,6 +25,8 @@ import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import { groupRealtimeCycles, selectRealtimeCycle, type RealtimeCycleGrouping } from "@/lib/realtime-hourly-cycles";
 import { refreshRealtimeCycleHeads } from "@/lib/realtime-cycle-heads";
+import { getExecutiveHourlyData } from "@/lib/realtime-executive-hours";
+import type { ExecutiveReportLob } from "@/lib/ads-executive-report-core";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
@@ -40,6 +42,7 @@ export type RealtimeSnapshotOptions = {
   cycleGrouping?: RealtimeCycleGrouping;
   cycleDownload?: string;
   view?: "agents" | "queues" | "both";
+  executiveLob?: ExecutiveReportLob;
 };
 
 export type RealtimeExportQuery = RealtimeSnapshotOptions & {
@@ -677,6 +680,15 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
     requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : getCachedQueueRealtimeView(viewOptions),
     requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : getCachedAgentRealtimeView(viewOptions)
   ]);
+  const executiveCycle = queueRealtime.selectedCycle || agentRealtime.selectedCycle;
+  const executive = options.executiveLob && executiveCycle && canAccessExecutiveAdsReport(realTimePermissionUser(actor))
+    ? await getExecutiveHourlyData({
+        selectedCycle: executiveCycle,
+        lob: options.executiveLob,
+        latest: options.cycleGrouping === "hour-live",
+        latestImportId: options.cycleGrouping === "hour-live" ? batch.id : undefined
+      })
+    : undefined;
 
   const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
 
@@ -700,6 +712,7 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
       queues: emptyDataset(),
       queueView: queueRealtime,
       agents: agentRealtime,
+      executive,
       kpis: []
     }
   };
