@@ -484,8 +484,11 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
   const effectiveTab = clientQueuesOnly ? "queues" : executiveOnly ? "executive" : activeTab;
-  const liveExecutive = effectiveTab === "executive" && followLatestCycle;
-  const cycleToLoad = liveExecutive ? "" : selectedCycle;
+  const isExecutive = effectiveTab === "executive";
+  const isTnsReport = effectiveTab === "report" && reportLob === "TNS";
+  const liveExecutive = isExecutive && followLatestCycle;
+  const followLatestHourlyReading = followLatestCycle && (isExecutive || isTnsReport);
+  const cycleToLoad = followLatestHourlyReading ? "" : selectedCycle;
 
   async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues") {
     snapshotAbortRef.current?.abort();
@@ -495,16 +498,16 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     else setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ cycleGrouping: liveExecutive ? "hour-live" : "hour" });
+      const params = new URLSearchParams({ cycleGrouping: followLatestHourlyReading ? "hour-live" : "hour" });
       if (cycle) params.set("cycleDownload", cycle);
-      if (effectiveTab === "executive") params.set("executiveLob", executiveLob);
+      if (isExecutive) params.set("executiveLob", executiveLob);
       params.set("view", view);
       const response = await fetch(`/api/realtime?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const json = await response.json();
       if (!response.ok) throw new Error(json.message || json.error || "Não foi possível carregar Real Time.");
       const nextPayload = json as RealTimePayload;
       setPayload(nextPayload);
-      const nextSelectedCycle = view === "queues" || effectiveTab === "executive"
+      const nextSelectedCycle = view === "queues" || isExecutive || isTnsReport
         ? nextPayload.data.queueView.selectedCycle || nextPayload.data.agents.selectedCycle
         : nextPayload.data.agents.selectedCycle;
       if (nextSelectedCycle && (!cycle || nextSelectedCycle !== cycle)) setSelectedCycle(nextSelectedCycle);
@@ -562,7 +565,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     const params = activeTab !== "agents"
       ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", effectiveTab === "report" ? { search: reportSearch, lob: reportLob === "TNS" ? "" : reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
       : buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
-    if (liveExecutive) params.set("cycleGrouping", "hour-live");
+    if (followLatestHourlyReading) params.set("cycleGrouping", "hour-live");
     params.set("view", effectiveTab === "agents" ? "agents" : "queues");
     params.set("sortBy", effectiveTab === "agents" ? `${agentSort.key}_${agentSort.direction}` : `${queueSort.key}_${queueSort.direction}`);
     window.location.assign(`/api/realtime/export?${params.toString()}`);
@@ -590,7 +593,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cycleToLoad, liveExecutive, activeTab, reportLob, executiveLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
+  }, [cycleToLoad, followLatestHourlyReading, activeTab, reportLob, executiveLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -878,8 +881,8 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
               value={selectedCycleValue}
               cycles={cycles}
               onChange={(cycle) => changeCycle(cycle)}
-              showImportTime={effectiveTab === "executive"}
-              selectedImportedAt={effectiveTab === "executive" ? executiveHourly?.importedAt : undefined}
+              showImportTime={isExecutive || isTnsReport}
+              selectedImportedAt={isExecutive ? executiveHourly?.importedAt : undefined}
             />
           </label>
           <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
