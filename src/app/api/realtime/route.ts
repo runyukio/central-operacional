@@ -10,9 +10,11 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const view = url.searchParams.get("view");
   const grouping = url.searchParams.get("cycleGrouping");
+  const executiveLob = url.searchParams.get("executiveLob");
   const result = await getRealtimeSnapshot(actor, {
     cycleDownload: url.searchParams.get("cycleDownload") ?? undefined,
     cycleGrouping: grouping === "hour" || grouping === "hour-live" ? grouping : "original",
+    executiveLob: executiveLob === "ADS" || executiveLob === "VIDEO" ? executiveLob : undefined,
     view: view === "agents" || view === "queues" || view === "both" ? view : undefined
   });
   if ("error" in result) {

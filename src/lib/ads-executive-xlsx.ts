@@ -7,7 +7,7 @@ import {
 
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
-export function buildAdsExecutiveHealthMapXlsx(report: AdsExecutiveReportSnapshot): XlsxExportPayload {
+export function buildAdsExecutiveHealthMapXlsx(report: Pick<AdsExecutiveReportSnapshot, "dateKey" | "selectedCycle" | "buckets">): XlsxExportPayload {
   const date = excelDateSerial(report.dateKey);
 
   return {

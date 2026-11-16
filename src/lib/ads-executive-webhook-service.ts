@@ -8,6 +8,7 @@ import {
 } from "@/lib/ads-backlog-hourly-report-core";
 import {
   buildAdsExecutiveReportSnapshot,
+  isExecutiveAgentForLob,
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
   type AdsExecutiveRequirement,
@@ -26,6 +27,7 @@ import { onlineProductivityPageDelivery, paginateOnlineProductivityReport } from
 import { loadExecutiveForecast, loadExecutiveForecastRange } from "@/lib/executive-forecast-service";
 import { prisma } from "@/lib/prisma";
 import { getRealtimeSnapshot } from "@/lib/realtime-service";
+import { countExecutiveOnlineAgents } from "@/lib/realtime-report-headcount";
 import { uploadPublicObject } from "@/lib/supabase-storage";
 import type { Actor } from "@/lib/mock-db";
 
@@ -296,8 +298,8 @@ export async function sendLatestAdsBacklogHourlyReport(): Promise<AdsExecutiveWe
   };
 }
 
-export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?: string, cycleGrouping?: "hour-live") {
-  const realtime = await getRealtimeSnapshot(actor, { view: "both", cycleDownload, cycleGrouping });
+export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?: string) {
+  const realtime = await getRealtimeSnapshot(actor, { view: "both", cycleDownload });
   if ("error" in realtime && realtime.error) throw new Error(realtime.error);
   const data = "data" in realtime ? realtime.data : null;
   const selectedCycle = data?.queueView.selectedCycle || data?.agents.selectedCycle;
@@ -319,6 +321,50 @@ export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?
     forecast,
     requirements
   });
+}
+
+export async function getAdsExecutiveHealthMapSnapshot(actor: Actor, cycleDownload?: string, live = false) {
+  const realtime = await getRealtimeSnapshot(actor, {
+    view: "both", cycleDownload, cycleGrouping: live ? "hour-live" : "hour", executiveLob: "ADS"
+  });
+  if ("error" in realtime && realtime.error) throw new Error(realtime.error);
+  const data = realtime.data?.executive;
+  const selectedCycle = realtime.data?.queueView.selectedCycle;
+  if (!data || !selectedCycle) throw new Error("There is no valid Real Time snapshot for the ADS executive report.");
+
+  const [forecast, requirements] = await Promise.all([
+    loadExecutiveForecast("ADS", data.dateKey, { asOfCycle: selectedCycle }),
+    loadExecutiveRequirements("ADS", data.dateKey)
+  ]);
+  const forecastByHour = new Map(forecast.map((point) => [point.hour, point.input]));
+  const requiredByHour = new Map(requirements.map((point) => [point.hour, point.required]));
+  const readingByHour = new Map(data.hours.map((reading) => [reading.hour, reading]));
+  const latest = data.hours.at(-1);
+  const currentOnline = live && latest
+    ? countExecutiveOnlineAgents(mapAgentRows(realtime.data?.agents.rows ?? []).filter((row) => isExecutiveAgentForLob(row, "ADS")), data.activeWbs)
+    : null;
+
+  return {
+    dateKey: data.dateKey,
+    selectedCycle,
+    buckets: Array.from({ length: 24 }, (_, hour) => {
+      const reading = readingByHour.get(hour);
+      return {
+        hour,
+        label: `${String(hour).padStart(2, "0")}h`,
+        cycleDownload: reading?.cycleDownload ?? null,
+        input: reading?.input ?? null,
+        forecast: forecastByHour.get(hour) ?? null,
+        output: reading?.output ?? null,
+        ahtMs: reading?.ahtMs ?? null,
+        latencyMs: null,
+        maxLatencyMs: reading?.maxLatencyMs ?? null,
+        backlog: reading?.backlog ?? null,
+        required: requiredByHour.get(hour) ?? null,
+        online: reading && reading === latest ? currentOnline ?? reading.online : reading?.online ?? null
+      };
+    })
+  };
 }
 
 // Uses the same internal automation identity and Executive source as existing reports.

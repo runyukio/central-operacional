@@ -15,3 +15,16 @@ export function isReportOnlineHeadcountRow(row: ReportHeadcountRow) {
 export function isExecutivePresentHeadcountRow(row: ReportHeadcountRow) {
   return isReportOnlineHeadcountRow(row);
 }
+
+export function countExecutiveOnlineAgents(
+  rows: Array<ReportHeadcountRow & { wbLogin: string; rawWbLogin: string }>,
+  activeWbs: string[]
+) {
+  const online = new Set(activeWbs);
+  for (const row of rows) {
+    if (!isExecutivePresentHeadcountRow(row)) continue;
+    const wb = (row.wbLogin || row.rawWbLogin).toLowerCase().replace(/\s+/g, "");
+    if (wb) online.add(wb);
+  }
+  return online.size;
+}

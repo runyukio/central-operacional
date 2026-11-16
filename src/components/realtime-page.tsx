@@ -23,11 +23,12 @@ import { Area, AreaChart, CartesianGrid, LabelList, ReferenceLine, ResponsiveCon
 import { canAccessExecutiveAdsReport, canAccessRealTimeAgentsReports } from "@/lib/permissions";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import {
-  isExecutivePresentHeadcountRow,
+  countExecutiveOnlineAgents,
   isReportOnlineHeadcountRow
 } from "@/lib/realtime-report-headcount";
 import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
 import { realtimeClosedHourStart } from "@/lib/realtime-hourly-cycles";
+import type { ExecutiveHourlyData } from "@/lib/realtime-executive-hours";
 import { cn } from "@/lib/utils";
 import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
@@ -229,6 +230,7 @@ type RealTimePayload = {
     queues: RealTimeDataset;
     queueView: QueueRealtimeView;
     agents: AgentRealtimeView;
+    executive?: ExecutiveHourlyData;
     kpis: Array<{ label: string; value: string; helper: string; tone: "blue" | "green" | "purple" | "orange" }>;
   };
 };
@@ -319,7 +321,6 @@ type ExecutiveHourBucket = {
   input: number | null;
   output: number | null;
   ahtMs: number | null;
-  latencyMs: number | null;
   maxLatencyMs: number | null;
   backlog: number | null;
   required: number | null;
@@ -496,6 +497,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     try {
       const params = new URLSearchParams({ cycleGrouping: liveExecutive ? "hour-live" : "hour" });
       if (cycle) params.set("cycleDownload", cycle);
+      if (effectiveTab === "executive") params.set("executiveLob", executiveLob);
       params.set("view", view);
       const response = await fetch(`/api/realtime?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const json = await response.json();
@@ -588,7 +590,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cycleToLoad, liveExecutive, activeTab, reportLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
+  }, [cycleToLoad, liveExecutive, activeTab, reportLob, executiveLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -661,16 +663,18 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const currentExecutiveSourceData = executiveSourceData?.lob === executiveLob && executiveSourceData.dateKey === parseRealtimeCycle(selectedCycleValue, "").dateKey ? executiveSourceData : null;
+  const executiveHourly = payload?.data.executive?.lob === executiveLob ? payload.data.executive : undefined;
   const executiveReport = useMemo(
     () => buildExecutiveReport(
-      queueView?.rows ?? [],
+      executiveHourly,
       agentView?.rows ?? [],
       selectedCycleValue,
       executiveLob,
+      liveExecutive,
       currentExecutiveSourceData?.performanceTrend ?? [],
       currentExecutiveSourceData?.requiredRows ?? []
     ),
-    [agentView?.rows, currentExecutiveSourceData, executiveLob, queueView?.rows, selectedCycleValue]
+    [agentView?.rows, currentExecutiveSourceData, executiveHourly, executiveLob, liveExecutive, selectedCycleValue]
   );
   const productivityAgentRows = useMemo(() => agentRows.filter((row) => row.personType === "Agente"), [agentRows]);
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(productivityAgentRows, selectedCycleValue), [productivityAgentRows, selectedCycleValue]);
@@ -773,7 +777,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     }, 120_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, reportLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
+  }, [activeTab, reportLob, executiveLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
 
   useEffect(() => {
     if (effectiveTab !== "report" || reportLob !== "CEC") return;
@@ -800,7 +804,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, reportLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
+  }, [activeTab, reportLob, executiveLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -875,6 +879,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
               cycles={cycles}
               onChange={(cycle) => changeCycle(cycle)}
               showImportTime={effectiveTab === "executive"}
+              selectedImportedAt={effectiveTab === "executive" ? executiveHourly?.importedAt : undefined}
             />
           </label>
           <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1056,7 +1061,7 @@ function ExecutiveReportDashboard({ report, live }: { report: ExecutiveReport; l
         <section className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <div className="border-b border-slate-100 px-4 py-3">
             <h3 className="font-black text-navy-950">Hourly health map</h3>
-            <p className="text-xs font-bold text-muted">{report.lob} by hour, using snapshot deltas for input and output.</p>
+            <p className="text-xs font-bold text-muted">{report.lob} by hour, from :00 through :59. The current hour updates as readings arrive.</p>
           </div>
           <ExecutiveHeatmap rows={report.heatmap} />
         </section>
@@ -1709,12 +1714,14 @@ function RealtimeCyclePicker({
   value,
   cycles,
   onChange,
-  showImportTime = false
+  showImportTime = false,
+  selectedImportedAt
 }: {
   value: string;
   cycles: Array<{ value: string; batchId?: string; importedAt: string; importedAtLabel: string; rows: number }>;
   onChange: (value: string) => void;
   showImportTime?: boolean;
+  selectedImportedAt?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const parsedCycles = useMemo(() => cycles.map((cycle) => {
@@ -1753,7 +1760,9 @@ function RealtimeCyclePicker({
           <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
           <span className="truncate">{selected ? `${formatDateShort(selected.date)} - ${selected.timeLabel.slice(0, 2)}:00` : "Selecione um ciclo"}</span>
         </span>
-        <span className="shrink-0 text-[11px] font-bold text-muted">Atualização {selected?.updateTime ?? "—"}</span>
+        <span className="shrink-0 text-[11px] font-bold text-muted">
+          Atualização {selectedImportedAt ? realtimeImportTimeFormatter.format(new Date(selectedImportedAt)) : selected?.updateTime ?? "—"}
+        </span>
         <span className="text-xs font-black text-muted">{open ? "▲" : "▼"}</span>
       </button>
       {open ? (
@@ -3816,153 +3825,76 @@ function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealt
   };
 }
 
-function buildExecutiveReportRows(rows: QueueRealtimeRow[], lob: ExecutiveReportLob) {
-  const reportLob: ReportLob = lob === "ADS" ? "ADS" : "TNS";
-  return buildReportRows(rows, reportLob, "").filter((row) => row.lob === lob);
-}
-
-function executiveLatencyTargetMinutes(lob: ExecutiveReportLob) {
-  return lob === "VIDEO" ? VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES : ADS_REPORT_TARGET_LATENCY_MINUTES;
-}
-
-function executiveBacklogLatencyRows(rows: QueueReportRow[], lob: ExecutiveReportLob) {
-  return lob === "VIDEO"
-    ? rows.filter((row) => row.slaTargetMinutes === VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES)
-    : rows;
-}
-
 function buildExecutiveReport(
-  queueRows: QueueRealtimeRow[],
+  data: ExecutiveHourlyData | undefined,
   agentRows: AgentRealtimeRow[],
   selectedCycle: string,
   lob: ExecutiveReportLob,
+  live: boolean,
   performanceTrend: PerformanceForecastTrendRow[] = [],
   requiredRows: StaffCoverageExecutiveRow[] = []
 ): ExecutiveReport {
   const selected = parseRealtimeCycle(selectedCycle, "");
-  const reportRows = buildExecutiveReportRows(queueRows, lob);
-  const backlogLatencyRows = executiveBacklogLatencyRows(reportRows, lob);
-  const reportAgents = agentRows.filter((row) => isReportAgentForLob(row, lob));
-  const queueByHour = buildExecutiveQueueBuckets(reportRows, selected);
-  const backlogLatencyByHour = buildExecutiveQueueBuckets(backlogLatencyRows, selected);
-  const agentByHour = buildExecutiveAgentBuckets(reportAgents, selected);
+  const byHour = new Map(data?.hours.map((reading) => [reading.hour, reading]));
   const requiredByHour = buildExecutiveRequiredByHour(requiredRows, selected.dateKey, lob);
-  const currentOnline = reportAgents.filter((row) => (
-    isExecutivePresentHeadcountRow(row)
-    || hadExecutiveActivityInSelectedHour(row, selected)
-  )).length;
+  const lastReading = data?.hours.at(-1);
+  const currentOnline = live && lastReading && data
+    ? countExecutiveOnlineAgents(agentRows.filter((row) => isReportAgentForLob(row, lob)), data.activeWbs)
+    : null;
 
-  const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }).map((_, hour) => {
-    const queue = queueByHour.get(hour);
-    const backlogLatency = backlogLatencyByHour.get(hour);
-    const agent = agentByHour.get(hour);
-    const isSelectedHour = hour === selected.date.getHours();
+  const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }, (_, hour) => {
+    const reading = byHour.get(hour);
     return {
       hour,
       label: `${String(hour).padStart(2, "0")}h`,
-      cycleDownload: queue?.cycleDownload ?? agent?.cycleDownload ?? null,
-      input: queue?.metric.input ?? null,
-      output: queue?.metric.output ?? null,
-      ahtMs: queue?.metric.ahtMs ?? null,
-      latencyMs: queue?.metric.latencyMs ?? null,
-      maxLatencyMs: backlogLatency?.metric.maxLatencyMs ?? null,
-      backlog: backlogLatency?.metric.backlog ?? null,
+      cycleDownload: reading?.cycleDownload ?? null,
+      input: reading?.input ?? null,
+      output: reading?.output ?? null,
+      ahtMs: reading?.ahtMs ?? null,
+      maxLatencyMs: reading?.maxLatencyMs ?? null,
+      backlog: reading?.backlog ?? null,
       required: requiredByHour.get(hour) ?? null,
-      online: isSelectedHour ? currentOnline : agent?.online ?? null
+      online: reading && reading === lastReading ? currentOnline ?? reading.online : reading?.online ?? null
     };
   });
 
-  const filledBuckets = buckets.filter((bucket) => bucket.cycleDownload);
-  const latest = filledBuckets[filledBuckets.length - 1] ?? null;
-  const previous = latest ? resolveExecutivePreviousHourBucket(filledBuckets, reportRows, reportAgents, requiredRows, selected, latest.hour, lob) : null;
-  const agentRankings = buildExecutiveAgentRankings(reportAgents, latest?.cycleDownload ?? selectedCycle, previous?.cycleDownload ?? null);
+  const latest = lastReading ? buckets[lastReading.hour] : null;
+  const previous = lastReading
+    ? (lastReading.hour > 0 ? byHour.get(lastReading.hour - 1) : data?.previousDayHour)
+    : null;
+  const partial = Boolean(lastReading?.partial);
   const dateLabel = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit", year: "numeric" }).format(selected.date);
-  const latencyTargetMinutes = executiveLatencyTargetMinutes(lob);
-  const latestReadingBetweenHours = Boolean(latest?.cycleDownload && !latest.cycleDownload.endsWith(":00"));
+  const latencyTargetMinutes = lob === "VIDEO" ? VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES : ADS_REPORT_TARGET_LATENCY_MINUTES;
   const cards = [
-    buildAgentKpiCard(latestReadingBetweenHours ? "Submit since prior cycle" : "Last-hour Submit", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
-    buildAgentKpiCard(latestReadingBetweenHours ? "Input since prior cycle" : "Last-hour Input", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
+    buildAgentKpiCard(partial ? "Submit this hour" : "Last-hour Submit", latest?.output ?? null, partial ? null : previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
+    buildAgentKpiCard(partial ? "Input this hour" : "Last-hour Input", latest?.input ?? null, partial ? null : previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
     buildAgentKpiCard("Online agents", latest?.online ?? null, previous?.online ?? null, "number", "up", buildExecutiveTrend(buckets, "online", selected)),
     buildAgentKpiCard("Current Backlog", latest?.backlog ?? null, previous?.backlog ?? null, "number", "down", buildExecutiveTrend(buckets, "backlog", selected))
   ];
-  const inputForecastHistory = buildExecutiveInputForecastHistory(reportRows, buckets, selected, performanceTrend);
+  const forecast = new Map(performanceTrend.filter((point) => point.dateKey === selected.dateKey).map((point) => [point.hour, point.input]));
+  const inputForecastHistory = markExecutiveInputForecastLabels(buckets.map((bucket) => ({
+    label: bucket.label,
+    input: bucket.input,
+    forecast: forecast.get(bucket.hour) ?? null
+  })), lastReading?.hour ?? selected.date.getHours());
 
   return {
     lob,
-    rankingPeriodLabel: latestReadingBetweenHours ? "since prior cycle" : "last hour",
+    rankingPeriodLabel: partial ? "this hour" : "last hour",
     latencyTargetMinutes,
     selectedCycle,
     dateLabel,
-    latestHourLabel: latest?.cycleDownload ?? (selectedCycle || "-"),
+    latestHourLabel: latest?.cycleDownload ?? "—",
     buckets,
     cards,
     heatmap: buildExecutiveHeatmap(buckets, latencyTargetMinutes, lob, inputForecastHistory),
     inputForecastHistory,
     backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
-    topAgents: agentRankings.top,
-    lowAgents: agentRankings.low
+    topAgents: data?.topAgents ?? [],
+    lowAgents: data?.lowAgents ?? []
   };
 }
 
-function resolveExecutivePreviousHourBucket(
-  filledBuckets: ExecutiveHourBucket[],
-  reportRows: QueueReportRow[],
-  reportAgents: AgentRealtimeRow[],
-  requiredRows: StaffCoverageExecutiveRow[],
-  selected: ReturnType<typeof parseRealtimeCycle>,
-  currentHour: number,
-  lob: ExecutiveReportLob
-) {
-  const sameDayPrevious = [...filledBuckets].filter((bucket) => bucket.hour < currentHour).pop() ?? null;
-  if (sameDayPrevious) return sameDayPrevious;
-
-  const previousHourDate = new Date(selected.date);
-  previousHourDate.setHours(currentHour - 1, 59, 59, 999);
-  const previousSelected = buildExecutiveSelectedFromDate(previousHourDate);
-  if (previousSelected.dateKey === selected.dateKey) return null;
-
-  const previousQueueByHour = buildExecutiveQueueBuckets(reportRows, previousSelected);
-  const previousBacklogLatencyByHour = buildExecutiveQueueBuckets(executiveBacklogLatencyRows(reportRows, lob), previousSelected);
-  const previousAgentByHour = buildExecutiveAgentBuckets(reportAgents, previousSelected);
-  const previousRequiredByHour = buildExecutiveRequiredByHour(requiredRows, previousSelected.dateKey, lob);
-  const previousHour = previousHourDate.getHours();
-  const queue = previousQueueByHour.get(previousHour);
-  const backlogLatency = previousBacklogLatencyByHour.get(previousHour);
-  const agent = previousAgentByHour.get(previousHour);
-  if (!queue && !agent) return null;
-
-  return {
-    hour: previousHour,
-    label: `${String(previousHour).padStart(2, "0")}h`,
-    cycleDownload: queue?.cycleDownload ?? agent?.cycleDownload ?? null,
-    input: queue?.metric.input ?? null,
-    output: queue?.metric.output ?? null,
-    ahtMs: queue?.metric.ahtMs ?? null,
-    latencyMs: queue?.metric.latencyMs ?? null,
-    maxLatencyMs: backlogLatency?.metric.maxLatencyMs ?? null,
-    backlog: backlogLatency?.metric.backlog ?? null,
-    required: previousRequiredByHour.get(previousHour) ?? null,
-    online: agent?.online ?? null
-  } satisfies ExecutiveHourBucket;
-}
-
-function buildExecutiveSelectedFromDate(date: Date) {
-  return {
-    date,
-    dateKey: formatDateKey(date),
-    timestamp: date.getTime(),
-    timeLabel: new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date)
-  };
-}
-
-function buildExecutiveInputForecastHistory(_rows: QueueReportRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>, points: PerformanceForecastTrendRow[] = []) {
-  const forecastByHour = new Map(points.filter((p) => p.dateKey === selected.dateKey).map((p) => [p.hour, p.input]));
-  return markExecutiveInputForecastLabels(buckets.map((bucket) => ({
-    label: bucket.label,
-    input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
-    forecast: forecastByHour.get(bucket.hour) ?? null
-  })), selected.date.getHours());
-}
 function markExecutiveInputForecastLabels(rows: Array<{ label: string; input: number | null; forecast: number | null; inputDataLabel?: string; forecastDataLabel?: string }>, currentHour: number) {
   const nextRows = rows.map((row) => ({ ...row }));
   const current = nextRows[currentHour];
@@ -4074,254 +4006,12 @@ function executiveShiftForHour(hour: number) {
   return "noite";
 }
 
-function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const hourlySnapshots = buildExecutiveQueueHourlySnapshots(rows, selected);
-  const deltaByHour = new Map<number, { cycleDownload: string; timestamp: number; metric: QueueMetric }>();
-  let previousSnapshot: (typeof hourlySnapshots)[number] | null = null;
-
-  hourlySnapshots.forEach((snapshot) => {
-    if (snapshot.dateKey === selected.dateKey) {
-      deltaByHour.set(snapshot.hour, {
-        cycleDownload: snapshot.cycleDownload,
-        timestamp: snapshot.timestamp,
-        metric: buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null)
-      });
-    }
-    previousSnapshot = snapshot;
-  });
-
-  return deltaByHour;
-}
-
-function buildExecutiveQueueHourlySnapshots(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const byCycle = new Map<string, QueueMetric[]>();
-  rows.forEach((row) => {
-    row.history.forEach((item) => {
-      const parsed = parseRealtimeCycle(item.cycleDownload, "");
-      if (parsed.timestamp > selected.timestamp) return;
-      const metrics = byCycle.get(item.cycleDownload) ?? [];
-      metrics.push({
-        input: item.input,
-        output: item.output,
-        ahtMs: item.ahtMs,
-        latencyMs: item.latencyMs,
-        maxLatencyMs: item.maxLatencyMs,
-        maxLatencyRowNumber: item.maxLatencyRowNumber,
-        backlog: item.backlog,
-        sourceRows: 1
-      });
-      byCycle.set(item.cycleDownload, metrics);
-    });
-  });
-
-  const latestByDateHour = new Map<string, {
-    cycleDownload: string;
-    timestamp: number;
-    dateKey: string;
-    hour: number;
-    metric: QueueMetric;
-  }>();
-  byCycle.forEach((metrics, cycleDownload) => {
-    const parsed = parseRealtimeCycle(cycleDownload, "");
-    const hour = parsed.date.getHours();
-    const dateHourKey = `${parsed.dateKey}-${hour}`;
-    const existing = latestByDateHour.get(dateHourKey);
-    if (!existing || parsed.timestamp > existing.timestamp) {
-      latestByDateHour.set(dateHourKey, {
-        cycleDownload,
-        timestamp: parsed.timestamp,
-        dateKey: parsed.dateKey,
-        hour,
-        metric: summarizeQueueMetrics(metrics)
-      });
-    }
-  });
-
-  return Array.from(latestByDateHour.values()).sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function buildExecutiveQueueInputByDateHour(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const hourlySnapshots = buildExecutiveQueueHourlySnapshots(rows, selected);
-  const inputByDateHour = new Map<string, Map<number, number>>();
-  let previousSnapshot: (typeof hourlySnapshots)[number] | null = null;
-
-  hourlySnapshots.forEach((snapshot) => {
-    const hourlyInput = inputByDateHour.get(snapshot.dateKey) ?? new Map<number, number>();
-    hourlyInput.set(
-      snapshot.hour,
-      buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null).input
-    );
-    inputByDateHour.set(snapshot.dateKey, hourlyInput);
-    previousSnapshot = snapshot;
-  });
-
-  return inputByDateHour;
-}
-
-function buildExecutiveAgentBuckets(rows: AgentRealtimeRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const byHour = new Map<number, { cycleDownload: string; timestamp: number; metrics: AgentMetric[]; online: number }>();
-  rows.forEach((row) => {
-    const snapshotsByDateHour = new Map<string, AgentRealtimeRow["history"][number] & {
-      timestamp: number;
-      dateKey: string;
-      hour: number;
-    }>();
-    row.history.forEach((item) => {
-      const parsed = parseRealtimeCycle(item.cycleDownload, "");
-      if (parsed.timestamp > selected.timestamp) return;
-      const hour = parsed.date.getHours();
-      const dateHourKey = `${parsed.dateKey}-${hour}`;
-      const existing = snapshotsByDateHour.get(dateHourKey);
-      if (!existing || parsed.timestamp > existing.timestamp) {
-        snapshotsByDateHour.set(dateHourKey, {
-          ...item,
-          timestamp: parsed.timestamp,
-          dateKey: parsed.dateKey,
-          hour
-        });
-      }
-    });
-
-    const orderedSnapshots = Array.from(snapshotsByDateHour.values()).sort((a, b) => a.timestamp - b.timestamp);
-    let previousSnapshot: (typeof orderedSnapshots)[number] | null = null;
-    orderedSnapshots.forEach((snapshot) => {
-      if (snapshot.dateKey !== selected.dateKey) {
-        previousSnapshot = snapshot;
-        return;
-      }
-      const submit = cumulativeDelta(snapshot.submit, previousSnapshot?.submit ?? null);
-      const moderationMs = cumulativeDelta(snapshot.moderationMs, previousSnapshot?.moderationMs ?? null);
-      const metric: AgentMetric = {
-        submit,
-        ahtMs: submit > 0 ? moderationMs / submit : deriveAverageDeltaFromCumulative(snapshot.submit, snapshot.ahtMs, previousSnapshot?.submit ?? null, previousSnapshot?.ahtMs ?? null),
-        moderationMs,
-        timeout: cumulativeDelta(snapshot.timeout, previousSnapshot?.timeout ?? null),
-        refresh: cumulativeDelta(snapshot.refresh, previousSnapshot?.refresh ?? null),
-        queueCount: snapshot.queueIds.length,
-        sourceRows: 1
-      };
-      const existing = byHour.get(snapshot.hour);
-      const next = existing ?? { cycleDownload: snapshot.cycleDownload, timestamp: snapshot.timestamp, metrics: [], online: 0 };
-      next.metrics.push(metric);
-      if (submit > 0) next.online += 1;
-      if (snapshot.timestamp > next.timestamp) {
-        next.cycleDownload = snapshot.cycleDownload;
-        next.timestamp = snapshot.timestamp;
-      }
-      byHour.set(snapshot.hour, next);
-      previousSnapshot = snapshot;
-    });
-  });
-
-  const summarizedByHour = new Map<number, { cycleDownload: string; timestamp: number; metric: ReturnType<typeof summarizeMetrics>; online: number }>();
-  byHour.forEach((bucket, hour) => {
-    summarizedByHour.set(hour, {
-      cycleDownload: bucket.cycleDownload,
-      timestamp: bucket.timestamp,
-      metric: summarizeMetrics(bucket.metrics),
-      online: bucket.online
-    });
-  });
-  return summarizedByHour;
-}
-
-function hadExecutiveActivityInSelectedHour(
-  row: AgentRealtimeRow,
-  selected: ReturnType<typeof parseRealtimeCycle>
-) {
-  const snapshots = row.history
-    .map((item) => ({ ...item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
-    .filter((item) => item.parsed.timestamp <= selected.timestamp)
-    .sort((left, right) => left.parsed.timestamp - right.parsed.timestamp);
-  const current = snapshots
-    .filter((item) => item.parsed.dateKey === selected.dateKey && item.parsed.date.getHours() === selected.date.getHours())
-    .at(-1);
-  if (!current) return false;
-  const previous = snapshots.filter((item) => item.parsed.timestamp < current.parsed.timestamp).at(-1);
-  return cumulativeDelta(current.submit, previous?.submit ?? null) > 0;
-}
-
-function buildExecutiveQueueDeltaMetric(current: QueueMetric, previous: QueueMetric | null): QueueMetric {
-  const input = cumulativeDelta(current.input, previous?.input ?? null);
-  const output = cumulativeDelta(current.output, previous?.output ?? null);
-  return {
-    ...current,
-    input,
-    output,
-    ahtMs: deriveAverageDeltaFromCumulative(current.output, current.ahtMs, previous?.output ?? null, previous?.ahtMs ?? null),
-    latencyMs: deriveAverageDeltaFromCumulative(current.input, current.latencyMs, previous?.input ?? null, previous?.latencyMs ?? null) ?? current.latencyMs,
-    backlog: current.backlog,
-    maxLatencyMs: current.maxLatencyMs
-  };
-}
-
-function buildExecutiveAgentRankings(rows: AgentRealtimeRow[], currentCycle: string, previousCycle: string | null): { top: ExecutiveAgentPerformanceRow[]; low: ExecutiveAgentPerformanceRow[] } {
-  const ranked = rows
-    .map((row) => {
-      const current = findAgentHistorySnapshotAtOrBefore(row, currentCycle);
-      if (!current) return null;
-      const previous = previousCycle ? findAgentHistorySnapshotAtOrBefore(row, previousCycle) : findPreviousAgentHistorySnapshot(row, current.cycleDownload);
-      const submit = cumulativeDelta(current.submit, previous?.submit ?? null);
-      const moderationMs = cumulativeDelta(current.moderationMs, previous?.moderationMs ?? null);
-      return {
-        name: row.displayName,
-        wbLogin: row.wbLogin || row.rawWbLogin,
-        submit,
-        ahtMs: submit > 0 ? moderationMs / submit : null
-      };
-    })
-    .filter((row): row is ExecutiveAgentPerformanceRow => row !== null && row.submit > 0);
-
-  return {
-    top: [...ranked]
-      .sort((a, b) => b.submit - a.submit || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }))
-      .slice(0, 5),
-    low: [...ranked]
-      .sort((a, b) => a.submit - b.submit || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }))
-      .slice(0, 5)
-  };
-}
-
-function findAgentHistorySnapshotAtOrBefore(row: AgentRealtimeRow, cycleDownload: string) {
-  const target = parseRealtimeCycle(cycleDownload, "");
-  return row.history
-    .map((item) => ({ item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
-    .filter(({ parsed }) => parsed.dateKey === target.dateKey && parsed.timestamp <= target.timestamp)
-    .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp)[0]?.item ?? null;
-}
-
-function findPreviousAgentHistorySnapshot(row: AgentRealtimeRow, cycleDownload: string) {
-  const target = parseRealtimeCycle(cycleDownload, "");
-  return row.history
-    .map((item) => ({ item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
-    .filter(({ parsed }) => parsed.timestamp < target.timestamp)
-    .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp)[0]?.item ?? null;
-}
-
-function cumulativeDelta(current: number | null | undefined, previous: number | null | undefined) {
-  const currentValue = Number.isFinite(current) ? Number(current) : 0;
-  if (!Number.isFinite(previous)) return currentValue;
-  const previousValue = Number(previous);
-  return currentValue >= previousValue ? currentValue - previousValue : currentValue;
-}
-
 function averageNumber(values: number[]) {
   if (!values.length) return null;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function deriveAverageDeltaFromCumulative(currentTotal: number, currentAverage: number | null, previousTotal: number | null | undefined, previousAverage: number | null | undefined) {
-  if (currentAverage === null) return null;
-  if (!Number.isFinite(previousTotal) || previousAverage === null || previousAverage === undefined) return currentAverage;
-  const deltaTotal = cumulativeDelta(currentTotal, previousTotal);
-  if (deltaTotal <= 0) return currentAverage;
-  const previousTotalValue = Number(previousTotal);
-  if (currentTotal < previousTotalValue) return currentAverage;
-  const deltaWeighted = currentAverage * currentTotal - previousAverage * previousTotalValue;
-  return deltaWeighted >= 0 ? deltaWeighted / deltaTotal : currentAverage;
-}
-
-function buildExecutiveTrend(buckets: ExecutiveHourBucket[], key: keyof Pick<ExecutiveHourBucket, "input" | "output" | "ahtMs" | "latencyMs" | "maxLatencyMs" | "backlog" | "online">, selected: ReturnType<typeof parseRealtimeCycle>): TrendPoint[] {
+function buildExecutiveTrend(buckets: ExecutiveHourBucket[], key: keyof Pick<ExecutiveHourBucket, "input" | "output" | "ahtMs" | "maxLatencyMs" | "backlog" | "online">, selected: ReturnType<typeof parseRealtimeCycle>): TrendPoint[] {
   return buckets
     .filter((bucket) => bucket.hour <= selected.date.getHours() && bucket[key] !== null)
     .map((bucket, index, filtered) => {
