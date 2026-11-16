@@ -159,7 +159,7 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
     assert.equal((await duration()).duration, "01:00:00");
   });
 
-  await t.test("the unchanged production upload upserts the same base instead of accumulating it", async c => {
+  await t.test("production upload upserts the same base and ignores latency from duplicates with zero submits", async c => {
     await fixture(c);
     mockPrismaDelegate(c, "user", { findUnique: async () => ({
       id: "admin", email: "admin@example.test", status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" }
@@ -180,8 +180,13 @@ test("Moderation Duration: production SQL in isolated PostgreSQL", async t => {
       payload: { bzTime: day + "T08:00:00Z", bzDay: day, submitNum: 10, moderationSeconds: 1359.82,
         ahtSeconds: 135.982, latencyMinutesSum: 45, queueId: "9596", productionKey: day + " 08:00|9596|wb_a" }
     };
-    await commitProductionImport(actor, [row]);
-    await commitProductionImport(actor, [row]);
+    const duplicateUpload = [row, {
+      ...row,
+      rowNumber: 2,
+      payload: { ...row.payload, submitNum: 0, moderationSeconds: 0, ahtSeconds: 0, latencyMinutesSum: 300 }
+    }];
+    await commitProductionImport(actor, duplicateUpload);
+    await commitProductionImport(actor, duplicateUpload);
     assert.equal((await duration()).duration, "00:22:40");
     const raw = await db.query('SELECT "moderationSeconds", "submitNum", "latencyMinutesSum" FROM "ProductionRecord"');
     assert.deepEqual(raw.rows, [{ moderationSeconds: 1359.82, submitNum: 10, latencyMinutesSum: 45 }]);

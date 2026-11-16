@@ -79,7 +79,7 @@ type PerformanceSummary = {
   moderationSeconds: number;
   moderationHours: number;
   ahtSeconds: number;
-  latencyMinutes: number;
+  latencyMinutes: number | null;
   agents?: number;
   queues?: number;
   lastImport?: { fileName: string; importedAt: string; rowsValid: number; status: string } | null;
@@ -1602,7 +1602,7 @@ function QueueView({
   const chartRows = rows.slice(-chartLimit);
   const summaryInput = payload?.summary.input || queueSummary.input;
   const summarySubmit = payload?.summary.submit || queueSummary.submit;
-  const summaryLatency = payload?.summary.latencyMinutes || queueSummary.latencyMinutes;
+  const summaryLatency = payload?.summary.latencyMinutes;
   const summaryRecords = payload?.summary.records || queueSummary.records;
   const summaryQueues = payload?.summary.queues ?? queueSummary.queues;
   const handleQueueSort = (key: QueueSortKey) => {
@@ -2355,35 +2355,34 @@ function summarizeQueueRows(rows: PerformanceQueueRow[]) {
       acc.records += row.records || 0;
       acc.input += row.input || 0;
       acc.submit += row.submit || 0;
-      acc.moderationSeconds += row.moderationSeconds || 0;
-      acc.latencyWeighted += (row.latencyMinutes || 0) * (row.submit || 0);
-      acc.latencyWeight += row.submit || 0;
       return acc;
     },
-    { records: 0, input: 0, submit: 0, moderationSeconds: 0, latencyWeighted: 0, latencyWeight: 0 }
+    { records: 0, input: 0, submit: 0 }
   );
 
   return {
     records: summary.records,
     input: summary.input,
     submit: summary.submit,
-    queues: rows.length,
-    latencyMinutes: summary.latencyWeight > 0 ? summary.latencyWeighted / summary.latencyWeight : 0,
-    ahtSeconds: summary.submit > 0 ? summary.moderationSeconds / summary.submit : 0
+    queues: rows.length
   };
 }
 
 function compareQueueRows(a: PerformanceQueueRow, b: PerformanceQueueRow, key: QueueSortKey, direction: QueueSortDirection) {
   const multiplier = direction === "asc" ? 1 : -1;
   if (key === "queue") return a.queueName.localeCompare(b.queueName, "pt-BR", { sensitivity: "base" }) * multiplier;
+  if (key === "latency" && (a.latencyMinutes === null || b.latencyMinutes === null)) {
+    return Number(a.latencyMinutes === null) - Number(b.latencyMinutes === null)
+      || a.queueName.localeCompare(b.queueName, "pt-BR", { sensitivity: "base" });
+  }
   const valueA = key === "input" ? a.input
     : key === "submit" ? a.submit
-      : key === "latency" ? a.latencyMinutes
+      : key === "latency" ? (a.latencyMinutes ?? 0)
         : key === "aht" ? a.ahtSeconds
           : a.agents;
   const valueB = key === "input" ? b.input
     : key === "submit" ? b.submit
-      : key === "latency" ? b.latencyMinutes
+      : key === "latency" ? (b.latencyMinutes ?? 0)
         : key === "aht" ? b.ahtSeconds
           : b.agents;
   if (valueA !== valueB) return (valueA - valueB) * multiplier;

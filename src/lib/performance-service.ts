@@ -238,6 +238,7 @@ type ProductionDashboardAggregate = {
   submit: number;
   moderationSeconds: number;
   latencyMinutesSum: number;
+  latencySubmits: number;
   records: number;
 };
 
@@ -552,13 +553,19 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const bucketSql = productionBucketSql(granularity);
   const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
   const employeeSql = ownEmployeeId ? Prisma.sql`AND "employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const latencyFilter = Prisma.sql`WHERE "submitNum" > 0 AND "latencyMinutesSum" >= 0`;
+  const latencyTotals = Prisma.sql`
+    COALESCE(SUM("latencyMinutesSum") FILTER (${latencyFilter}), 0)::double precision AS "latencyMinutesSum",
+    COALESCE(SUM("submitNum") FILTER (${latencyFilter}), 0)::double precision AS "latencySubmits"
+  `;
+  type ProductionTotals = Pick<ProductionDashboardAggregate, "submit" | "moderationSeconds" | "latencyMinutesSum" | "latencySubmits" | "records">;
   const [productionTrendRows, volumeTrendRows, productionQueueRows, volumeQueueRows] = await Promise.all([
-    query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<{ bucket: Date; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number }>>(Prisma.sql`
+    query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<ProductionTotals & { bucket: Date }>>(Prisma.sql`
       SELECT
         ${bucketSql} AS "bucket",
         COALESCE(SUM("submitNum"), 0)::double precision AS "submit",
         COALESCE(SUM("moderationSeconds"), 0)::double precision AS "moderationSeconds",
-        COALESCE(SUM("latencyMinutesSum"), 0)::double precision AS "latencyMinutesSum",
+        ${latencyTotals},
         COUNT(*)::integer AS "records"
       FROM "ProductionRecord"
       WHERE "bzDay" >= ${productionPeriod.start}
@@ -580,12 +587,12 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
       GROUP BY ${bucketSql}
       ORDER BY ${bucketSql} ASC
     `),
-    query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<{ queueId: string; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number; agents: number }>>(Prisma.sql`
+    query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<ProductionTotals & { queueId: string; agents: number }>>(Prisma.sql`
       SELECT
         "queueId",
         COALESCE(SUM("submitNum"), 0)::double precision AS "submit",
         COALESCE(SUM("moderationSeconds"), 0)::double precision AS "moderationSeconds",
-        COALESCE(SUM("latencyMinutesSum"), 0)::double precision AS "latencyMinutesSum",
+        ${latencyTotals},
         COUNT(*)::integer AS "records",
         COUNT(DISTINCT COALESCE("employeeId", "wbLogin"))::integer AS "agents"
       FROM "ProductionRecord"
@@ -618,6 +625,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     aggregate.submit += Number(row.submit ?? 0);
     aggregate.moderationSeconds += Number(row.moderationSeconds ?? 0);
     aggregate.latencyMinutesSum += Number(row.latencyMinutesSum ?? 0);
+    aggregate.latencySubmits += Number(row.latencySubmits ?? 0);
     aggregate.records += Number(row.records ?? 0);
   }
   for (const row of volumeTrendRows) {
@@ -651,6 +659,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
       submit: Number(row.submit ?? 0),
       moderationSeconds: Number(row.moderationSeconds ?? 0),
       latencyMinutesSum: Number(row.latencyMinutesSum ?? 0),
+      latencySubmits: Number(row.latencySubmits ?? 0),
       records: Number(row.records ?? 0),
       queueId,
       queueName: getQueueNameById(queueId),
@@ -3390,7 +3399,7 @@ async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchI
       wbLogin: row.wbLogin,
       employeeId: row.employeeId ?? null,
       ahtSeconds: nullableNumber(row.payload.ahtSeconds),
-      latencyMinutesSum: nullableNumber(row.payload.latencyMinutesSum),
+      latencyMinutesSum: parseNumber(row.payload.latencyMinutesSum),
       submitNum: Number(row.payload.submitNum ?? 0),
       queueId: String(row.payload.queueId),
       moderationSeconds: Number(row.payload.moderationSeconds ?? 0),
@@ -3613,23 +3622,27 @@ function aggregateProductionRows(rows: PerformancePreviewRow[]) {
   for (const row of rows) {
     const key = String(row.payload.productionKey ?? row.uniqueKey ?? "");
     if (!key) continue;
+    const rowSubmits = Number(row.payload.submitNum ?? 0);
+    const rowLatency = parseNumber(row.payload.latencyMinutesSum);
+    const eligibleLatency = rowSubmits > 0 && rowLatency !== null && rowLatency >= 0 ? rowLatency : null;
     const current = byKey.get(key);
     if (!current) {
       byKey.set(key, {
         ...row,
         payload: {
           ...row.payload,
-          submitNum: Number(row.payload.submitNum ?? 0),
+          submitNum: rowSubmits,
           moderationSeconds: Number(row.payload.moderationSeconds ?? 0),
-          latencyMinutesSum: nullableNumber(row.payload.latencyMinutesSum) ?? 0
+          latencyMinutesSum: eligibleLatency
         }
       });
       continue;
     }
 
-    const submitNum = Number(current.payload.submitNum ?? 0) + Number(row.payload.submitNum ?? 0);
+    const submitNum = Number(current.payload.submitNum ?? 0) + rowSubmits;
     const moderationSeconds = Number(current.payload.moderationSeconds ?? 0) + Number(row.payload.moderationSeconds ?? 0);
-    const latencyMinutesSum = (nullableNumber(current.payload.latencyMinutesSum) ?? 0) + (nullableNumber(row.payload.latencyMinutesSum) ?? 0);
+    const currentLatency = parseNumber(current.payload.latencyMinutesSum);
+    const latencyMinutesSum = eligibleLatency === null ? currentLatency : (currentLatency ?? 0) + eligibleLatency;
     current.payload = {
       ...current.payload,
       submitNum,
@@ -5524,12 +5537,14 @@ function buildProductionComparison(
     submitDelta: current.submit - previous.submit,
     moderationHoursDelta: round2(current.moderationHours - previous.moderationHours),
     ahtSecondsDelta: round2(current.ahtSeconds - previous.ahtSeconds),
-    latencyMinutesDelta: round2(current.latencyMinutes - previous.latencyMinutes)
+    latencyMinutesDelta: current.latencyMinutes === null || previous.latencyMinutes === null
+      ? null
+      : round2(current.latencyMinutes - previous.latencyMinutes)
   };
 }
 
 function emptyProductionAggregate(): ProductionDashboardAggregate {
-  return { input: 0, submit: 0, moderationSeconds: 0, latencyMinutesSum: 0, records: 0 };
+  return { input: 0, submit: 0, moderationSeconds: 0, latencyMinutesSum: 0, latencySubmits: 0, records: 0 };
 }
 
 function ensureProductionAggregate(map: Map<string, ProductionDashboardAggregate>, key: string) {
@@ -5538,9 +5553,13 @@ function ensureProductionAggregate(map: Map<string, ProductionDashboardAggregate
 }
 
 function incrementProductionAggregate<T extends ProductionDashboardAggregate>(aggregate: T, record: Pick<ProductionRecordForDashboard, "submitNum" | "moderationSeconds" | "latencyMinutesSum">) {
-  aggregate.submit += Number(record.submitNum || 0);
+  const submit = Number(record.submitNum || 0);
+  aggregate.submit += submit;
   aggregate.moderationSeconds += Number(record.moderationSeconds || 0);
-  aggregate.latencyMinutesSum += Number(record.latencyMinutesSum || 0);
+  if (submit > 0 && record.latencyMinutesSum !== null && record.latencyMinutesSum >= 0) {
+    aggregate.latencyMinutesSum += record.latencyMinutesSum;
+    aggregate.latencySubmits += submit;
+  }
   aggregate.records += 1;
   return aggregate;
 }
@@ -5564,6 +5583,7 @@ function summarizeProductionDashboardAggregates(aggregates: ProductionDashboardA
     summary.submit += aggregate.submit;
     summary.moderationSeconds += aggregate.moderationSeconds;
     summary.latencyMinutesSum += aggregate.latencyMinutesSum;
+    summary.latencySubmits += aggregate.latencySubmits;
     summary.records += aggregate.records;
   }
   return summary;
@@ -5580,7 +5600,7 @@ function serializeProductionSummary(aggregate: ProductionDashboardAggregate) {
     moderationSeconds: round2(aggregate.moderationSeconds),
     moderationHours,
     ahtSeconds: submit > 0 ? round2(aggregate.moderationSeconds / submit) : 0,
-    latencyMinutes: submit > 0 ? round2(aggregate.latencyMinutesSum / submit) : 0
+    latencyMinutes: aggregate.latencySubmits > 0 ? round2(aggregate.latencyMinutesSum / aggregate.latencySubmits) : null
   };
 }
 

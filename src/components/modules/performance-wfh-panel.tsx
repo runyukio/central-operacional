@@ -1123,7 +1123,7 @@ type PerformanceProductionSummary = {
   moderationSeconds: number;
   moderationHours: number;
   ahtSeconds: number;
-  latencyMinutes: number;
+  latencyMinutes: number | null;
 };
 
 
@@ -1169,7 +1169,7 @@ type PerformanceProductionResponse = {
       submitDelta: number;
       moderationHoursDelta: number;
       ahtSecondsDelta: number;
-      latencyMinutesDelta: number;
+      latencyMinutesDelta: number | null;
     };
     lastImport: null | {
       fileName: string;
