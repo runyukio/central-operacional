@@ -277,12 +277,12 @@ const realtimeRawDeleteLimit = Number.isFinite(configuredRealtimeRawDeleteLimit)
   : 10_000;
 
 const getCachedQueueRealtimeView = unstable_cache(
-  async (cycleDownload: string, cycleGrouping: RealtimeCycleGrouping) => buildQueueRealtimeView({ cycleDownload: cycleDownload || undefined, cycleGrouping }),
+  async (options: RealtimeSnapshotOptions & { latestImportId?: string }) => buildQueueRealtimeView(options),
   ["realtime-queue-view-v1"],
   { revalidate: 60, tags: ["realtime-queue-view"] }
 );
 const getCachedAgentRealtimeView = unstable_cache(
-  async (cycleDownload: string, cycleGrouping: RealtimeCycleGrouping) => buildAgentRealtimeView({ cycleDownload: cycleDownload || undefined, cycleGrouping }),
+  async (options: RealtimeSnapshotOptions & { latestImportId?: string }) => buildAgentRealtimeView(options),
   ["realtime-agent-view-v1"],
   { revalidate: 60, tags: ["realtime-agent-view"] }
 );
@@ -667,9 +667,15 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
     };
   }
 
+  const viewOptions = {
+    cycleDownload: options.cycleDownload || undefined,
+    cycleGrouping: options.cycleGrouping ?? "original",
+    // Include the latest successful batch in the live cache key.
+    latestImportId: options.cycleGrouping === "hour-live" ? batch.id : undefined
+  } satisfies RealtimeSnapshotOptions & { latestImportId?: string };
   const [queueRealtime, agentRealtime] = await Promise.all([
-    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : getCachedQueueRealtimeView(options.cycleDownload ?? "", options.cycleGrouping ?? "original"),
-    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : getCachedAgentRealtimeView(options.cycleDownload ?? "", options.cycleGrouping ?? "original")
+    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : getCachedQueueRealtimeView(viewOptions),
+    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : getCachedAgentRealtimeView(viewOptions)
   ]);
 
   const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
@@ -2295,7 +2301,7 @@ function compareRealtimeCyclesDesc(a: RealtimeCycleOption, b: RealtimeCycleOptio
 
 function formatRealtimeCycleOptions(cycleOptions: RealtimeCycleOption[], grouping?: RealtimeCycleGrouping) {
   return groupRealtimeCycles(cycleOptions, grouping)
-    .sort(grouping === "hour" ? (a, b) => b.value.localeCompare(a.value) : compareRealtimeCyclesDesc)
+    .sort(grouping && grouping !== "original" ? (a, b) => b.value.localeCompare(a.value) : compareRealtimeCyclesDesc)
     .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
 }
 

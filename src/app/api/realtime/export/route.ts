@@ -10,9 +10,10 @@ export async function GET(request: Request) {
   const actor = await getApiActor();
   const { searchParams } = new URL(request.url);
   const view = searchParams.get("view");
+  const grouping = searchParams.get("cycleGrouping");
   const result = await exportRealtimeAgents(actor, {
     cycleDownload: searchParams.get("cycleDownload") ?? undefined,
-    cycleGrouping: searchParams.get("cycleGrouping") === "hour" ? "hour" : "original",
+    cycleGrouping: grouping === "hour" || grouping === "hour-live" ? grouping : "original",
     view: view === "agents" || view === "queues" || view === "both" ? view : undefined,
     search: searchParams.get("search"),
     crossingStatus: searchParams.get("crossingStatus"),

@@ -15,8 +15,10 @@ export async function GET(request: Request) {
   }
 
   try {
-    const cycleDownload = new URL(request.url).searchParams.get("cycleDownload")?.trim() || undefined;
-    const report = await getAdsExecutiveReportSnapshot(actor, cycleDownload);
+    const { searchParams } = new URL(request.url);
+    const cycleDownload = searchParams.get("cycleDownload")?.trim() || undefined;
+    const cycleGrouping = searchParams.get("cycleGrouping") === "hour-live" ? "hour-live" : undefined;
+    const report = await getAdsExecutiveReportSnapshot(actor, cycleDownload, cycleGrouping);
     return buildXlsxResponse(buildAdsExecutiveHealthMapXlsx(report));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not export the ADS hourly health map.";

@@ -1,4 +1,4 @@
-export type RealtimeCycleGrouping = "hour" | "original";
+export type RealtimeCycleGrouping = "hour" | "hour-live" | "original";
 
 type CycleOption = { value: string; importedAt: Date | string };
 
@@ -16,10 +16,15 @@ export function realtimeClosedHourStart(cycle: string): string | null {
   return new Date(end - 3_600_000).toISOString().slice(0, 16).replace("T", " ");
 }
 
-// Prefer the exact hour for comparisons. If it is missing, keep the latest
-// available snapshot and its actual timestamp.
+// Use the newest reading in the live hour and prefer the exact hour in history.
 export function groupRealtimeCycles<T extends CycleOption>(cycles: T[], grouping?: RealtimeCycleGrouping): T[] {
-  if (grouping !== "hour") return cycles;
+  if (!grouping || grouping === "original") return cycles;
+  const liveHour = grouping === "hour-live"
+    ? cycles.reduce((latest, cycle) => {
+        const hour = realtimeCycleHour(cycle.value);
+        return hour > latest ? hour : latest;
+      }, "")
+    : "";
   const hours = new Map<string, T>();
   for (const cycle of cycles) {
     const hour = realtimeCycleHour(cycle.value);
@@ -31,7 +36,7 @@ export function groupRealtimeCycles<T extends CycleOption>(cycles: T[], grouping
 
     const isFullHour = cycle.value.endsWith(":00");
     const currentIsFullHour = current.value.endsWith(":00");
-    const shouldReplace = isFullHour !== currentIsFullHour
+    const shouldReplace = hour !== liveHour && isFullHour !== currentIsFullHour
       ? isFullHour
       : cycle.value > current.value || (cycle.value === current.value
         && new Date(cycle.importedAt).getTime() > new Date(current.importedAt).getTime());
@@ -42,7 +47,7 @@ export function groupRealtimeCycles<T extends CycleOption>(cycles: T[], grouping
 
 export function selectRealtimeCycle(cycles: Array<{ value: string }>, requested?: string, grouping?: RealtimeCycleGrouping) {
   return cycles.find((cycle) => cycle.value === requested)?.value
-    ?? (grouping === "hour" && requested
+    ?? (grouping && grouping !== "original" && requested
       ? cycles.find((cycle) => realtimeCycleHour(cycle.value) === realtimeCycleHour(requested))?.value : undefined)
     ?? cycles[0]?.value ?? "";
 }

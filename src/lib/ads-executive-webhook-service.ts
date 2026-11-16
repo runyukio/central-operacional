@@ -296,8 +296,8 @@ export async function sendLatestAdsBacklogHourlyReport(): Promise<AdsExecutiveWe
   };
 }
 
-export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?: string) {
-  const realtime = await getRealtimeSnapshot(actor, { view: "both", cycleDownload });
+export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?: string, cycleGrouping?: "hour-live") {
+  const realtime = await getRealtimeSnapshot(actor, { view: "both", cycleDownload, cycleGrouping });
   if ("error" in realtime && realtime.error) throw new Error(realtime.error);
   const data = "data" in realtime ? realtime.data : null;
   const selectedCycle = data?.queueView.selectedCycle || data?.agents.selectedCycle;

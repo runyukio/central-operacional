@@ -342,6 +342,7 @@ type ExecutiveAgentPerformanceRow = {
 type ExecutiveReportLob = "ADS" | "VIDEO";
 type ExecutiveReport = {
   lob: ExecutiveReportLob;
+  rankingPeriodLabel: string;
   latencyTargetMinutes: number;
   selectedCycle: string;
   dateLabel: string;
@@ -482,6 +483,8 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
   const effectiveTab = clientQueuesOnly ? "queues" : executiveOnly ? "executive" : activeTab;
+  const liveExecutive = effectiveTab === "executive" && followLatestCycle;
+  const cycleToLoad = liveExecutive ? "" : selectedCycle;
 
   async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues") {
     snapshotAbortRef.current?.abort();
@@ -491,7 +494,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     else setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ cycleGrouping: "hour" });
+      const params = new URLSearchParams({ cycleGrouping: liveExecutive ? "hour-live" : "hour" });
       if (cycle) params.set("cycleDownload", cycle);
       params.set("view", view);
       const response = await fetch(`/api/realtime?${params.toString()}`, { cache: "no-store", signal: controller.signal });
@@ -499,7 +502,9 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       if (!response.ok) throw new Error(json.message || json.error || "Não foi possível carregar Real Time.");
       const nextPayload = json as RealTimePayload;
       setPayload(nextPayload);
-      const nextSelectedCycle = view === "queues" ? nextPayload.data.queueView.selectedCycle : nextPayload.data.agents.selectedCycle;
+      const nextSelectedCycle = view === "queues" || effectiveTab === "executive"
+        ? nextPayload.data.queueView.selectedCycle || nextPayload.data.agents.selectedCycle
+        : nextPayload.data.agents.selectedCycle;
       if (nextSelectedCycle && (!cycle || nextSelectedCycle !== cycle)) setSelectedCycle(nextSelectedCycle);
     } catch (currentError) {
       if (currentError instanceof DOMException && currentError.name === "AbortError") return;
@@ -555,6 +560,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     const params = activeTab !== "agents"
       ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", effectiveTab === "report" ? { search: reportSearch, lob: reportLob === "TNS" ? "" : reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
       : buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
+    if (liveExecutive) params.set("cycleGrouping", "hour-live");
     params.set("view", effectiveTab === "agents" ? "agents" : "queues");
     params.set("sortBy", effectiveTab === "agents" ? `${agentSort.key}_${agentSort.direction}` : `${queueSort.key}_${queueSort.direction}`);
     window.location.assign(`/api/realtime/export?${params.toString()}`);
@@ -577,12 +583,12 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       setLoading(false);
       return;
     }
-    void loadSnapshot(selectedCycle, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues");
+    void loadSnapshot(cycleToLoad, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCycle, activeTab, reportLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
+  }, [cycleToLoad, liveExecutive, activeTab, reportLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -864,7 +870,12 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
             {useEnglishChrome ? "Hourly cycle" : "Ciclo por hora"}
-            <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={(cycle) => changeCycle(cycle)} />
+            <RealtimeCyclePicker
+              value={selectedCycleValue}
+              cycles={cycles}
+              onChange={(cycle) => changeCycle(cycle)}
+              showImportTime={effectiveTab === "executive"}
+            />
           </label>
           <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
             {useEnglishChrome ? "Previous Cycle" : "Ciclo anterior"}
@@ -983,7 +994,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
           ) : effectiveTab === "report" ? (
             <ReportTable rows={reportRows} reportLob={reportLob} onDownloadQueues={downloadReportQueues} />
           ) : (
-            <ExecutiveReportDashboard report={executiveReport} />
+            <ExecutiveReportDashboard report={executiveReport} live={liveExecutive} />
           )
         ) : (
           <div className="px-4 py-16 text-center">
@@ -1001,7 +1012,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   );
 }
 
-function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
+function ExecutiveReportDashboard({ report, live }: { report: ExecutiveReport; live: boolean }) {
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1017,7 +1028,7 @@ function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
           {report.lob === "ADS" ? (
             <button
               type="button"
-              onClick={() => downloadAdsExecutiveHealthMap(report.selectedCycle)}
+              onClick={() => downloadAdsExecutiveHealthMap(report.selectedCycle, live)}
               className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950"
             >
               <Download className="h-4 w-4" />
@@ -1052,7 +1063,7 @@ function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
 
         <section className="grid gap-4 xl:grid-cols-2">
           <ExecutiveRankingCard
-            title="Top performance · last hour"
+            title={`Top performance · ${report.rankingPeriodLabel}`}
             rows={report.topAgents.map((agent) => ({
               title: agent.name,
               subtitle: `${agent.wbLogin} · Submit ${formatInteger(agent.submit)} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
@@ -1060,7 +1071,7 @@ function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
             }))}
           />
           <ExecutiveRankingCard
-            title="Low performance · last hour"
+            title={`Low performance · ${report.rankingPeriodLabel}`}
             rows={report.lowAgents.map((agent) => ({
               title: agent.name,
               subtitle: `${agent.wbLogin} · Submit ${formatInteger(agent.submit)} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
@@ -1121,9 +1132,10 @@ function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
   );
 }
 
-function downloadAdsExecutiveHealthMap(selectedCycle: string) {
+function downloadAdsExecutiveHealthMap(selectedCycle: string, live: boolean) {
   const params = new URLSearchParams();
   if (selectedCycle) params.set("cycleDownload", selectedCycle);
+  if (live) params.set("cycleGrouping", "hour-live");
   window.location.assign(`/api/realtime/executive/ads/export?${params.toString()}`);
 }
 
@@ -1687,17 +1699,31 @@ function LatencyAdherencePill({ status }: { status: LatencyAdherenceStatus }) {
   );
 }
 
+const realtimeImportTimeFormatter = new Intl.DateTimeFormat("pt-BR", {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "America/Sao_Paulo"
+});
+
 function RealtimeCyclePicker({
   value,
   cycles,
-  onChange
+  onChange,
+  showImportTime = false
 }: {
   value: string;
   cycles: Array<{ value: string; batchId?: string; importedAt: string; importedAtLabel: string; rows: number }>;
   onChange: (value: string) => void;
+  showImportTime?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const parsedCycles = useMemo(() => cycles.map((cycle) => ({ ...cycle, ...parseRealtimeCycle(cycle.value, cycle.importedAt) })), [cycles]);
+  const parsedCycles = useMemo(() => cycles.map((cycle) => {
+    const parsed = parseRealtimeCycle(cycle.value, cycle.importedAt);
+    const updateTime = showImportTime && cycle.importedAt
+      ? realtimeImportTimeFormatter.format(new Date(cycle.importedAt))
+      : parsed.timeLabel;
+    return { ...cycle, ...parsed, updateTime };
+  }), [cycles, showImportTime]);
   const selected = parsedCycles.find((cycle) => cycle.value === value) ?? parsedCycles[0];
   const selectedDate = selected?.date;
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(selected?.date ?? new Date()));
@@ -1727,7 +1753,7 @@ function RealtimeCyclePicker({
           <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
           <span className="truncate">{selected ? `${formatDateShort(selected.date)} - ${selected.timeLabel.slice(0, 2)}:00` : "Selecione um ciclo"}</span>
         </span>
-        <span className="shrink-0 text-[11px] font-bold text-muted">Atualização {selected?.timeLabel ?? "—"}</span>
+        <span className="shrink-0 text-[11px] font-bold text-muted">Atualização {selected?.updateTime ?? "—"}</span>
         <span className="text-xs font-black text-muted">{open ? "▲" : "▼"}</span>
       </button>
       {open ? (
@@ -1788,7 +1814,7 @@ function RealtimeCyclePicker({
                   className={cn("w-full rounded-2xl px-3 py-2 text-left text-sm font-black transition", value === cycle.value ? "bg-blue-600 text-white" : "bg-white hover:bg-blue-50 hover:text-blue-700")}
                 >
                   <span className="block">{cycle.timeLabel.slice(0, 2)}:00</span>
-                  <span className={cn("text-[11px] font-bold", value === cycle.value ? "text-blue-100" : "text-muted")}>Atualização {cycle.timeLabel} · {cycle.rows} linha(s)</span>
+                  <span className={cn("text-[11px] font-bold", value === cycle.value ? "text-blue-100" : "text-muted")}>Atualização {cycle.updateTime} · {cycle.rows} linha(s)</span>
                 </button>
               ))}
               {!selectedDayCycles.length ? <p className="rounded-2xl bg-white px-3 py-6 text-center text-sm font-bold text-muted">Nenhum ciclo neste dia.</p> : null}
@@ -2758,12 +2784,12 @@ function downloadExecutiveReportImage(report: ExecutiveReport) {
   drawExecutiveExportChartPanel(ctx, "Input x Forecast", `Real ${report.lob} volume against forecast by hour`, margin, 1092, chartPanelWidth, 560, () => {
     drawExecutiveExportInputForecastChart(ctx, report, margin + 42, 1178, chartPanelWidth - 84, 420);
   });
-  drawExecutiveExportRanking(ctx, "Top performance · last hour", report.topAgents, rankingX, 1092, rankingPanelWidth, 560);
+  drawExecutiveExportRanking(ctx, `Top performance · ${report.rankingPeriodLabel}`, report.topAgents, rankingX, 1092, rankingPanelWidth, 560);
 
   drawExecutiveExportChartPanel(ctx, "Backlog", `${report.lob} backlog through the day`, margin, 1702, chartPanelWidth, 560, () => {
     drawExecutiveExportBacklogChart(ctx, report, margin + 42, 1788, chartPanelWidth - 84, 420);
   });
-  drawExecutiveExportRanking(ctx, "Low performance · last hour", report.lowAgents, rankingX, 1702, rankingPanelWidth, 560);
+  drawExecutiveExportRanking(ctx, `Low performance · ${report.rankingPeriodLabel}`, report.lowAgents, rankingX, 1702, rankingPanelWidth, 560);
 
   drawText(ctx, "Generated from Central Operacional", margin, height - 46, 17, "#94A3B8", "850");
   downloadCanvas(canvas, `executive-${report.lob.toLowerCase()}-radar-${safeCanvasFileName(report.selectedCycle || report.latestHourLabel)}.png`);
@@ -3852,9 +3878,10 @@ function buildExecutiveReport(
   const agentRankings = buildExecutiveAgentRankings(reportAgents, latest?.cycleDownload ?? selectedCycle, previous?.cycleDownload ?? null);
   const dateLabel = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit", year: "numeric" }).format(selected.date);
   const latencyTargetMinutes = executiveLatencyTargetMinutes(lob);
+  const latestReadingBetweenHours = Boolean(latest?.cycleDownload && !latest.cycleDownload.endsWith(":00"));
   const cards = [
-    buildAgentKpiCard("Last-hour Submit", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
-    buildAgentKpiCard("Last-hour Input", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
+    buildAgentKpiCard(latestReadingBetweenHours ? "Submit since prior cycle" : "Last-hour Submit", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
+    buildAgentKpiCard(latestReadingBetweenHours ? "Input since prior cycle" : "Last-hour Input", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
     buildAgentKpiCard("Online agents", latest?.online ?? null, previous?.online ?? null, "number", "up", buildExecutiveTrend(buckets, "online", selected)),
     buildAgentKpiCard("Current Backlog", latest?.backlog ?? null, previous?.backlog ?? null, "number", "down", buildExecutiveTrend(buckets, "backlog", selected))
   ];
@@ -3862,6 +3889,7 @@ function buildExecutiveReport(
 
   return {
     lob,
+    rankingPeriodLabel: latestReadingBetweenHours ? "since prior cycle" : "last hour",
     latencyTargetMinutes,
     selectedCycle,
     dateLabel,
