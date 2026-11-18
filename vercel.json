@@ -49,10 +49,6 @@
       "schedule": "3 * * * *"
     },
     {
-      "path": "/api/cron/ads-productivity-alerts",
-      "schedule": "3 * * * *"
-    },
-    {
       "path": "/api/cron/tns-online-productivity-report",
       "schedule": "58 * * * *"
     },

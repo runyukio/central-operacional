@@ -1,6 +1,6 @@
 # ADS hourly productivity alerts
 
-Runs at minute 03 of every hour in production (`/api/cron/ads-productivity-alerts`). The ADS online productivity image uses the same completed hour, validated five-minute readings, and positive-submit agent cohort; its separate delivery remains independent. The endpoint bypasses interactive session middleware, requires `CRON_SECRET` itself, and returns no cached response.
+The production schedule for `/api/cron/ads-productivity-alerts` was removed on 18 November 2026. The ADS online productivity image uses the same completed hour, validated five-minute readings, and positive-submit agent cohort; its separate delivery remains independent. The endpoint bypasses interactive session middleware, requires `CRON_SECRET` itself, and returns no cached response.
 
 ## Confirmed rule
 
@@ -24,7 +24,7 @@ The user confirmed that supervisor WB equals the KIM username and that the dedic
 
 Server-only Production variables:
 
-- `ADS_PRODUCTIVITY_ALERT_ENABLED=true`
+- `ADS_PRODUCTIVITY_ALERT_ENABLED=false` disables delivery and skips evaluation when the endpoint is invoked normally.
 - `ADS_PRODUCTIVITY_ALERT_WEBHOOK_URL`: sensitive, dedicated KIM robot URL; never commit or log it.
 
 ## Delivery safety and verification
