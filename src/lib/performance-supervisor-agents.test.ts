@@ -70,6 +70,7 @@ test("a role forged in the client cannot open supervisor detail", async (t) => {
 });
 
 for (const [name, patch] of [
+  ["excluído do painel por ID", { id: "cmqi6cfrs000vgsd43h0fuzvh" }],
   ["desligado", { operationalStatus: "Desligado" }],
   ["inativo", { operationalStatus: "Inativo" }],
   ["excluído", { deletedAt: day }],
@@ -83,6 +84,7 @@ for (const [name, patch] of [
     assert.equal(result.supervisors.length, 0); assert.equal(result.summary.supervisors, 0);
     assert.equal(result.summary.adherenceRate, null);
     await assert.rejects(() => getPerformanceSupervisorAgentsDashboard(actor, "sup", query), { status: 404 });
+    await assert.rejects(() => getPerformanceSupervisorsWorkMetrics(actor, query, "sup"), { status: 404 });
     assert.equal(captureRead.mock.callCount(), 0);
   });
 }

@@ -1760,7 +1760,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       terminationReason: true,
       supervisorId: true,
       lob: { select: { name: true } },
-      supervisor: { select: { fullName: true, operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } }
+      supervisor: { select: { id: true, fullName: true, operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } }
     }
   })).filter((employee) => isAgentJobTitle(employee.roleTitle) && isActivePerformanceSupervisor(employee.supervisor));
 
@@ -2094,7 +2094,7 @@ export async function getPerformanceSupervisorsWorkMetrics(actor: Actor, query: 
   if (supervisorId && supervisorId.length > 160) throw new PerformanceError("Supervisor inválido.", 400);
   const employees = (await prisma.employeeProfile.findMany({ where: { deletedAt: null, supervisorId: supervisorId || { not: null } },
     select: { id: true, wbLogin: true, roleTitle: true, supervisorId: true, operationalStatus: true, user: { select: { status: true, deletedAt: true } },
-      supervisor: { select: { operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } } }
+      supervisor: { select: { id: true, operationalStatus: true, deletedAt: true, user: { select: { status: true, deletedAt: true } } } } }
   })).filter((employee) => isAgentJobTitle(employee.roleTitle) && isActivePerformanceSupervisor(employee.supervisor));
   if (supervisorId && !employees.length) throw new PerformanceError("Supervisor ativo não encontrado.", 404);
   const work = await loadTeamWorkMetrics(employees, start, end);
