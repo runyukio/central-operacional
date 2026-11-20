@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SupervisionMatrixFields } from "./supervision-matrix-fields";
 import { ChevronRight, Wrench } from "lucide-react";
 import { TopActions } from "@/components/layout/app-shell";
 import { EmptyState, MetricPill, PageHeader, Panel, SimpleTable, StatusBadge } from "@/components/ui/primitives";
@@ -292,6 +293,7 @@ export function SettingsPage() {
                 String(supervisor.supervisees ?? 0),
                 supervisor.status || "Ativo"
               ])} /> : <EmptyState title="Nenhum supervisor" description="Atribua role SUPERVISOR a um usuário para aparecer aqui." />}
+              <SupervisionMatrixFields settings={settings} saving={savingSettings} onSave={saveSetting} />
             </Panel>
           ) : null}
 
