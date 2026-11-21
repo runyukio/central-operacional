@@ -11,12 +11,12 @@ const inputs: CreateRequestInput[] = [
   {
     type: "Troca de Folga", title: "Troca de Folga", priority: "Média",
     description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_SWAP",
-    currentDayOffDate: "2026-10-20", desiredDayOffDate: "2026-10-21"
+    currentDayOffDate: "2026-11-30", desiredDayOffDate: "2026-12-01"
   },
   {
     type: "Solicitação de Dia de Folga", title: "Solicitação de Dia de Folga", priority: "Média",
     description: "Test request", justification: "Test request", dayOffKind: "DAY_OFF_REQUEST",
-    desiredDayOffRequestDate: "2026-10-21", dayOffReason: "Pessoal"
+    desiredDayOffRequestDate: "2026-11-24", dayOffReason: "Pessoal"
   },
   {
     type: "Venda de Folga", title: "Venda de Folga", priority: "Média",
@@ -123,16 +123,24 @@ test("não permite solicitação de adiantamento para novembro/2026", async () =
   assert.match(result.error ?? "", /somente até outubro\/2026/);
 });
 
-for (const blocked of [
-  { type: "Troca de Folga", dayOffKind: "DAY_OFF_SWAP" as const },
-  { type: "Solicitação de Dia de Folga", dayOffKind: "DAY_OFF_REQUEST" as const },
-  { type: "Suporte geral", dayOffKind: "DAY_OFF_SWAP" as const },
-  { type: "Venda de Folga", dayOffKind: "DAY_OFF_SWAP" as const }
-]) {
-  test(`${blocked.type}/${blocked.dayOffKind}: blocks new requests before any database access`, async () => {
-    const result = await createOperationalRequest(actor, { ...inputs[2], ...blocked, currentDayOffDate: "2026-11-10", desiredDayOffDate: "2026-11-11", desiredDayOffRequestDate: "2026-11-11" });
-    assert.ok("error" in result);
-    assert.match(result.error ?? "", /apenas para datas de outubro|não corresponde/);
+test("rejects mismatched day off request types before database access", async () => {
+  const result = await createOperationalRequest(actor, { ...inputs[0], type: "Venda de Folga" });
+  assert.ok("error" in result);
+  assert.match(result.error ?? "", /não corresponde/);
+});
+
+for (const date of ["", "2026-11-31"]) {
+  test(`rejects missing or invalid swap and requested dates: ${date}`, async () => {
+    for (const input of [
+      { ...inputs[0], currentDayOffDate: date },
+      { ...inputs[0], desiredDayOffDate: date },
+      { ...inputs[0], type: "Suporte geral", desiredDayOffDate: date },
+      { ...inputs[1], desiredDayOffRequestDate: date }
+    ]) {
+      const result = await createOperationalRequest(actor, input);
+      assert.ok("error" in result);
+      assert.match(result.error ?? "", /datas? válidas?/);
+    }
   });
 }
 

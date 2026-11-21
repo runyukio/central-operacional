@@ -1,6 +1,6 @@
 "use client";
 
-import { DAY_OFF_OCTOBER_START, DAY_OFF_REQUEST_NOTICE, DAY_OFF_OCTOBER_END, validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
+import { validateDayOffRequestPolicy } from "@/lib/day-off-request-policy";
 import { PairedSwapFields } from "./paired-swap-fields";
 
 import { scheduleDisplayLabel } from "@/lib/schedule-display-label";
@@ -879,10 +879,7 @@ export function MySchedulePage() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
           <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Solicitar Folga</h2>
-                <p className="text-sm text-muted">{DAY_OFF_REQUEST_NOTICE}</p>
-              </div>
+              <h2 className="text-lg font-extrabold text-navy-950">Solicitar Folga</h2>
               <button type="button" onClick={() => setShowDayOffModal(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             {dayOffMessage ? (
@@ -900,8 +897,8 @@ export function MySchedulePage() {
               {dayOffForm.kind === "PAIRED_DAY_OFF_SWAP" ? <PairedSwapFields value={dayOffForm} onChange={patch => setDayOffForm(current => ({ ...current, ...patch }))} /> : null}
               {dayOffForm.kind === "DAY_OFF_SWAP" ? (
                 <>
-                  <FormInput label="Data atual da folga" type="date" min={DAY_OFF_OCTOBER_START} max={DAY_OFF_OCTOBER_END} value={dayOffForm.currentDayOffDate} onChange={(value) => setDayOffForm({ ...dayOffForm, currentDayOffDate: value })} />
-                  <FormInput label="Nova data desejada" type="date" min={DAY_OFF_OCTOBER_START} max={DAY_OFF_OCTOBER_END} value={dayOffForm.desiredDayOffDate} onChange={(value) => setDayOffForm({ ...dayOffForm, desiredDayOffDate: value })} />
+                  <FormInput label="Data atual da folga" type="date" value={dayOffForm.currentDayOffDate} onChange={(value) => setDayOffForm({ ...dayOffForm, currentDayOffDate: value })} />
+                  <FormInput label="Nova data desejada" type="date" value={dayOffForm.desiredDayOffDate} onChange={(value) => setDayOffForm({ ...dayOffForm, desiredDayOffDate: value })} />
                 </>
               ) : null}
               {dayOffForm.kind === "DAY_OFF_SELL" ? (
@@ -918,7 +915,7 @@ export function MySchedulePage() {
               ) : null}
               {dayOffForm.kind === "DAY_OFF_REQUEST" ? (
                 <>
-                  <FormInput label="Data desejada para folga" type="date" min={DAY_OFF_OCTOBER_START} max={DAY_OFF_OCTOBER_END} value={dayOffForm.desiredDayOffRequestDate} onChange={(value) => setDayOffForm({ ...dayOffForm, desiredDayOffRequestDate: value })} />
+                  <FormInput label="Data desejada para folga" type="date" value={dayOffForm.desiredDayOffRequestDate} onChange={(value) => setDayOffForm({ ...dayOffForm, desiredDayOffRequestDate: value })} />
                   <FormSelect label="Motivo" value={dayOffForm.dayOffReason} options={["Pessoal", "Saúde", "Familiar", "Compromisso externo", "Estudos", "Emergência", "Outro"]} onChange={(value) => setDayOffForm({ ...dayOffForm, dayOffReason: value })} />
                   <FormSelect label="Urgência" value={dayOffForm.urgency} options={requestPriorities} onChange={(value) => setDayOffForm({ ...dayOffForm, urgency: value as ClientRequest["priority"] })} />
                   <FormInput label="Anexo/evidência opcional" value={dayOffForm.attachmentUrl} onChange={(value) => setDayOffForm({ ...dayOffForm, attachmentUrl: value })} />
