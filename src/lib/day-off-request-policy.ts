@@ -1,7 +1,3 @@
-export const DAY_OFF_OCTOBER_START = "2026-10-01";
-export const DAY_OFF_OCTOBER_END = "2026-10-31";
-export const DAY_OFF_REQUEST_NOTICE = "Venda de folga e troca casada disponíveis em todos os meses. Troca simples e solicitação de dia de folga disponíveis apenas em outubro de 2026.";
-
 type DayOffRequest = {
   type?: string;
   dayOffKind?: string;
@@ -27,10 +23,6 @@ function isValidDate(date?: string): date is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
 }
 
-function isOctoberDate(date?: string) {
-  return isValidDate(date) && date >= DAY_OFF_OCTOBER_START && date <= DAY_OFF_OCTOBER_END;
-}
-
 // Applied only when creating requests; existing requests keep their approval flow.
 export function validateDayOffRequestPolicy(input: DayOffRequest) {
   const typeKind = kindFromType(input.type);
@@ -38,11 +30,11 @@ export function validateDayOffRequestPolicy(input: DayOffRequest) {
     return "O tipo da solicitação não corresponde à movimentação de folga informada.";
   }
   const kind = typeKind ?? input.dayOffKind;
-  if (kind === "DAY_OFF_SWAP" && (!isOctoberDate(input.currentDayOffDate) || !isOctoberDate(input.desiredDayOffDate))) {
-    return "A troca simples de folga está disponível apenas para datas de outubro de 2026. Em novembro, utilize troca casada.";
+  if (kind === "DAY_OFF_SWAP" && (!isValidDate(input.currentDayOffDate) || !isValidDate(input.desiredDayOffDate))) {
+    return "Informe duas datas válidas para a troca de folga.";
   }
-  if (kind === "DAY_OFF_REQUEST" && !isOctoberDate(input.desiredDayOffRequestDate || input.desiredDayOffDate || input.requestedDate)) {
-    return "A solicitação de dia de folga está disponível apenas para datas de outubro de 2026.";
+  if (kind === "DAY_OFF_REQUEST" && !isValidDate(input.desiredDayOffRequestDate || input.desiredDayOffDate || input.requestedDate)) {
+    return "Informe uma data válida para a solicitação de folga.";
   }
   if (kind === "PAIRED_DAY_OFF_SWAP" && (!isValidDate(input.currentDayOffDate) || !isValidDate(input.desiredDayOffDate))) {
     return "Informe duas datas válidas para a troca casada.";
