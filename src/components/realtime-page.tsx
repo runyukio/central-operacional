@@ -485,9 +485,9 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
 
   const effectiveTab = clientQueuesOnly ? "queues" : executiveOnly ? "executive" : activeTab;
   const isExecutive = effectiveTab === "executive";
-  const isTnsReport = effectiveTab === "report" && reportLob === "TNS";
+  const usesLiveQueueCycles = effectiveTab === "queues" || isExecutive || (effectiveTab === "report" && reportLob === "TNS");
   const liveExecutive = isExecutive && followLatestCycle;
-  const followLatestHourlyReading = followLatestCycle && (isExecutive || isTnsReport);
+  const followLatestHourlyReading = followLatestCycle && usesLiveQueueCycles;
   const cycleToLoad = followLatestHourlyReading ? "" : selectedCycle;
 
   async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues") {
@@ -507,7 +507,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       if (!response.ok) throw new Error(json.message || json.error || "Não foi possível carregar Real Time.");
       const nextPayload = json as RealTimePayload;
       setPayload(nextPayload);
-      const nextSelectedCycle = view === "queues" || isExecutive || isTnsReport
+      const nextSelectedCycle = view === "queues" || usesLiveQueueCycles
         ? nextPayload.data.queueView.selectedCycle || nextPayload.data.agents.selectedCycle
         : nextPayload.data.agents.selectedCycle;
       if (nextSelectedCycle && (!cycle || nextSelectedCycle !== cycle)) setSelectedCycle(nextSelectedCycle);
@@ -881,7 +881,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
               value={selectedCycleValue}
               cycles={cycles}
               onChange={(cycle) => changeCycle(cycle)}
-              showImportTime={isExecutive || isTnsReport}
+              showImportTime={usesLiveQueueCycles}
               selectedImportedAt={isExecutive ? executiveHourly?.importedAt : undefined}
             />
           </label>
