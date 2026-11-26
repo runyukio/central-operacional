@@ -13,6 +13,7 @@
     "test:coverage-warning": "node --test tests/coverage-warning-interaction.test.cjs",
     "test:billing-fiscal": "tsx --test src/lib/billing-fiscal-invoice.test.ts src/lib/billing-fiscal-invoice-extraction.test.ts src/components/billing-fiscal-invoice-upload.test.ts",
     "test:omie": "tsx --test src/lib/omie-service.test.ts src/lib/billing-omie-allocation.test.ts",
+    "test:shift-supervision": "tsx --test src/lib/shift-change-supervision.test.ts src/lib/shift-change-effective-service.test.ts src/lib/schedule-supervision-history.test.ts src/lib/request-wfm-routing.test.ts src/lib/request-pipeline.test.ts src/lib/paired-day-off-service.test.ts src/lib/request-creation.test.ts src/lib/schedule-slot-lob-service.test.ts",
     "test:cec": "tsx --test src/lib/realtime-cec-cpd.test.ts",
     "test:paired-swap": "tsx --test src/lib/paired-day-off-service.test.ts src/lib/request-creation.test.ts src/lib/request-code.test.ts",
     "test:performance-export": "tsx --test src/lib/performance-agents-export.test.ts",

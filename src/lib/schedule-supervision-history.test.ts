@@ -74,3 +74,12 @@ for (const day of ["2026-10-18", "2026-10-19"]) {
     assert.equal((await scheduleSupervisorNames([schedule])).get("schedule:slot"), row.employee.supervisor);
   });
 }
+
+test("a legacy day without a previous supervisor stays Sem supervisor after a future transfer", async (t) => {
+  mockPrismaDelegate(t, "auditLog", { findMany: async () => [{ newValue: {
+    effectiveDate: "2026-11-15", transfers: [{ employeeId: "a", from: null, to: "new" }]
+  } }] });
+  mockPrismaDelegate(t, "employeeProfile", { findMany: async () => [{ id: "new", fullName: "New supervisor" }] });
+  const names = await scheduleSupervisorNames([{ id: "legacy", employeeId: "a", date: date("2026-11-14"), supervisorId: null, employee: { supervisorId: "new" } }]);
+  assert.equal(names.get("schedule:legacy"), "Sem supervisor");
+});
